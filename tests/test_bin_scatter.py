@@ -1,5 +1,8 @@
 from binscatter.main import prep
 import polars as pl
+import numpy as np
+from binscatter import bin_scatter
+from plotnine import ggplot
 
 
 def test_prep():
@@ -45,3 +48,28 @@ def test_prep():
         pass
 
     print("All tests passed!")
+
+
+def test_scatter():
+    """Test that scatter() creates a binned scatter plot correctly"""
+    # Create test data
+    x = pl.Series("x0", range(100))
+    y = pl.Series("y0", [i + np.random.normal(0, 5) for i in range(100)])
+    df = pl.DataFrame([y, x])
+
+    # Test with default bins
+    p = bin_scatter(df)
+    assert isinstance(p, ggplot)
+
+    # Test with custom bins
+    p = bin_scatter(df, J=10)
+    assert isinstance(p, ggplot)
+
+    # Test that plot has correct labels
+    assert p.labels.x == "x0"
+    assert p.labels.y == "y0"
+
+    # Test with small dataset
+    df_small = pl.DataFrame({"y": [1, 2, 3], "x": [4, 5, 6]})
+    p = bin_scatter(df_small, J=2)
+    assert isinstance(p, ggplot)
