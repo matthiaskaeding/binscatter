@@ -73,3 +73,23 @@ def test_scatter():
     df_small = pl.DataFrame({"y": [1, 2, 3], "x": [4, 5, 6]})
     p = bin_scatter(df_small, J=2)
     assert isinstance(p, ggplot)
+    
+    # Test with negative values
+    df_neg = pl.DataFrame({"y": [-1, -2, 0, 1], "x": [-4, -2, 0, 2]})
+    p = bin_scatter(df_neg, J=2)
+    assert isinstance(p, ggplot)
+    
+    # Test with non-monotonic relationship
+    df_nonmono = pl.DataFrame({"y": [1, 3, 2, 4], "x": [1, 2, 3, 4]})
+    p = bin_scatter(df_nonmono, J=2)
+    assert isinstance(p, ggplot)
+    
+    # Test with constant y values
+    df_const = pl.DataFrame({"y": [1, 1, 1, 1], "x": [1, 2, 3, 4]})
+    p = bin_scatter(df_const, J=2)
+    assert isinstance(p, ggplot)
+    
+    # Test with floating point values
+    df_float = pl.DataFrame({"y": [1.5, 2.5, 3.5], "x": [0.1, 0.2, 0.3]})
+    p = bin_scatter(df_float, J=2)
+    assert isinstance(p, ggplot)
