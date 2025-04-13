@@ -2,6 +2,8 @@ import polars as pl
 import pandas as pd
 from dataclasses import dataclass
 from plotnine import ggplot, aes, geom_point, xlim, ylim, labs
+from typing import Union
+import uuid
 
 
 @dataclass
@@ -18,8 +20,23 @@ class Config:
     y_max: float
 
 
-def prep(df, J):
-    """Prepares the input data and builds configuration"""
+def prep(df: Union[pl.DataFrame, pd.DataFrame], J: int ):
+    """Prepares the input data and builds configuration.
+
+    Args:
+        df: Input dataframe, either polars or pandas. Must have at least 2 columns.
+            First column is treated as y variable, second as x variable.
+        J: Number of bins to use for binscatter. Must be less than number of rows.
+
+    Returns:
+        tuple: (polars.DataFrame, Config)
+            - Sorted input dataframe converted to polars
+            - Config object with metadata about the data
+    
+    Raises:
+        AssertionError: If input validation fails
+    """
+    assert J > 1
     assert isinstance(df, pl.DataFrame) or isinstance(df, pd.DataFrame)
     N = df.shape[0]
     assert J < N
@@ -27,12 +44,9 @@ def prep(df, J):
         df = pl.from_pandas(df)
 
     assert df.width >= 2
-    assert df.height > 0
+    N = df.height 
+    assert N > 0
     cols = df.columns
-    assert "__x_col_max__" not in cols, (
-        "Variable name __x_col_max__ not allowed in input dataframe"
-    )
-
     x_col = pl.col(cols[1])
     y_col = pl.col(cols[0])
     mins = df.select(
@@ -59,8 +73,16 @@ def prep(df, J):
     return df, config
 
 
-def comp_scatter_quants(df: pl.DataFrame, config):
-    """Makes data used for scatter plot"""
+def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
+    """Makes data used for scatter plot by computing quantile bins.
+
+    Args:
+        df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe with x and y variables
+        config (Config): Configuration object with metadata about the data
+
+    Returns:
+        polars.DataFrame: Input dataframe with additional 'bin' column containing quantile bin assignments
+    """
 
     # Make expression for making the quantiles
     # Because pl.qcut is unstable we build a when - then expression
@@ -80,23 +102,33 @@ def comp_scatter_quants(df: pl.DataFrame, config):
     return df
 
 
-def scatter(df, J=20):
+
+def bin_scatter(df: Union[pl.DataFrame, pd.DataFrame], J=20):
+    """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
+
+    Args:
+        df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe with exactly two columns - y variable and x variable
+        J (int, optional): Number of bins to use. Defaults to 20.
+
+    Returns:
+        plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
+    """
+    
     df, config = prep(df, J)
     df = comp_scatter_quants(df, config)
 
     df_plotting = (
         df.group_by("bin")
-        .agg(config.y_col.mean(), config.x_col.max().alias("__x_col_max__"))
+        .agg(config.x_col.mean(), config.y_col.mean())
         .sort("bin")
     )
 
     p = (
         ggplot(df_plotting)
-        + aes("__x_col_max__", config.y_name)
+        + aes(config.x_name, config.y_name)
         + geom_point()
         + xlim(config.x_min, config.x_max)
         + ylim(config.y_min, config.y_max)
-        + labs(x=config.x_name, y=config.y_name)
     )
 
     return p
