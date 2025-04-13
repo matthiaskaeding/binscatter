@@ -11,8 +11,8 @@ def test_prep():
 
     # Check config values
     assert config.J == J
-    assert config.name_y == "y"
-    assert config.name_x == "x"
+    assert config.y_name == "y"
+    assert config.x_name == "x"
     assert config.N == 5
     assert isinstance(config.x_col, pl.Expr)
     assert isinstance(config.y_col, pl.Expr)
@@ -28,8 +28,8 @@ def test_prep():
     # Check conversion to polars
     assert isinstance(df_out, pl.DataFrame)
     assert config.N == 3
-    assert config.name_y == "y"
-    assert config.name_x == "x"
+    assert config.y_name == "y"
+    assert config.x_name == "x"
 
     # Test invalid inputs
     try:

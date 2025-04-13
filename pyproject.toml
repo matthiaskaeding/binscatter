@@ -5,11 +5,14 @@ description = "Creating binscatter plots"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "pandas>=2.2.3",
+    "pandas>=2.0",
+    "plotnine>=0.14.5",
     "polars>=1.27.1",
+    "pyarrow>=19.0.1",
 ]
 
 [dependency-groups]
-dev = [
-    "pytest>=8.3.5",
-]
+dev = ["ipykernel>=6.29.5", "pytest>=8.3.5"]
+
+[tool.setuptools]
+packages = ["binscatter"]
