@@ -1,9 +1,8 @@
 import polars as pl
 import pandas as pd
 from dataclasses import dataclass
-from plotnine import ggplot, aes, geom_point, xlim, ylim, labs
+from plotnine import ggplot, aes, geom_point, xlim, ylim
 from typing import Union
-import uuid
 
 
 @dataclass
@@ -20,7 +19,7 @@ class Config:
     y_max: float
 
 
-def prep(df: Union[pl.DataFrame, pd.DataFrame], J: int ):
+def prep(df: Union[pl.DataFrame, pd.DataFrame], J: int):
     """Prepares the input data and builds configuration.
 
     Args:
@@ -32,7 +31,7 @@ def prep(df: Union[pl.DataFrame, pd.DataFrame], J: int ):
         tuple: (polars.DataFrame, Config)
             - Sorted input dataframe converted to polars
             - Config object with metadata about the data
-    
+
     Raises:
         AssertionError: If input validation fails
     """
@@ -44,8 +43,9 @@ def prep(df: Union[pl.DataFrame, pd.DataFrame], J: int ):
         df = pl.from_pandas(df)
 
     assert df.width >= 2
-    N = df.height 
+    N = df.height
     assert N > 0
+    assert J < N
     cols = df.columns
     x_col = pl.col(cols[1])
     y_col = pl.col(cols[0])
@@ -89,21 +89,19 @@ def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
     probs = [i / config.J for i in range(1, config.J + 1)]
     x = df.get_column(config.x_name)
     x_quantiles = [x.quantile(quantile=p) for p in probs]
-
     x_col = config.x_col
+
     expr = pl
     for i, q in enumerate(x_quantiles):
-        expr = expr.when(x_col.le(q)).then(pl.lit(i))
-    expr = expr.alias("bin")
-    df = df.with_columns(
-        expr,
-    )
+        if i < config.J - 1:
+            expr = expr.when(x_col.lt(q)).then(pl.lit(i))
+        else:
+            expr = expr.when(x_col.le(q)).then(pl.lit(i))
 
-    return df
-
+    return df.with_columns(expr.alias("bin"))
 
 
-def bin_scatter(df: Union[pl.DataFrame, pd.DataFrame], J=20):
+def binscatter(df: Union[pl.DataFrame, pd.DataFrame], J=20):
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
@@ -113,12 +111,11 @@ def bin_scatter(df: Union[pl.DataFrame, pd.DataFrame], J=20):
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-    
-    df, config = prep(df, J)
-    df = comp_scatter_quants(df, config)
 
+    df, config = prep(df, J)
+    df_prepped = comp_scatter_quants(df, config)
     df_plotting = (
-        df.group_by("bin")
+        df_prepped.group_by("bin")
         .agg(config.x_col.mean(), config.y_col.mean())
         .sort("bin")
     )

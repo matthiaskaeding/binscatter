@@ -1,3 +1,3 @@
-from .main import bin_scatter
+from .main import binscatter
 
-__all__ = ["bin_scatter"]
+__all__ = ["binscatter"]
