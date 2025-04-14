@@ -6,5 +6,5 @@
 ## Example
 A noisy scatterplot
 ![Noisy scatterplot](docs/images/scatterplot.png)
-with a binscatter
+with associated binscatter
 ![Noisy scatterplot](docs/images/binscatter_plot.png)
