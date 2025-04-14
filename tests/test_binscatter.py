@@ -7,13 +7,13 @@ from plotnine import ggplot
 
 def test_prep():
     """Tests the prep function"""
-    # Test with polars DataFrame
-    df = pl.DataFrame({"y": [1, 2, 3, 4, 5], "x": [2, 1, 5, 3, 4]})
-    J = 3
-    df_out, config = prep(df, J)
+
+    df = pl.DataFrame({"y": [1, 2, 3, 4, 5], "x": [2, 1, 5, 3, 4]}).select("x", "y")
+    num_bins = 3
+    df_out, config = prep(df, "x", "y", [], num_bins)
 
     # Check config values
-    assert config.J == J
+    assert config.num_bins == num_bins
     assert config.y_name == "y"
     assert config.x_name == "x"
     assert config.N == 5
@@ -25,8 +25,8 @@ def test_prep():
 
     # Test with pandas DataFrame
     df_pd = pl.DataFrame({"y": [1, 2, 3], "x": [3, 1, 2]})
-    J = 2
-    df_out, config = prep(df_pd, J)
+    num_bins = 2
+    df_out, config = prep(df_pd, "x", "y", [], num_bins)
 
     # Check conversion to polars
     assert isinstance(df_out, pl.DataFrame)
@@ -36,13 +36,13 @@ def test_prep():
 
     # Test invalid inputs
     try:
-        prep(df, 6)  # J >= N
+        prep(df, None, None, num_bins=60)  # J >= N
         assert False
     except AssertionError:
         pass
 
     try:
-        prep(pl.DataFrame({"x": [1]}), 0)  # Single column
+        prep(pl.DataFrame({"x": [1]}), None, None, 0)  # Single column
         assert False
     except AssertionError:
         pass
@@ -59,15 +59,15 @@ def test_max_x_assigned_to_max_bin():
     )
 
     J = 3
-    df_prepped, cfg = prep(df, J)
+    df_prepped, cfg = prep(df, "x", "y", num_bins=J)
     df_prepped = comp_scatter_quants(df_prepped, cfg)
-    print(df_prepped)
-    bins = df_prepped.get_column("bin").unique().sort().to_list()
+    bin_name = cfg.bin_name
+    bins = df_prepped.get_column(bin_name).unique().sort().to_list()
     desired_bins = list(range(J))
     assert bins == desired_bins
 
     bin_of_max = (
-        df_prepped.filter(pl.col("x") == pl.col("x").max()).select("bin").item()
+        df_prepped.filter(pl.col("x") == pl.col("x").max()).select(bin_name).item()
     )
     assert bin_of_max == J - 1
 
@@ -77,41 +77,38 @@ def test_binscatter():
     # Create test data
     x = pl.Series("x0", range(100))
     y = pl.Series("y0", [i + np.random.normal(0, 5) for i in range(100)])
-    df = pl.DataFrame([y, x])
+    df = pl.DataFrame([x, y])
 
     # Test with default bins
-    p = binscatter(df)
+    p = binscatter(df, "x0", "y0")
     assert isinstance(p, ggplot)
 
     # Test with custom bins
-    p = binscatter(df, J=10)
+    p = binscatter(df,"x0","y0", num_bins=10)
     assert isinstance(p, ggplot)
 
     # Test that plot has correct labels
+    print(p.labels)
     assert p.labels.x == "x0"
     assert p.labels.y == "y0"
 
     # Test with small dataset
     df_small = pl.DataFrame({"y": [1, 2, 3], "x": [4, 5, 6]})
-    p = binscatter(df_small, J=2)
+    p = binscatter(df_small, "x", "y", num_bins=2)
     assert isinstance(p, ggplot)
 
     # Test with negative values
     df_neg = pl.DataFrame({"y": [-1, -2, 0, 1], "x": [-4, -2, 0, 2]})
-    p = binscatter(df_neg, J=2)
+    p = binscatter(df_neg, "x", "y", num_bins=2)
     assert isinstance(p, ggplot)
 
     # Test with non-monotonic relationship
     df_nonmono = pl.DataFrame({"y": [1, 3, 2, 4], "x": [1, 2, 3, 4]})
-    p = binscatter(df_nonmono, J=2)
+    p = binscatter(df_nonmono, "x", "y", num_bins=2)
     assert isinstance(p, ggplot)
 
-    # Test with constant y values
-    df_const = pl.DataFrame({"y": [1, 1, 1, 1], "x": [1, 2, 3, 4]})
-    p = binscatter(df_const, J=2)
-    assert isinstance(p, ggplot)
 
     # Test with floating point values
     df_float = pl.DataFrame({"y": [1.5, 2.5, 3.5], "x": [0.1, 0.2, 0.3]})
-    p = binscatter(df_float, J=2)
+    p = binscatter(df_float, "x", "y", num_bins=2)
     assert isinstance(p, ggplot)

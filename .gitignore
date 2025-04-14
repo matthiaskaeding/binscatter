@@ -9,3 +9,5 @@ wheels/
 # Virtual environments
 .venv
 binscatter_ref.pdf
+
+.DS_Store
