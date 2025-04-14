@@ -3,7 +3,6 @@ import pandas as pd
 from dataclasses import dataclass
 from plotnine import ggplot, aes, geom_point, xlim, ylim
 from typing import Union, Iterable
-from uuid import uuid4
 
 
 @dataclass
@@ -21,7 +20,13 @@ class Config:
     bin_name: str
 
 
-def prep(df: Union[pl.DataFrame, pd.DataFrame], x: str | None, y: str | None, controls: Iterable[str] = [], num_bins: int = 20):
+def prep(
+    df: Union[pl.DataFrame, pd.DataFrame],
+    x: str | None,
+    y: str | None,
+    controls: Iterable[str] = [],
+    num_bins: int = 20,
+):
     """Prepares the input data and builds configuration.
 
     Args:
@@ -57,8 +62,8 @@ def prep(df: Union[pl.DataFrame, pd.DataFrame], x: str | None, y: str | None, co
         assert y in cols
     assert all(x in cols for x in controls), "Not all controls are in df"
 
-    df = df.select(x,y, *controls)
-    
+    df = df.select(x, y, *controls)
+
     x_col = pl.col(x)
     y_col = pl.col(y)
 
@@ -69,7 +74,7 @@ def prep(df: Union[pl.DataFrame, pd.DataFrame], x: str | None, y: str | None, co
         y_col.max().alias("y_max"),
     )
 
-    bin_name = "bins____" 
+    bin_name = "bins____"
     for i in range(100):
         if bin_name in cols:
             continue

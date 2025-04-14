@@ -84,7 +84,7 @@ def test_binscatter():
     assert isinstance(p, ggplot)
 
     # Test with custom bins
-    p = binscatter(df,"x0","y0", num_bins=10)
+    p = binscatter(df, "x0", "y0", num_bins=10)
     assert isinstance(p, ggplot)
 
     # Test that plot has correct labels
@@ -106,7 +106,6 @@ def test_binscatter():
     df_nonmono = pl.DataFrame({"y": [1, 3, 2, 4], "x": [1, 2, 3, 4]})
     p = binscatter(df_nonmono, "x", "y", num_bins=2)
     assert isinstance(p, ggplot)
-
 
     # Test with floating point values
     df_float = pl.DataFrame({"y": [1.5, 2.5, 3.5], "x": [0.1, 0.2, 0.3]})
