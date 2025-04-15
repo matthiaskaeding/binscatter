@@ -3,8 +3,8 @@ name: Generate and Deploy Images
 on:
   push:
     branches:
-      - '**'           # Run on any branch (for testing)
-  workflow_dispatch:    # Manual trigger in GitHub UI
+      - '**'           # Test on any branch
+  workflow_dispatch:
 
 jobs:
   deploy-images:
@@ -20,38 +20,15 @@ jobs:
         python-version: '3.11'
 
     - name: Install dependencies
-      run: |
-        pip install .  # or poetry install if needed
+      run: pip install .
 
     - name: Generate images
-      run: |
-        python scripts/make_images.py
+      run: python scripts/make_images.py
 
-    - name: Prepare images branch and deploy
-      run: |
-        # Configure git
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-
-        # Fetch images branch if it exists
-        git fetch origin images || true
-
-        # Checkout orphan images branch
-        git checkout --orphan images
-
-        # Ensure we're in the repo root
-        cd "$GITHUB_WORKSPACE"
-
-        # Remove everything except images/
-        find . -mindepth 1 -maxdepth 1 ! -name 'images' -exec rm -rf {} +
-
-        # Clean up git state
-        git rm -rf . > /dev/null 2>&1 || true
-        git clean -fdx
-
-        # Stage and commit images/
-        git add images
-        git commit -m "Deploy generated images"
-
-    - name: Push to images branch
-      run: git push origin images --force
+    - name: Deploy images to images branch
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./images
+        publish_branch: images
+        commit_message: "Deploy images from ${{ github.sha }}"
