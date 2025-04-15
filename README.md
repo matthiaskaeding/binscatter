@@ -5,6 +5,6 @@
 
 ## Example
 A noisy scatterplot
-![Noisy scatterplot](docs/images/scatterplot.png)
+![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/scatter.png?raw=true)
 with associated binscatter
-![Noisy scatterplot](docs/images/binscatter_plot.png)
+![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/binscatter_plot.png?raw=true)
