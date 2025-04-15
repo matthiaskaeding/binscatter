@@ -7,4 +7,4 @@
 A noisy scatterplot
 ![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/scatter.png?raw=true)
 with associated binscatter
-![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/binscatter_plot.png?raw=true)
+![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/binscatter.png?raw=true)
