@@ -24,7 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install uv
-          uv pip --system install .
+          uv pip install --system install .
 
       - name: Generate images
         run: python scripts/make_images.py
