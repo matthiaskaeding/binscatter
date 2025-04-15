@@ -22,11 +22,7 @@ This is how we would make a binscatter plot
 
 ```python
 from binscatter import binscatter
-binscatter(
-    df,
-    x="x",
-    y="y",
-)
+binscatter( df, "x", "y")
 ```
 
 ![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/binscatter.png?raw=true)
