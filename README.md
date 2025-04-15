@@ -26,3 +26,10 @@ binscatter(df, "x", "y")
 ```
 
 ![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/binscatter.png?raw=true)
+
+We also support partialling out the effects of a set of controls
+
+```python
+controls = ["z1", "z2", "age_group""]
+binscatter(df, "x", "y", controls)
+```
