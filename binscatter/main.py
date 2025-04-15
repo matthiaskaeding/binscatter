@@ -184,7 +184,7 @@ def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
     y = df_prepped.get_column(config.y_name).to_numpy()
     theta = np.linalg.lstsq(x_conc, y)[0]
     x_controls_means = np.mean(x_controls, axis=0)
-    # Extract cofficients
+    # Extract coefficients
     beta = theta[: config.num_bins]
     gamma = theta[config.num_bins :]
     # Evaluate
@@ -231,14 +231,14 @@ def binscatter(
     # (2) controls: here we need to compute regression coefficients
     # and partial out the effect of the controls
     # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
-    if controls:
-        x_controls = make_controls_mat(df_prepped, controls)
-        x_bins = make_b(df_prepped, config)
-        df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
-    else:
+    if not controls:
         df_plotting = df_prepped.group_by(config.bin_name).agg(
             config.x_col.mean(), config.y_col.mean()
         )
+    else:
+        x_controls = make_controls_mat(df_prepped, controls)
+        x_bins = make_b(df_prepped, config)
+        df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
 
     p = (
         ggplot(df_plotting)
