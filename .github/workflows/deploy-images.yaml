@@ -1,0 +1,36 @@
+name: Generate and Deploy Images
+permissions:
+  contents: write
+
+on:
+  push:
+    branches:
+      - "main"
+  workflow_dispatch:
+
+jobs:
+  deploy-images:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install .
+
+      - name: Generate images
+        run: python scripts/make_images.py
+
+      - name: Deploy images to images branch
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./images
+          publish_branch: images
+          commit_message: "Deploy images from ${{ github.sha }}"
