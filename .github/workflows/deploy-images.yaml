@@ -1,0 +1,49 @@
+name: Generate and Deploy Images
+
+on:
+  push:
+    branches:
+      - "**" # Run on any branch push (for testing)
+  workflow_dispatch: # Enable manual trigger in the GitHub UI
+
+jobs:
+  deploy-images:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install .  # or poetry install, if needed
+
+      - name: Generate images
+        run: |
+          python scripts/make_images.py
+
+      - name: Prepare images branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin images || true
+          git checkout --orphan images
+
+          # Remove everything except images/
+          find . -mindepth 1 -maxdepth 1 ! -name 'images' -exec rm -rf {} +
+
+          # Clean up git state to avoid dirty commits
+          git rm -rf . > /dev/null 2>&1 || true
+          git clean -fdx
+
+          git add images
+          git commit -m "Deploy generated images"
+
+      - name: Push to images branch
+        run: git push origin images --force
