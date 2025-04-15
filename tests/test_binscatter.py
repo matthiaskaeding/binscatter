@@ -43,3 +43,26 @@ def test_binscatter():
     df_float = pl.DataFrame({"y": [1.5, 2.5, 3.5], "x": [0.1, 0.2, 0.3]})
     p = binscatter(df_float, "x", "y", num_bins=2)
     assert isinstance(p, ggplot)
+
+    # Test with controls
+    N = 1000
+    x = np.random.normal(0, 1, N)
+    z = np.random.normal(0, 1, N)
+    # y depends on both x and z
+    y = 2 * x + 3 * z + np.random.normal(0, 0.1, N)
+
+    # Create categorical variable
+    categories = ["A", "B", "C"]
+    cat = np.random.choice(categories, size=N)
+
+    df_controls = pl.DataFrame({"x": x, "y": y, "z": z, "category": cat})
+
+    # Test binscatter with numeric and categorical controls
+    p = binscatter(df_controls, "x", "y", controls=["z", "category"])
+    assert isinstance(p, ggplot)
+
+    # Test with multiple controls including categorical
+    w = np.random.normal(0, 1, N)
+    df_controls = df_controls.with_columns(pl.Series("w", w))
+    p = binscatter(df_controls, "x", "y", controls=["z", "w", "category"])
+    assert isinstance(p, ggplot)

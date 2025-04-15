@@ -173,26 +173,33 @@ def make_b(df_prepped, config):
     return B.to_numpy()
 
 
+def _print_shape(x, name):
+    print(f"{name}-shape = {x.shape}")
+
+
 def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
     x_conc = np.concatenate((x_bins, x_controls), axis=1)
-
     assert x_conc.shape[0] == config.N
-    y = df_prepped.get_columns(config.y_name).to_numpy()
-    theta = np.linalg.lstsq(x_conc, y)
-    x_controls_means = np.mean(x_conc, axis=0)
 
-    beta = theta[0 : config.num_bins]
+    y = df_prepped.get_column(config.y_name).to_numpy()
+    theta = np.linalg.lstsq(x_conc, y)[0]
+    x_controls_means = np.mean(x_controls, axis=0)
+    # Extract cofficients
+    beta = theta[: config.num_bins]
     gamma = theta[config.num_bins :]
-
-    mu_0 = np.dot(x_bins, beta)
-
-    plot_y = mu_0 + np.dot(x_controls_means, gamma)
-
+    # Evaluate
+    y_vals = pl.Series(config.y_name, beta + np.dot(x_controls_means, gamma))
+    # Build output data frame - should be analog to the one build without controls
     df_plotting = (
         df_prepped.group_by(config.bin_name)
-        .agg(config.x_col.mean())
-        .with_columns(pl.Series(config.y_name, plot_y))
+        .agg(
+            config.x_col.mean(),
+        )
+        .sort(config.bin_name)
+        .with_columns(y_vals)
     )
+    assert df_plotting.height == config.num_bins
+    assert df_plotting.width == 3
 
     return df_plotting
 
