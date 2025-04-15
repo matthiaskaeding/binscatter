@@ -1,8 +1,10 @@
 import polars as pl
+from polars import selectors as cs
 import pandas as pd
 from dataclasses import dataclass
 from plotnine import ggplot, aes, geom_point, xlim, ylim
 from typing import Union, Iterable
+import numpy as np
 
 
 @dataclass
@@ -44,35 +46,22 @@ def prep(
     """
     assert num_bins > 1
     assert isinstance(df, pl.DataFrame) or isinstance(df, pd.DataFrame)
-    N = df.shape[0]
-    assert num_bins < N
+    assert isinstance(x, str)
+    assert isinstance(y, str)
+
     if isinstance(df, pd.DataFrame):
         df = pl.from_pandas(df)
 
-    assert df.width >= 2
     N = df.height
+    assert df.width >= 2
     assert N > 0
     assert num_bins < N
+    assert num_bins > 1
     assert df.shape[1] > 1
     cols = df.columns
-
-    if x:
-        assert x in cols
-    if y:
-        assert y in cols
+    assert x in cols
+    assert y in cols
     assert all(x in cols for x in controls), "Not all controls are in df"
-
-    df = df.select(x, y, *controls)
-
-    x_col = pl.col(x)
-    y_col = pl.col(y)
-
-    mins = df.select(
-        x_col.min().alias("x_min"),
-        x_col.max().alias("x_max"),
-        y_col.min().alias("y_min"),
-        y_col.max().alias("y_max"),
-    )
 
     bin_name = "bins____"
     for i in range(100):
@@ -83,6 +72,26 @@ def prep(
         raise ValueError(
             f"'{bin_name}' and 99 versions with less underscores are columns in df"
         )
+
+    df = (
+        df.lazy()
+        .select(x, y, *controls)
+        .drop_nans()
+        .drop_nulls()
+        .filter(~pl.any_horizontal(cs.numeric().is_infinite()))
+        .sort(x)
+        .collect()
+    )
+
+    x_col = pl.col(x)
+    y_col = pl.col(y)
+
+    mins = df.select(
+        x_col.min().alias("x_min"),
+        x_col.max().alias("x_max"),
+        y_col.min().alias("y_min"),
+        y_col.max().alias("y_max"),
+    )
 
     config = Config(
         num_bins=num_bins,
@@ -97,9 +106,31 @@ def prep(
         y_max=mins.item(0, "y_max"),
         bin_name=bin_name,
     )
-    df = df.sort(config.x_name)  # Sort for faster quantiles
 
     return df, config
+
+
+def make_controls_mat(df: pl.DataFrame, controls: Iterable[str]) -> np.ndarray:
+    """Creates a matrix of control variables by combining numeric and categorical features.
+
+    Args:
+        df (pl.DataFrame): Input dataframe containing control variables
+        controls (Iterable[str]): Names of control variables to include
+
+    Returns:
+        numpy.ndarray: Matrix of control variables with numeric columns and dummy-encoded categorical columns
+    """
+    dfc = df.select(controls)
+    df_num = dfc.select(cs.numeric())
+    df_cat = dfc.select(~cs.numeric())
+    if df_cat.width == 0:
+        return df_num.to_numpy()
+    x_cat = df_cat.to_dummies(drop_first=True).to_numpy()
+    if df_num.width == 0:
+        return x_cat
+    x_num = df_num.to_numpy()
+
+    return np.concat((x_num, x_cat), axis=1)
 
 
 def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
@@ -130,6 +161,42 @@ def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
     return df.with_columns(expr.alias(config.bin_name))
 
 
+def make_b(df_prepped, config):
+    """Makes the design matrix corresponding to the bins"""
+
+    B = df_prepped.select(config.bin_name).to_dummies(drop_first=False)
+    assert B.width == config.num_bins
+    # Reorder so that column i corresponds always to bin i
+    cols = [f"{config.bin_name}_{i}" for i in range(config.num_bins)]
+    B = B.select(cols)
+
+    return B.to_numpy()
+
+
+def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
+    x_conc = np.concatenate((x_bins, x_controls), axis=1)
+
+    assert x_conc.shape[0] == config.N
+    y = df_prepped.get_columns(config.y_name).to_numpy()
+    theta = np.linalg.lstsq(x_conc, y)
+    x_controls_means = np.mean(x_conc, axis=0)
+
+    beta = theta[0 : config.num_bins]
+    gamma = theta[config.num_bins :]
+
+    mu_0 = np.dot(x_bins, beta)
+
+    plot_y = mu_0 + np.dot(x_controls_means, gamma)
+
+    df_plotting = (
+        df_prepped.group_by(config.bin_name)
+        .agg(config.x_col.mean())
+        .with_columns(pl.Series(config.y_name, plot_y))
+    )
+
+    return df_plotting
+
+
 def binscatter(
     df: Union[pl.DataFrame, pd.DataFrame],
     x: str,
@@ -152,9 +219,19 @@ def binscatter(
 
     df, config = prep(df, x, y, controls, num_bins)
     df_prepped = comp_scatter_quants(df, config)
-    df_plotting = df_prepped.group_by(config.bin_name).agg(
-        config.x_col.mean(), config.y_col.mean()
-    )
+    # Currently there are 2 cases:
+    # (1) no controls: the easy one, just compute the means by bin
+    # (2) controls: here we need to compute regression coefficients
+    # and partial out the effect of the controls
+    # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
+    if controls:
+        x_controls = make_controls_mat(df_prepped, controls)
+        x_bins = make_b(df_prepped, config)
+        df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
+    else:
+        df_plotting = df_prepped.group_by(config.bin_name).agg(
+            config.x_col.mean(), config.y_col.mean()
+        )
 
     p = (
         ggplot(df_plotting)
