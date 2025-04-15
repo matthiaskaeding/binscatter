@@ -22,7 +22,9 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install .
+        run: |
+          pip install uv
+          uv pip --system install .
 
       - name: Generate images
         run: python scripts/make_images.py
