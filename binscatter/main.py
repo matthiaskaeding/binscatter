@@ -173,11 +173,8 @@ def make_b(df_prepped, config):
     return B.to_numpy()
 
 
-def _print_shape(x, name):
-    print(f"{name}-shape = {x.shape}")
-
-
 def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
+    """Concatenate bin dummies and control variables horizontally."""
     x_conc = np.concatenate((x_bins, x_controls), axis=1)
     assert x_conc.shape[0] == config.N
 
@@ -204,26 +201,33 @@ def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
     return df_plotting
 
 
+def _print_shape(x, name):
+    print(f"{name}-shape = {x.shape}")
+
+
+# Main function
 def binscatter(
     df: Union[pl.DataFrame, pd.DataFrame],
     x: str,
     y: str,
     controls: Iterable[str] = [],
     num_bins=20,
-):
+    returns: str = "ggplot",
+) -> Union[ggplot, pl.DataFrame, pd.DataFrame]:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
         df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe
         x (str): Name of x column
         y (str): Name y column
-        covariates (Iterable[str]): currently not used
+        covariates (Iterable[str]): names of control variables
         num_bins (int, optional): Number of bins to use. Defaults to 20
+        returns (str): Return type. Default a ggplot, otherwise "pl.DataFrame" or "pd.DataFrame"
 
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-
+    assert returns in ("ggplot", "pl.DataFrame", "pd.DataFrame")
     df, config = prep(df, x, y, controls, num_bins)
     df_prepped = comp_scatter_quants(df, config)
     # Currently there are 2 cases:
@@ -248,4 +252,10 @@ def binscatter(
         + ylim(config.y_min, config.y_max)
     )
 
-    return p
+    match returns:
+        case "ggplot":
+            return p
+        case "pl.DataFrame":
+            return df_plotting
+        case "pd.DataFrame":
+            return df_plotting.to_pandas()
