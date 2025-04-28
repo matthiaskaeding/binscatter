@@ -11,5 +11,5 @@ wheels/
 binscatter_ref.pdf
 *.png
 .DS_Store
-
 .vscode/settings.json
+*.zip

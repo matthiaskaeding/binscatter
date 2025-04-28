@@ -11,7 +11,7 @@ def binscatter(
     df: Union[pl.DataFrame, pd.DataFrame],
     x: str,
     y: str,
-    controls: Iterable[str] = [],
+    controls: Iterable[str] | str = [],
     num_bins=20,
 ):
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
@@ -26,7 +26,8 @@ def binscatter(
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-
+    if isinstance(controls, str):
+        controls = [controls]
     df, config = prep(df, x, y, controls, num_bins)
     df_prepped = comp_scatter_quants(df, config)
     # Currently there are 2 cases:
@@ -48,7 +49,7 @@ def binscatter(
         + aes(config.x_name, config.y_name)
         + geom_point()
         + xlim(config.x_min, config.x_max)
-        + ylim(config.y_min, config.y_max)
+        # + ylim(config.y_min, config.y_max)
     )
 
     return p
@@ -121,8 +122,6 @@ def prep(
     mins = df.select(
         x_col.min().alias("x_min"),
         x_col.max().alias("x_max"),
-        y_col.min().alias("y_min"),
-        y_col.max().alias("y_max"),
     )
 
     config = Config(
@@ -134,8 +133,6 @@ def prep(
         y_col=y_col,
         x_min=mins.item(0, "x_min"),
         x_max=mins.item(0, "x_max"),
-        y_min=mins.item(0, "y_min"),
-        y_max=mins.item(0, "y_max"),
         bin_name=bin_name,
     )
 
@@ -152,8 +149,6 @@ class Config:
     y_col: pl.expr.Expr
     x_min: float
     x_max: float
-    y_min: float
-    y_max: float
     bin_name: str
 
 
@@ -198,17 +193,20 @@ def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
     x_quantiles = [x.quantile(quantile=p) for p in probs]
     x_col = config.x_col
 
+    # Build pl.when expression for making bin groups
     expr = pl
-    for i, q in enumerate(x_quantiles):
-        if i < config.num_bins - 1:
-            expr = expr.when(x_col.lt(q)).then(pl.lit(i))
-        else:
-            expr = expr.when(x_col.le(q)).then(pl.lit(i))
+    for i, q in enumerate(x_quantiles[:-1]):
+        expr = expr.when(x_col.lt(q)).then(pl.lit(i))
+    expr = (
+        expr.when(x_col.le(x_quantiles[-1]))
+        .then(pl.lit(config.num_bins - 1))
+        .alias(config.bin_name)
+    )
 
-    return df.with_columns(expr.alias(config.bin_name))
+    return df.with_columns(expr)
 
 
-def make_b(df_prepped, config):
+def make_b(df_prepped: pl.DataFrame, config: Config):
     """Makes the design matrix corresponding to the bins"""
 
     B = df_prepped.select(config.bin_name).to_dummies(drop_first=False)
@@ -220,7 +218,9 @@ def make_b(df_prepped, config):
     return B.to_numpy()
 
 
-def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
+def partial_out_controls(
+    x_bins: np.array, x_controls: np.ndarray, df_prepped: pl.DataFrame, config: Config
+) -> pl.DataFrame:
     """Concatenate bin dummies and control variables horizontally."""
     x_conc = np.concatenate((x_bins, x_controls), axis=1)
     assert x_conc.shape[0] == config.N
@@ -246,7 +246,6 @@ def partial_out_controls(x_bins: np.array, x_controls, df_prepped, config):
     assert df_plotting.width == 3
 
     return df_plotting
-<<<<<<< HEAD
 
 
 def _print_shape(x, name):
@@ -307,5 +306,3 @@ def binscatter(
             return df_plotting
         case "pandas":
             return df_plotting.to_pandas()
-=======
->>>>>>> 7ad9ed2 (Change order)
