@@ -235,7 +235,7 @@ def make_b(df_prepped: pl.DataFrame, config: Config):
 
     B = df_prepped.select(config.bin_name).to_dummies(drop_first=False)
     assert B.width == config.num_bins, (
-        f"B must have {config.num_bins} columns but has {B.width}"
+        f"B must have {config.num_bins} columns but has {B.width}, this indicates too many bins"
     )
     # Reorder so that column i corresponds always to bin i
     cols = [f"{config.bin_name}_{i}" for i in range(config.num_bins)]

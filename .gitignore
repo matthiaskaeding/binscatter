@@ -15,6 +15,10 @@ binscatter_ref.pdf
 *.zip
 *.dta
 .vscode
-data/*.csv
-data/*.parquet
+artifacts/*.csv
+artifacts/*.parquet
+artifacts/**/*.dta
+artifacts/**/*.do
+artifacts/**/*.pdf
+artifacts/dataverse_files/
 refs/
