@@ -69,15 +69,15 @@ def test_binscatter():
     assert isinstance(p, ggplot)
 
     r = binscatter(
-        df_controls, "x", "y", controls=["z", "w", "category"], return_type="pldf"
+        df_controls, "x", "y", controls=["z", "w", "category"], return_type="polars"
     )
     assert isinstance(r, pl.DataFrame)
     r = binscatter(
-        df_controls, "x", "y", controls=["z", "w", "category"], return_type="pddf"
+        df_controls, "x", "y", controls=["z", "w", "category"], return_type="pandas"
     )
     assert isinstance(r, pd.DataFrame)
 
-    r = binscatter(df_controls, "x", "y", return_type="pldf")
+    r = binscatter(df_controls, "x", "y", return_type="polars")
     assert isinstance(r, pl.DataFrame)
-    r = binscatter(df_controls, "x", "y", return_type="pddf")
+    r = binscatter(df_controls, "x", "y", return_type="pandas")
     assert isinstance(r, pd.DataFrame)

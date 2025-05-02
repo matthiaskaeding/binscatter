@@ -222,12 +222,12 @@ def binscatter(
         y (str): Name y column
         covariates (Iterable[str]): names of control variables
         num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default a ggplot, otherwise "pldf" for polars dataframe or "pddf" for pandas dataframe
+        return_type (str): Return type. Default a ggplot, otherwise "polars" for polars dataframe or "pandas" for pandas dataframe
 
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-    assert return_type in ("ggplot", "pldf", "pddf"), ""
+    assert return_type in ("ggplot", "polars", "pandas"), ""
     df, config = prep(df, x, y, controls, num_bins)
     df_prepped = comp_scatter_quants(df, config)
     # Currently there are 2 cases:
@@ -255,7 +255,7 @@ def binscatter(
     match return_type:
         case "ggplot":
             return p
-        case "pldf":
+        case "polars":
             return df_plotting
-        case "pddf":
+        case "pandas":
             return df_plotting.to_pandas()
