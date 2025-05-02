@@ -2,6 +2,7 @@ import polars as pl
 import numpy as np
 from binscatter.main import binscatter
 from plotnine import ggplot
+import pandas as pd
 
 
 def test_binscatter():
@@ -66,3 +67,17 @@ def test_binscatter():
     df_controls = df_controls.with_columns(pl.Series("w", w))
     p = binscatter(df_controls, "x", "y", controls=["z", "w", "category"])
     assert isinstance(p, ggplot)
+
+    r = binscatter(
+        df_controls, "x", "y", controls=["z", "w", "category"], return_type="pldf"
+    )
+    assert isinstance(r, pl.DataFrame)
+    r = binscatter(
+        df_controls, "x", "y", controls=["z", "w", "category"], return_type="pddf"
+    )
+    assert isinstance(r, pd.DataFrame)
+
+    r = binscatter(df_controls, "x", "y", return_type="pldf")
+    assert isinstance(r, pl.DataFrame)
+    r = binscatter(df_controls, "x", "y", return_type="pddf")
+    assert isinstance(r, pd.DataFrame)
