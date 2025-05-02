@@ -22,3 +22,4 @@ artifacts/**/*.do
 artifacts/**/*.pdf
 artifacts/dataverse_files/
 refs/
+images/

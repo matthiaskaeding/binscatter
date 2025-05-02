@@ -8,28 +8,40 @@ This package implements binscatter plots following:
 > [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
 
 - Uses `polars` for scalability  
-- Uses `plotnine` as graphics backend — allowing composable plots  
+- Uses `plotnine` as graphics backend — allowing composable plots 
+  - Can return data for use in other packages 
+- Pythonic alternative to the excellent **binsreg** package
 
 ---
 
 ## Example
 
-We have created this noisy scatterplot:
+We made this noisy scatterplot:
 
-![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/scatter.png?raw=true)
+![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/artifacts/images/scatter.png?raw=true)
 
-This is how we would make a binscatter plot
+This is how we make a nice binscatter plot, controlling for a set of features:
 
 ```python
 from binscatter import binscatter
-binscatter(df, "x", "y")
+p_binscatter_controls = binscatter(
+    df,
+    "mtr90_lag3",
+    "lnpat",
+    [
+        "top_corp_lag3",
+        "real_gdp_pc",
+        "population_density",
+        "rd_credit_lag3",
+        "statenum",
+        "year",
+    ],
+    num_bins=35,
+)
 ```
 
-![Noisy scatterplot](https://github.com/matthiaskaeding/binscatter/blob/images/readme/binscatter.png?raw=true)
+![Binscatter](https://github.com/matthiaskaeding/binscatter/blob/images/artifacts/images/binscatter_controls.png?raw=true)
 
-We also support partialling out the effects of a set of controls
+Data used for example:
 
-```python
-controls = ["z1", "z2", "age_group""]
-binscatter(df, "x", "y", controls)
-```
+Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie, 2021, "Replication Data for: 'Taxation and Innovation in the 20th Century'", https://doi.org/10.7910/DVN/SR410I, Harvard Dataverse, V1
