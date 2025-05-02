@@ -7,27 +7,31 @@ from typing import Union, Iterable
 import numpy as np
 
 
+# Main function
 def binscatter(
     df: Union[pl.DataFrame, pd.DataFrame],
     x: str,
     y: str,
-    controls: Iterable[str] | str = [],
+    controls: Iterable[str] = [],
     num_bins=20,
-):
+    return_type: str = "ggplot",
+) -> Union[ggplot, pl.DataFrame, pd.DataFrame]:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
         df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe
         x (str): Name of x column
         y (str): Name y column
-        covariates (Iterable[str]): currently not used
+        covariates (Iterable[str]): names of control variables
         num_bins (int, optional): Number of bins to use. Defaults to 20
+        return_type (str): Return type. Default a ggplot, otherwise "polars" for polars dataframe or "pandas" for pandas dataframe
 
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-    if isinstance(controls, str):
-        controls = [controls]
+    assert return_type in ("ggplot", "polars", "pandas", "none"), (
+        "return_type must be either 'ggplot', 'polars', 'pandas', or 'none'"
+    )
     df, config = prep(df, x, y, controls, num_bins)
     df_prepped = comp_scatter_quants(df, config)
     # Currently there are 2 cases:
@@ -49,10 +53,17 @@ def binscatter(
         + aes(config.x_name, config.y_name)
         + geom_point()
         + xlim(config.x_min, config.x_max)
-        # + ylim(config.y_min, config.y_max)
     )
 
-    return p
+    match return_type:
+        case "ggplot":
+            return p
+        case "polars":
+            return df_plotting
+        case "pandas":
+            return df_plotting.to_pandas()
+        case "none":
+            return None
 
 
 def prep(
@@ -250,58 +261,3 @@ def partial_out_controls(
 
 def _print_shape(x, name):
     print(f"{name}-shape = {x.shape}")
-
-
-# Main function
-def binscatter(
-    df: Union[pl.DataFrame, pd.DataFrame],
-    x: str,
-    y: str,
-    controls: Iterable[str] = [],
-    num_bins=20,
-    return_type: str = "ggplot",
-) -> Union[ggplot, pl.DataFrame, pd.DataFrame]:
-    """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
-
-    Args:
-        df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe
-        x (str): Name of x column
-        y (str): Name y column
-        covariates (Iterable[str]): names of control variables
-        num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default a ggplot, otherwise "polars" for polars dataframe or "pandas" for pandas dataframe
-
-    Returns:
-        plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
-    """
-    assert return_type in ("ggplot", "polars", "pandas"), ""
-    df, config = prep(df, x, y, controls, num_bins)
-    df_prepped = comp_scatter_quants(df, config)
-    # Currently there are 2 cases:
-    # (1) no controls: the easy one, just compute the means by bin
-    # (2) controls: here we need to compute regression coefficients
-    # and partial out the effect of the controls
-    # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
-    if not controls:
-        df_plotting = df_prepped.group_by(config.bin_name).agg(
-            config.x_col.mean(), config.y_col.mean()
-        )
-    else:
-        x_controls = make_controls_mat(df_prepped, controls)
-        x_bins = make_b(df_prepped, config)
-        df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
-
-    p = (
-        ggplot(df_plotting)
-        + aes(config.x_name, config.y_name)
-        + geom_point()
-        + xlim(config.x_min, config.x_max)
-    )
-
-    match return_type:
-        case "ggplot":
-            return p
-        case "polars":
-            return df_plotting
-        case "pandas":
-            return df_plotting.to_pandas()

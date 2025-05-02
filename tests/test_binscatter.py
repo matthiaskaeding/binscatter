@@ -5,7 +5,7 @@ from plotnine import ggplot
 import pandas as pd
 
 
-def test_binscatter():
+def test_binscatter(monkeypatch):
     """Test that scatter() creates a binned scatter plot correctly"""
     # Create test data
     x = pl.Series("x0", range(100))
@@ -81,3 +81,7 @@ def test_binscatter():
     assert isinstance(r, pl.DataFrame)
     r = binscatter(df_controls, "x", "y", return_type="pandas")
     assert isinstance(r, pd.DataFrame)
+
+    monkeypatch.setattr(ggplot, "show", lambda self: None)
+    r = binscatter(df_controls, "x", "y", return_type="none")
+    assert r is None
