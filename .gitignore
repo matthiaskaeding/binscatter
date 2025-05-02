@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+binscatter_ref.pdf
+*.png
+.DS_Store
+.vscode/settings.json
+*.zip
+*.dta
+.vscode
+artifacts/*.csv
+artifacts/*.parquet
+artifacts/**/*.dta
+artifacts/**/*.do
+artifacts/**/*.pdf
+artifacts/dataverse_files/
+refs/
+images/
