@@ -296,7 +296,6 @@ def binscatter(
         + aes(config.x_name, config.y_name)
         + geom_point()
         + xlim(config.x_min, config.x_max)
-        + ylim(config.y_min, config.y_max)
     )
 
     match return_type:

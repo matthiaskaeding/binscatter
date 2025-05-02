@@ -13,3 +13,8 @@ binscatter_ref.pdf
 .DS_Store
 .vscode/settings.json
 *.zip
+*.dta
+.vscode
+data/*.csv
+data/*.parquet
+refs/

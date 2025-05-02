@@ -18,3 +18,10 @@ setup-krnl:
 
 install-pkg:
     uv pip install .
+
+# Download simulation from binsreg reference
+dl-sims:
+    mkdir -p data
+    curl -L \
+    https://raw.githubusercontent.com/nppackages/binsreg/5dcdb6f14b1d07698b6834a3b8590d0013456f0b/Python/binsreg_sim.csv \
+    -o data/binsreg_sim.csv
