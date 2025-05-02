@@ -212,7 +212,7 @@ def binscatter(
     y: str,
     controls: Iterable[str] = [],
     num_bins=20,
-    returns: str = "ggplot",
+    return_type: str = "ggplot",
 ) -> Union[ggplot, pl.DataFrame, pd.DataFrame]:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
@@ -222,12 +222,12 @@ def binscatter(
         y (str): Name y column
         covariates (Iterable[str]): names of control variables
         num_bins (int, optional): Number of bins to use. Defaults to 20
-        returns (str): Return type. Default a ggplot, otherwise "pl.DataFrame" or "pd.DataFrame"
+        return_type (str): Return type. Default a ggplot, otherwise "pldf" for polars dataframe or "pddf" for pandas dataframe
 
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-    assert returns in ("ggplot", "pl.DataFrame", "pd.DataFrame")
+    assert return_type in ("ggplot", "pldf", "pddf"), ""
     df, config = prep(df, x, y, controls, num_bins)
     df_prepped = comp_scatter_quants(df, config)
     # Currently there are 2 cases:
@@ -252,10 +252,10 @@ def binscatter(
         + ylim(config.y_min, config.y_max)
     )
 
-    match returns:
+    match return_type:
         case "ggplot":
             return p
-        case "pl.DataFrame":
+        case "pldf":
             return df_plotting
-        case "pd.DataFrame":
+        case "pddf":
             return df_plotting.to_pandas()
