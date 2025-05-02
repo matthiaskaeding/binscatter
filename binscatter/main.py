@@ -63,7 +63,8 @@ def binscatter(
         case "pandas":
             return df_plotting.to_pandas()
         case "none":
-            return None
+            p.show()
+            return
 
 
 def prep(
@@ -105,7 +106,8 @@ def prep(
     cols = df.columns
     assert x in cols
     assert y in cols
-    assert all(x in cols for x in controls), "Not all controls are in df"
+    missing = [c for c in controls if c not in cols]
+    assert not missing, f"Missing controls in df: {missing}"
 
     bin_name = "bins____"
     for i in range(100):
@@ -202,6 +204,11 @@ def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
     probs = [i / config.num_bins for i in range(1, config.num_bins + 1)]
     x = df.get_column(config.x_name)
     x_quantiles = [x.quantile(quantile=p) for p in probs]
+    n_unique_quantiles = len(set(x_quantiles))
+    n_duplicates = len(x_quantiles) - n_unique_quantiles
+    assert len(x_quantiles) == n_unique_quantiles, (
+        f"""{n_duplicates} duplicate quantiles in variable "{config.x_name}", choose lower number of bins"""
+    )
     x_col = config.x_col
 
     # Build pl.when expression for making bin groups
@@ -214,14 +221,22 @@ def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
         .alias(config.bin_name)
     )
 
-    return df.with_columns(expr)
+    df = df.with_columns(expr)
+
+    n_present = df.get_column(config.bin_name).n_unique()
+    n_missing = config.num_bins - n_present
+    assert n_missing == 0, f"{n_missing} bin-groups are empty: reduce number of bins"
+
+    return df
 
 
 def make_b(df_prepped: pl.DataFrame, config: Config):
     """Makes the design matrix corresponding to the bins"""
 
     B = df_prepped.select(config.bin_name).to_dummies(drop_first=False)
-    assert B.width == config.num_bins
+    assert B.width == config.num_bins, (
+        f"B must have {config.num_bins} columns but has {B.width}"
+    )
     # Reorder so that column i corresponds always to bin i
     cols = [f"{config.bin_name}_{i}" for i in range(config.num_bins)]
     B = B.select(cols)
