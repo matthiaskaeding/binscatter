@@ -37,10 +37,14 @@ def _get_quantile_bins(
 
     df_q = nw.from_dict({"threshold": quantiles_sorted}, backend=df.implementation)
     df_q = df_q.with_row_index("bin")
-
-    joined = df.select(colname).join_asof(
-        df_q, left_on=colname, right_on="threshold", strategy="forward"
-    )
+    try:
+        joined = df.select(colname).join_asof(
+            df_q, left_on=colname, right_on="threshold", strategy="forward"
+        )
+    except nw.exceptions.NarwhalsError:
+        joined = df.select(
+            nw.col(colname).cast(df_q.get_column("threshold").dtype)
+        ).join_asof(df_q, left_on=colname, right_on="threshold", strategy="forward")
 
     return joined.get_column("bin").sort()
 
