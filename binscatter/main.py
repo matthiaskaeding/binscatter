@@ -2,20 +2,26 @@ import polars as pl
 from polars import selectors as cs
 import pandas as pd
 from dataclasses import dataclass
-from plotnine import ggplot, aes, geom_point, xlim, ylim
-from typing import Union, Iterable
+from typing import Union, Iterable, List, Literal, Sequence
 import numpy as np
+import narwhals as nw
+from narwhals.typing import IntoDataFrame
+from binscatter.df_utils import (
+    _remove_nun_numeric,
+    _quantiles_from_sorted,
+    _get_quantile_bins,
+)
+import plotly.express as px
 
 
-# Main function
 def binscatter(
-    df: Union[pl.DataFrame, pd.DataFrame],
+    df: IntoDataFrame,
     x: str,
     y: str,
     controls: Iterable[str] = [],
     num_bins=20,
-    return_type: str = "ggplot",
-) -> Union[ggplot, pl.DataFrame, pd.DataFrame]:
+    return_type: Literal["plotly", "native"] = "plotly",
+):
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
@@ -29,11 +35,12 @@ def binscatter(
     Returns:
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
-    assert return_type in ("ggplot", "polars", "pandas", "none"), (
-        "return_type must be either 'ggplot', 'polars', 'pandas', or 'none'"
-    )
-    df, config = prep(df, x, y, controls, num_bins)
-    df_prepped = comp_scatter_quants(df, config)
+    if return_type not in ("plotly", "native"):
+        raise ValueError("return_type must be either 'plotly', or 'native'")
+
+    # Prepare dataframe: sort, remove non numerics and add bins
+    df_prepped, config = prep(df, x, y, controls, num_bins)
+
     # Currently there are 2 cases:
     # (1) no controls: the easy one, just compute the means by bin
     # (2) controls: here we need to compute regression coefficients
@@ -48,32 +55,34 @@ def binscatter(
         x_bins = make_b(df_prepped, config)
         df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
 
-    p = (
-        ggplot(df_plotting)
-        + aes(config.x_name, config.y_name)
-        + geom_point()
-        + xlim(config.x_min, config.x_max)
-    )
-
     match return_type:
-        case "ggplot":
-            return p
-        case "polars":
-            return df_plotting
-        case "pandas":
-            return df_plotting.to_pandas()
-        case "none":
-            p.show()
-            return
+        case "plotly":
+            return make_plot_plotly(df_plotting, config)
+        case "native":
+            return df_plotting.to_native()
+
+
+@dataclass
+class Config:
+    x_name: str
+    y_name: str
+    controls: Sequence[str]
+    num_bins: int
+    N: int
+    x_col: nw.Expr
+    y_col: nw.Expr
+    bin_name: str
+    x_min: float
+    x_max: float
 
 
 def prep(
-    df: Union[pl.DataFrame, pd.DataFrame],
+    df: IntoDataFrame,
     x: str | None,
     y: str | None,
     controls: Iterable[str] = [],
     num_bins: int = 20,
-):
+) -> Config:
     """Prepares the input data and builds configuration.
 
     Args:
@@ -90,15 +99,12 @@ def prep(
         AssertionError: If input validation fails
     """
     assert num_bins > 1
-    assert isinstance(df, pl.DataFrame) or isinstance(df, pd.DataFrame)
     assert isinstance(x, str)
     assert isinstance(y, str)
 
-    if isinstance(df, pd.DataFrame):
-        df = pl.from_pandas(df)
-
-    N = df.height
-    assert df.width >= 2
+    df = nw.from_native(df)
+    N = df.shape[0]
+    assert df.shape[1] >= 2
     assert N > 0
     assert num_bins < N
     assert num_bins > 1
@@ -109,60 +115,37 @@ def prep(
     missing = [c for c in controls if c not in cols]
     assert not missing, f"Missing controls in df: {missing}"
 
+    # Find name for bins
     bin_name = "bins____"
-    for i in range(100):
+    for _ in range(100):
         if bin_name in cols:
             continue
         bin_name = bin_name + "_"
     if bin_name in cols:
-        raise ValueError(
-            f"'{bin_name}' and 99 versions with less underscores are columns in df"
-        )
+        msg = f"'{bin_name}' and 99 versions with less underscores are columns in df"
+        raise ValueError(msg)
 
-    df = (
-        df.lazy()
-        .select(x, y, *controls)
-        .drop_nans()
-        .drop_nulls()
-        .filter(~pl.any_horizontal(cs.numeric().is_infinite()))
+    df_prepped = (
+        df.select(x, y, *controls)
+        .pipe(_remove_nun_numeric)
         .sort(x)
-        .collect()
-    )
-
-    x_col = pl.col(x)
-    y_col = pl.col(y)
-
-    mins = df.select(
-        x_col.min().alias("x_min"),
-        x_col.max().alias("x_max"),
+        .pipe(add_quantile_bins, x, bin_name, num_bins)
     )
 
     config = Config(
         num_bins=num_bins,
         x_name=x,
         y_name=y,
-        N=df.height,
-        x_col=x_col,
-        y_col=y_col,
-        x_min=mins.item(0, "x_min"),
-        x_max=mins.item(0, "x_max"),
+        x_col=nw.col(x),
+        y_col=nw.col(y),
+        N=df_prepped.shape[0],
         bin_name=bin_name,
+        controls=controls,
+        x_min=df_prepped.get_column(x).item(0),
+        x_max=df_prepped.get_column(x).item(-1),
     )
 
-    return df, config
-
-
-@dataclass
-class Config:
-    num_bins: int
-    x_name: str
-    y_name: str
-    N: int
-    x_col: pl.expr.Expr
-    y_col: pl.expr.Expr
-    x_min: float
-    x_max: float
-    bin_name: str
+    return df_prepped, config
 
 
 def make_controls_mat(df: pl.DataFrame, controls: Iterable[str]) -> np.ndarray:
@@ -188,8 +171,8 @@ def make_controls_mat(df: pl.DataFrame, controls: Iterable[str]) -> np.ndarray:
     return np.concat((x_num, x_cat), axis=1)
 
 
-def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
-    """Makes data used for scatter plot by computing quantile bins.
+def add_quantile_bins(df: nw.DataFrame, x_name: str, bin_name: str, num_bins: int):
+    """Gets quantile bins
 
     Args:
         df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe with x and y variables
@@ -199,35 +182,18 @@ def comp_scatter_quants(df: Union[pl.DataFrame, pd.DataFrame], config: Config):
         polars.DataFrame: Input dataframe with additional 'bin' column containing quantile bin assignments
     """
 
-    # Make expression for making the quantiles
-    # Because pl.qcut is unstable we build a when - then expression
-    probs = [i / config.num_bins for i in range(1, config.num_bins + 1)]
-    x = df.get_column(config.x_name)
-    x_quantiles = [x.quantile(quantile=p) for p in probs]
+    probs = [i / num_bins for i in range(1, num_bins + 1)]
+    x_quantiles: List[int] = _quantiles_from_sorted(df.get_column(x_name), probs)
+
     n_unique_quantiles = len(set(x_quantiles))
     n_duplicates = len(x_quantiles) - n_unique_quantiles
-    assert len(x_quantiles) == n_unique_quantiles, (
-        f"""{n_duplicates} duplicate quantiles in variable "{config.x_name}", choose lower number of bins"""
-    )
-    x_col = config.x_col
+    if len(x_quantiles) != n_unique_quantiles:
+        msg = f"""{n_duplicates} duplicate quantiles in variable "{x_name}", choose lower number of bins"""
+        raise ValueError(msg)
 
-    # Build pl.when expression for making bin groups
-    expr = pl
-    for i, q in enumerate(x_quantiles[:-1]):
-        expr = expr.when(x_col.lt(q)).then(pl.lit(i))
-    expr = (
-        expr.when(x_col.le(x_quantiles[-1]))
-        .then(pl.lit(config.num_bins - 1))
-        .alias(config.bin_name)
-    )
+    quantile_bins = _get_quantile_bins(df, x_name, x_quantiles)
 
-    df = df.with_columns(expr)
-
-    n_present = df.get_column(config.bin_name).n_unique()
-    n_missing = config.num_bins - n_present
-    assert n_missing == 0, f"{n_missing} bin-groups are empty: reduce number of bins"
-
-    return df
+    return df.with_columns(quantile_bins.alias(bin_name))
 
 
 def make_b(df_prepped: pl.DataFrame, config: Config):
@@ -274,5 +240,15 @@ def partial_out_controls(
     return df_plotting
 
 
-def _print_shape(x, name):
-    print(f"{name}-shape = {x.shape}")
+def make_plot_plotly(df: nw.DataFrame, config: Config):
+    x = df.get_column(config.x_name).to_list()
+    y = df.get_column(config.y_name).to_list()
+    range_x = (config.x_min, config.x_max)
+
+    fig = px.scatter(x=x, y=y, range_x=range_x).update_layout(
+        title="Binscatter",
+        xaxis_title=config.x_name,
+        yaxis_title=config.y_name,
+    )
+
+    return fig
