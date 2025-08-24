@@ -7,8 +7,9 @@ This package implements binscatter plots following:
 > American Economic Review, 114(5), pp. 1488-1514  
 > [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
 
-- Uses `narwhals` as layer between dataframe libraries  
+- By using `narwhals` as dataframe layer `binscatter` supports: cuDF, Modin, pandas, Polars, PyArrow, Dask, DuckDB, Ibis, PySpark, SQLFrame
 - Uses `plotly` as graphics backend 
+- Lightweight - little dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
 ---
