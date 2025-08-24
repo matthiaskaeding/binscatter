@@ -1,15 +1,23 @@
 import narwhals as nw
 from typing import List, Sequence
 from math import ceil, floor
+import narwhals.selectors as ncs
 
 
-def _remove_nun_numeric(df: nw.DataFrame) -> nw.DataFrame:
+def _remove_bad_values(df: nw.DataFrame) -> nw.DataFrame:
     """Removes nulls and infinites"""
-    cols = df.columns
+    cols_numeric = df.select(ncs.numeric()).columns
     mask = None
-    for c in cols:
+
+    for c in cols_numeric:
         col = df[c]
         cond = col.is_null() | ~col.is_finite()
+        mask = cond if not mask else mask | cond
+
+    cols_cat = df.select(ncs.categorical()).columns
+    for c in cols_cat:
+        col = df[c]
+        cond = col.is_null()
         mask = cond if not mask else mask | cond
 
     return df.filter(~mask)
@@ -42,6 +50,7 @@ def _get_quantile_bins(
             df_q, left_on=colname, right_on="threshold", strategy="forward"
         )
     except nw.exceptions.NarwhalsError:
+        # Sometimes making the quantiles changes the datatypes and then we need to cast
         joined = df.select(
             nw.col(colname).cast(df_q.get_column("threshold").dtype)
         ).join_asof(df_q, left_on=colname, right_on="threshold", strategy="forward")

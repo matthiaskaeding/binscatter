@@ -1,17 +1,15 @@
-import polars as pl
-from polars import selectors as cs
-import pandas as pd
 from dataclasses import dataclass
-from typing import Union, Iterable, List, Literal, Sequence
+from typing import Iterable, List, Literal, Sequence, Tuple
 import numpy as np
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 from binscatter.df_utils import (
-    _remove_nun_numeric,
+    _remove_bad_values,
     _quantiles_from_sorted,
     _get_quantile_bins,
 )
 import plotly.express as px
+import narwhals.selectors as ncs
 
 
 def binscatter(
@@ -28,7 +26,7 @@ def binscatter(
         df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe
         x (str): Name of x column
         y (str): Name y column
-        covariates (Iterable[str]): names of control variables
+        controls (Iterable[str]): names of control variables (not used yet)
         num_bins (int, optional): Number of bins to use. Defaults to 20
         return_type (str): Return type. Default a ggplot, otherwise "polars" for polars dataframe or "pandas" for pandas dataframe
 
@@ -82,7 +80,7 @@ def prep(
     y: str | None,
     controls: Iterable[str] = [],
     num_bins: int = 20,
-) -> Config:
+) -> Tuple[nw.DataFrame, Config]:
     """Prepares the input data and builds configuration.
 
     Args:
@@ -127,7 +125,7 @@ def prep(
 
     df_prepped = (
         df.select(x, y, *controls)
-        .pipe(_remove_nun_numeric)
+        .pipe(_remove_bad_values)
         .sort(x)
         .pipe(add_quantile_bins, x, bin_name, num_bins)
     )
@@ -148,7 +146,7 @@ def prep(
     return df_prepped, config
 
 
-def make_controls_mat(df: pl.DataFrame, controls: Iterable[str]) -> np.ndarray:
+def make_controls_mat(df: nw.DataFrame, controls: Iterable[str]) -> np.ndarray:
     """Creates a matrix of control variables by combining numeric and categorical features.
 
     Args:
@@ -159,12 +157,17 @@ def make_controls_mat(df: pl.DataFrame, controls: Iterable[str]) -> np.ndarray:
         numpy.ndarray: Matrix of control variables with numeric columns and dummy-encoded categorical columns
     """
     dfc = df.select(controls)
-    df_num = dfc.select(cs.numeric())
-    df_cat = dfc.select(~cs.numeric())
-    if df_cat.width == 0:
+    df_num = dfc.select(ncs.numeric())
+    df_cat = dfc.select(~ncs.categorical())
+    if df_cat.shape[1] == 0:
         return df_num.to_numpy()
-    x_cat = df_cat.to_dummies(drop_first=True).to_numpy()
-    if df_num.width == 0:
+
+    sub_dfs = []
+    for col in df_cat.columns:
+        tmp = df_cat.get_column(col).to_dummies(drop_first=True).to_numpy()
+        sub_dfs.append(tmp)
+    x_cat = np.concat(sub_dfs, axis=1)
+    if df_num.shape[1] == 0:
         return x_cat
     x_num = df_num.to_numpy()
 
@@ -196,23 +199,24 @@ def add_quantile_bins(df: nw.DataFrame, x_name: str, bin_name: str, num_bins: in
     return df.with_columns(quantile_bins.alias(bin_name))
 
 
-def make_b(df_prepped: pl.DataFrame, config: Config):
+def make_b(df_prepped: nw.DataFrame, config: Config):
     """Makes the design matrix corresponding to the bins"""
 
-    B = df_prepped.select(config.bin_name).to_dummies(drop_first=False)
-    assert B.width == config.num_bins, (
+    B = df_prepped.get_column(config.bin_name).to_dummies(
+        drop_first=False, separator="_"
+    )
+    assert B.shape[1] == config.num_bins, (
         f"B must have {config.num_bins} columns but has {B.width}, this indicates too many bins"
     )
     # Reorder so that column i corresponds always to bin i
     cols = [f"{config.bin_name}_{i}" for i in range(config.num_bins)]
-    B = B.select(cols)
 
-    return B.to_numpy()
+    return B.select(cols).to_numpy()
 
 
 def partial_out_controls(
-    x_bins: np.array, x_controls: np.ndarray, df_prepped: pl.DataFrame, config: Config
-) -> pl.DataFrame:
+    x_bins: np.array, x_controls: np.ndarray, df_prepped: nw.DataFrame, config: Config
+) -> nw.DataFrame:
     """Concatenate bin dummies and control variables horizontally."""
     x_conc = np.concatenate((x_bins, x_controls), axis=1)
     assert x_conc.shape[0] == config.N
@@ -224,7 +228,12 @@ def partial_out_controls(
     beta = theta[: config.num_bins]
     gamma = theta[config.num_bins :]
     # Evaluate
-    y_vals = pl.Series(config.y_name, beta + np.dot(x_controls_means, gamma))
+    y_vals = nw.new_series(
+        name=config.y_name,
+        values=beta + np.dot(x_controls_means, gamma),
+        backend=df_prepped.implementation,
+    )
+
     # Build output data frame - should be analog to the one build without controls
     df_plotting = (
         df_prepped.group_by(config.bin_name)
@@ -234,8 +243,9 @@ def partial_out_controls(
         .sort(config.bin_name)
         .with_columns(y_vals)
     )
-    assert df_plotting.height == config.num_bins
-    assert df_plotting.width == 3
+
+    assert df_plotting.shape[0] == config.num_bins
+    assert df_plotting.shape[1] == 3
 
     return df_plotting
 

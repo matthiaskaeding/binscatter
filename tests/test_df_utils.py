@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from binscatter.df_utils import (
     _get_quantile_bins,
-    _remove_nun_numeric,
+    _remove_bad_values,
     _compute_quantiles,
     _quantiles_from_sorted,
 )
@@ -21,7 +21,7 @@ def test_filter_all_numeric_basic():
     df_pandas = pd.DataFrame(data)
     df = nw.from_native(df_pandas)
 
-    filtered = _remove_nun_numeric(df)
+    filtered = _remove_bad_values(df)
     assert filtered.shape[0] == 2
     assert filtered["a"].to_numpy().tolist() == [1.0, 2.3]
     assert filtered["b"].to_numpy().tolist() == [5, 6]
@@ -29,7 +29,7 @@ def test_filter_all_numeric_basic():
     df_polars = pl.DataFrame(data)
     df_from_polars = nw.from_native(df_polars)
 
-    filtered_polars = _remove_nun_numeric(df_from_polars)
+    filtered_polars = _remove_bad_values(df_from_polars)
     assert filtered_polars.shape[0] == 2
     assert filtered_polars["a"].to_numpy().tolist() == [1.0, 2.3]
     assert filtered_polars["b"].to_numpy().tolist() == [5, 6]

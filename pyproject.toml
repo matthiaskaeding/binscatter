@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Creating binscatter plots"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["narwhals>=2.1.2", "plotly>=6.3.0"]
+dependencies = [
+    "narwhals>=2.1.2",
+ "numpy>=2.3.2",
+ "plotly>=6.3.0",
+]
 
 [dependency-groups]
 dev = ["ipykernel>=6.29.5", "pytest>=8.3.5", "polars>=1.22.0", "pandas>=1.4.4"]
