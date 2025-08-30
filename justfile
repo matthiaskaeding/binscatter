@@ -39,3 +39,7 @@ orphan-images:
     git add -A
     git commit -m "Initial orphan commit on images (preserving artifacts/images)"
     git push origin images --force
+
+# type check
+ty:
+  uv tool run ty check --exclude tests --exclude scripts

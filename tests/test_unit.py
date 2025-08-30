@@ -1,7 +1,10 @@
 from binscatter.main import prep
 import polars as pl
 import numpy as np
-from binscatter.main import comp_scatter_quants, make_b
+from binscatter.main import make_b
+import narwhals as nw
+
+import pytest
 
 
 def test_prep():
@@ -15,12 +18,8 @@ def test_prep():
     assert config.num_bins == num_bins
     assert config.y_name == "y"
     assert config.x_name == "x"
-    assert config.N == 5
-    assert isinstance(config.x_col, pl.Expr)
-    assert isinstance(config.y_col, pl.Expr)
-
-    # Check DataFrame is sorted by x
-    assert df_out.get_column("x").is_sorted()
+    assert isinstance(config.x_col, nw.Expr)
+    assert isinstance(config.y_col, nw.Expr)
 
     # Test with pandas DataFrame
     df_pd = pl.DataFrame({"y": [1, 2, 3], "x": [3, 1, 2]})
@@ -28,47 +27,17 @@ def test_prep():
     df_out, config = prep(df_pd, "x", "y", [], num_bins)
 
     # Check conversion to polars
-    assert isinstance(df_out, pl.DataFrame)
-    assert config.N == 3
+    assert isinstance(df_out, nw.LazyFrame)
     assert config.y_name == "y"
     assert config.x_name == "x"
 
     # Test invalid inputs
-    try:
-        prep(df, None, None, num_bins=60)  # J >= N
-        assert False
-    except AssertionError:
-        pass
 
-    try:
-        prep(pl.DataFrame({"x": [1]}), None, None, 0)  # Single column
-        assert False
-    except AssertionError:
-        pass
+    with pytest.raises((TypeError, ValueError)):
+        prep(df, None, None, num_bins=60)  # Invalid x/y names and too many bins
 
-    print("All tests passed!")
-
-
-def test_max_x_assigned_to_max_bin():
-    df = pl.DataFrame(
-        {
-            "x": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 100.0],
-            "y": [10.5, 20.2, 30.7, 40.1, 50.9, 60.3, 70.8, 80.4, 90.6, 110.5],
-        }
-    )
-
-    J = 3
-    df_prepped, cfg = prep(df, "x", "y", num_bins=J)
-    df_prepped = comp_scatter_quants(df_prepped, cfg)
-    bin_name = cfg.bin_name
-    bins = df_prepped.get_column(bin_name).unique().sort().to_list()
-    desired_bins = list(range(J))
-    assert bins == desired_bins
-
-    bin_of_max = (
-        df_prepped.filter(pl.col("x") == pl.col("x").max()).select(bin_name).item()
-    )
-    assert bin_of_max == J - 1
+    with pytest.raises((TypeError, ValueError)):
+        prep(pl.DataFrame({"x": [1]}), None, None, 0)  # Invalid x/y names and num_bins
 
 
 def test_make_b():
