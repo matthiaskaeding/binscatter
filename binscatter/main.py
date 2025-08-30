@@ -1,13 +1,15 @@
-from dataclasses import dataclass
-from typing import Iterable, Literal, Sequence, Tuple
+from typing import Iterable, Literal, Tuple
 import numpy as np
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
-from binscatter.df_utils import (
-    _compute_quantiles,
-)
+from narwhals import Implementation
 import plotly.express as px
 import narwhals.selectors as ncs
+from typing import List, NamedTuple
+import uuid
+import math
+from functools import reduce
+import operator
 
 
 def binscatter(
@@ -32,7 +34,8 @@ def binscatter(
         plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
     """
     if return_type not in ("plotly", "native"):
-        raise ValueError("return_type must be either 'plotly', or 'native'")
+        msg = f"Invalid return_type: {return_type}"
+        raise ValueError(msg)
 
     # Prepare dataframe: sort, remove non numerics and add bins
     df_prepped, config = prep(df, x, y, controls, num_bins)
@@ -43,13 +46,18 @@ def binscatter(
     # and partial out the effect of the controls
     # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
     if not controls:
-        df_plotting = df_prepped.group_by(config.bin_name).agg(
-            config.x_col.mean(), config.y_col.mean()
+        df_plotting: nw.DataFrame = (
+            df_prepped.group_by(config.bin_name)
+            .agg(config.x_col.mean(), config.y_col.mean())
+            .collect()
         )
     else:
         x_controls = make_controls_mat(df_prepped, controls)
         x_bins = make_b(df_prepped, config)
         df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
+
+    if df_plotting.shape[0] < config.num_bins:
+        raise ValueError("Quantiles are not unique. Decrease number of bins.")
 
     match return_type:
         case "plotly":
@@ -58,23 +66,31 @@ def binscatter(
             return df_plotting.to_native().collect()
 
 
-@dataclass
-class Config:
+class Config(NamedTuple):
+    """Main config which holds bunch of data derived from dataframe."""
+
     x_name: str
     y_name: str
-    controls: Sequence[str]
+    controls: Tuple[str]
     num_bins: int
-    x_col: nw.Expr
-    y_col: nw.Expr
     bin_name: str
     x_bounds: Tuple[float, float]
+    distinct_suffix: str
+
+    @property
+    def x_col(self) -> nw.Expr:
+        return nw.col(self.x_name)
+
+    @property
+    def y_col(self) -> nw.Expr:
+        return nw.col(self.y_name)
 
 
 def prep(
     df_in: IntoDataFrame,
-    x: str | None,
-    y: str | None,
-    controls: Iterable[str] = [],
+    x_name: str | None,
+    y_name: str | None,
+    controls: Iterable[str] | str = (),
     num_bins: int = 20,
 ) -> Tuple[nw.DataFrame, Config]:
     """Prepares the input data and builds configuration.
@@ -92,58 +108,60 @@ def prep(
     Raises:
         AssertionError: If input validation fails
     """
-    assert num_bins > 1
-    assert isinstance(x, str)
-    assert isinstance(y, str)
-    assert not controls, "Controls not yet implemented"
+    if num_bins <= 1:
+        raise ValueError("num_bins must be greater than 1")
+    if not isinstance(x_name, str):
+        raise TypeError("x_name must be a string")
+    if not isinstance(y_name, str):
+        raise TypeError("y_name must be a string")
+    if controls:
+        raise NotImplementedError("Controls not yet implemented")
 
-    # TODO cover pyspark case
     dfl = nw.from_native(df_in).lazy()
 
+    if isinstance(controls, str):
+        controls = (controls,)
+    else:
+        controls = tuple(controls)
+
     try:
-        df = dfl.select(x, y, *controls)
+        df = dfl.select(x_name, y_name, *controls)
     except Exception as e:
         cols = dfl.columns
-        for c in [x, y, *controls]:
+        for c in [x_name, y_name, *controls]:
             if c not in cols:
-                msg = f"{x} not in input dataframe"
+                msg = f"{x_name} not in input dataframe"
                 raise ValueError(msg)
         raise e
 
-    # assert N > 0
-    # assert num_bins < N
     assert num_bins > 1
 
     # Find name for bins
-    bin_name = "bins____"
-    cols = [x, y, *controls]
-    for _ in range(100):
-        if bin_name in cols:
-            continue
-        bin_name = bin_name + "_"
-    if bin_name in cols:
-        msg = f"'{bin_name}' and 99 versions with less underscores are columns in df"
-        raise ValueError(msg)
-
-    df_prepped = df.drop_nulls().sort(x).pipe(add_quantile_bins, x, bin_name, num_bins)
+    distinct_suffix = str(uuid.uuid4())
+    bin_name = f"bins____{distinct_suffix}"
+    df_filtered = _remove_bad_values(df)
 
     # We need the range of x for plotting
-    bounds_df = df_prepped.select(
-        nw.col(x).min().alias("x_min"),
-        nw.col(x).max().alias("x_max"),
+    bounds_df = df_filtered.select(
+        nw.col(x_name).min().alias("x_min"),
+        nw.col(x_name).max().alias("x_max"),
     ).collect()
     x_bounds = (bounds_df.item(0, "x_min"), bounds_df.item(0, "x_max"))
+    for val, fun in zip(x_bounds, ["min", "max"]):
+        if not math.isfinite(val):
+            msg = f"{fun}({x_name})={val}"
+            raise ValueError(msg)
 
     config = Config(
         num_bins=num_bins,
-        x_name=x,
-        y_name=y,
-        x_col=nw.col(x),
-        y_col=nw.col(y),
+        x_name=x_name,
+        y_name=y_name,
         bin_name=bin_name,
         controls=controls,
         x_bounds=x_bounds,
+        distinct_suffix=distinct_suffix,
     )
+    df_prepped = add_quantile_bins(df_filtered, config)
 
     return df_prepped, config
 
@@ -174,41 +192,6 @@ def make_controls_mat(df: nw.DataFrame, controls: Iterable[str]) -> np.ndarray:
     x_num = df_num.to_numpy()
 
     return np.concat((x_num, x_cat), axis=1)
-
-
-def add_quantile_bins(df: nw.DataFrame, x_name: str, bin_name: str, num_bins: int):
-    """Gets quantile bins
-
-    Args:
-        df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe with x and y variables
-        config (Config): Configuration object with metadata about the data
-
-    Returns:
-        polars.DataFrame: Input dataframe with additional 'bin' column containing quantile bin assignments
-    """
-
-    probs = [i / num_bins for i in range(1, num_bins + 1)]
-    df_quantiles: nw.LazyFrame = _compute_quantiles(df, x_name, probs, bin_name)
-
-    # Check quantiles
-    # TODO find more elegant way
-    df_quantiles_collected = df_quantiles.collect()
-    any_duplicates = df_quantiles_collected.select(
-        nw.col("quantile").is_duplicated().any()
-    ).item(0, 0)
-    if any_duplicates:
-        msg = (
-            f"Duplicate quantiles detected in {x_name}. Please decrease number of bins."
-        )
-        raise ValueError(msg)
-
-    # Sometimes making the quantiles changes the datatypes and then we need to cast
-    des_type = df_quantiles_collected["quantile"].dtype
-    joined = df.with_columns(nw.col(x_name).cast(des_type)).join_asof(
-        df_quantiles, left_on=x_name, right_on="quantile", strategy="forward"
-    )
-
-    return joined
 
 
 def make_b(df_prepped: nw.DataFrame, config: Config):
@@ -259,12 +242,12 @@ def partial_out_controls(
     return df_plotting
 
 
-def make_plot_plotly(df_prepped: nw.LazyFrame, config: Config):
+def make_plot_plotly(df_prepped: nw.DataFrame, config: Config):
     """Make plot from prepared dataframe.
 
     Args:
       df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in config"""
-    data = df_prepped.select(config.x_name, config.y_name).collect()
+    data = df_prepped.select(config.x_name, config.y_name)
     x = data.get_column(config.x_name).to_list()
     y = data.get_column(config.y_name).to_list()
 
@@ -275,3 +258,172 @@ def make_plot_plotly(df_prepped: nw.LazyFrame, config: Config):
     )
 
     return fig
+
+
+def _remove_bad_values(df: nw.LazyFrame) -> nw.LazyFrame:
+    """Removes nulls and infinites"""
+
+    bad_conditions = []
+
+    cols_numeric = df.select(ncs.numeric()).columns
+    for c in cols_numeric:
+        col = nw.col(c)
+        bad_cond = col.is_null() | ~col.is_finite() | col.is_nan()
+        bad_conditions.append(bad_cond)
+
+    cols_cat = df.select(ncs.categorical()).columns
+    for c in cols_cat:
+        bad_conditions.append(nw.col(c).is_null())
+
+    final_bad_condition = reduce(operator.or_, bad_conditions)
+
+    return df.filter(~final_bad_condition)
+
+
+# Quantiles
+
+
+# Specific handlers
+def add_to_pandas(
+    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float]
+) -> nw.LazyFrame:
+    try:
+        from pandas import qcut
+    except ImportError:
+        raise ImportError("Pandas support requires pandas to be installed.")
+    df_native = df.to_native()
+    buckets = qcut(df_native[x_name], labels=False, q=probs)
+    df_native[bin_name] = buckets
+
+    return nw.from_native(df_native).lazy()
+
+
+def add_to_polars(
+    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float]
+) -> nw.LazyFrame:
+    try:
+        import polars as pl
+    except ImportError:
+        raise ImportError("Polars support requires Polars to be installed.")
+    # Because cut and qcut are not stable we use when-then
+    df_native = df.to_native()
+    x_col = pl.col(x_name)
+
+    qs = df_native.select([x_col.quantile(p).alias(f"q{p}") for p in probs]).collect()
+    expr = pl
+    n = qs.width
+    for i in range(n):
+        thr = qs.item(0, i)
+        cond = x_col.le(thr) if i == n - 1 else x_col.lt(thr)
+        expr = expr.when(cond).then(pl.lit(i))
+    expr = expr.alias(bin_name)
+    df_native_with_bin = df_native.with_columns(expr)
+
+    return nw.from_native(df_native_with_bin)
+
+
+def add_to_duckdb(
+    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float]
+) -> nw.LazyFrame:
+    try:
+        rel = df.to_native()
+    except Exception as e:
+        raise RuntimeError(
+            "Failed to use df.to_native(); DuckDB may not be installed."
+        ) from e
+
+    order_expr = f"{x_name} ASC"
+    rel_with_bins = rel.project(
+        f"*, ntile({len(probs)}) OVER (ORDER BY {order_expr}) - 1 AS {bin_name}"
+    )
+
+    return nw.from_native(rel_with_bins)
+
+
+def add_to_pyspark(
+    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float], x_max: float
+) -> nw.LazyFrame:
+    try:
+        from pyspark.ml.feature import Bucketizer
+    except ImportError:
+        raise ImportError("PySpark support requires pyspark to be installed.")
+
+    sdf = df.to_native()
+    qs = sdf.approxQuantile(x_name, probs[:-1], relativeError=1e-3)
+    qs.append(x_max)
+
+    if len(set(qs)) < len(qs):
+        raise ValueError("Quantiles not unique. Decrease number of bins.")
+    # Build strictly increasing splits for Bucketizer: (a, b] bins
+    splits = [-float("inf"), *qs, float("inf")]
+
+    bucketizer = Bucketizer(
+        splits=splits,
+        inputCol=x_name,
+        outputCol=bin_name,
+        handleInvalid="keep",
+    )
+
+    sdf_binned = bucketizer.transform(sdf)
+
+    return nw.from_native(sdf_binned)
+
+
+def add_quantile_bins(df: nw.DataFrame, config: Config):
+    # Common arguments
+    kwargs = {
+        "df": df,
+        "x_name": config.x_name,
+        "bin_name": config.bin_name,
+        "probs": [i / config.num_bins for i in range(1, config.num_bins + 1)],
+    }
+
+    if df.implementation == Implementation.PANDAS:
+        quantile_handler = add_to_pandas
+    elif df.implementation == Implementation.POLARS:
+        quantile_handler = add_to_polars
+    elif df.implementation == Implementation.PYSPARK:
+        quantile_handler = add_to_pyspark
+        kwargs["x_max"] = config.x_bounds[1]
+    elif df.implementation == Implementation.DUCKDB:
+        quantile_handler = add_to_duckdb
+    else:
+        raise NotImplementedError(
+            f"No implementation available for {df.implementation}"
+        )
+
+    return quantile_handler(**kwargs)
+
+
+def _compute_quantiles(
+    df: nw.DataFrame, colname: str, probs: Iterable[float], bin_name: str
+) -> nw.LazyFrame:
+    """Get multiple quantiles in one operation"""
+    col = nw.col(colname)
+    if df.implementation != nw.Implementation.PYSPARK:
+        qs = df.select(
+            [col.quantile(p, interpolation="linear").alias(f"q{p}") for p in probs]
+        )
+    else:
+        # Pyspark - ugly hack
+        try:
+            from pyspark.sql import SparkSession
+        except ImportError:
+            raise ImportError("PySpark support requires pyspark to be installed.")
+        spark = SparkSession.builder.getOrCreate()
+
+        quantiles: list[float] = (
+            df.select(colname).to_native().approxQuantile(colname, probs, 0.03)
+        )
+        q_data = {}
+        for p, q in zip(probs, quantiles):
+            k = f"q{p}"
+            q_data[k] = [q]
+        qs_spark = spark.createDataFrame(q_data)
+        qs = nw.from_native(qs_spark)
+
+    return (
+        qs.unpivot(variable_name="prob", value_name="quantile")
+        .sort("quantile")
+        .with_row_index(bin_name, order_by="quantile")
+    )

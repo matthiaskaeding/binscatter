@@ -2,7 +2,8 @@ version = 1
 revision = 1
 requires-python = ">=3.11"
 resolution-markers = [
-    "python_full_version >= '3.12'",
+    "python_full_version >= '3.14'",
+    "python_full_version >= '3.12' and python_full_version < '3.14'",
     "python_full_version < '3.12'",
 ]
 
@@ -37,11 +38,14 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "duckdb" },
+    { name = "ibis" },
     { name = "ipykernel" },
     { name = "pandas" },
     { name = "polars" },
     { name = "pyarrow" },
+    { name = "pyspark" },
     { name = "pytest" },
+    { name = "sqlframe" },
 ]
 
 [package.metadata]
@@ -54,11 +58,14 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "duckdb", specifier = ">=1.3.2" },
+    { name = "ibis", specifier = ">=3.3.0" },
     { name = "ipykernel", specifier = ">=6.29.5" },
     { name = "pandas", specifier = ">=1.4.4" },
     { name = "polars", specifier = ">=1.22.0" },
     { name = "pyarrow", specifier = ">=21.0.0" },
+    { name = "pyspark", specifier = ">=4.0.0" },
     { name = "pytest", specifier = ">=8.3.5" },
+    { name = "sqlframe", specifier = ">=3.39.2" },
 ]
 
 [[package]]
@@ -193,6 +200,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/91/50/a9d80c47ff289c611ff12e63f7c5d13942c65d68125160cefd768c73e6e4/executing-2.2.0.tar.gz", hash = "sha256:5d108c028108fe2551d1a7b2e8b713341e2cb4fc0aa7dcf966fa4327a5226755", size = 978693 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7b/8f/c4d9bafc34ad7ad5d8dc16dd1347ee0e507a52c3adb6bfa8887e1c6a26ba/executing-2.2.0-py2.py3-none-any.whl", hash = "sha256:11387150cad388d62750327a53d3339fad4888b39a6fe233c3afbb54ecffd3aa", size = 26702 },
+]
+
+[[package]]
+name = "ibis"
+version = "3.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/51/2706c69d679c9101a0e7333f4e5d3b3a7bc5eb0b52ed13685eaf88bd10d7/ibis-3.3.0.tar.gz", hash = "sha256:bb6d74a46c101aaeee0a98ee4da2bac78d6d5abd96a9a2954fb25c1ce6762ec2", size = 14477 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/aa/92/81563612f829f24389b6aa7895a4841a77c57bf304bd9e4dc866039a7f23/ibis-3.3.0-py3-none-any.whl", hash = "sha256:9e93aa77c28dc797b03805c794964be341eab859552a016ae8a5deafb5160d75", size = 16028 },
 ]
 
 [[package]]
@@ -532,6 +548,18 @@ wheels = [
 ]
 
 [[package]]
+name = "prettytable"
+version = "3.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "wcwidth" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/b1/85e18ac92afd08c533603e3393977b6bc1443043115a47bb094f3b98f94f/prettytable-3.16.0.tar.gz", hash = "sha256:3c64b31719d961bf69c9a7e03d0c1e477320906a98da63952bc6698d6164ff57", size = 66276 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/02/c7/5613524e606ea1688b3bdbf48aa64bafb6d0a4ac3750274c43b6158a390f/prettytable-3.16.0-py3-none-any.whl", hash = "sha256:b5eccfabb82222f5aa46b798ff02a8452cf530a352c31bddfa29be41242863aa", size = 33863 },
+]
+
+[[package]]
 name = "prompt-toolkit"
 version = "3.0.50"
 source = { registry = "https://pypi.org/simple" }
@@ -574,6 +602,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/cd/05/0a34433a064256a578f1783a10da6df098ceaa4a57bbeaa96a6c0352786b/pure_eval-0.2.3.tar.gz", hash = "sha256:5f4e983f40564c576c7c8635ae88db5956bb2229d7e9237d03b3c0b0190eaf42", size = 19752 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/37/efad0257dc6e593a18957422533ff0f87ede7c9c6ea010a2177d738fb82f/pure_eval-0.2.3-py3-none-any.whl", hash = "sha256:1db8e35b67b3d218d818ae653e27f06c3aa420901fa7b081ca98cbedc874e0d0", size = 11842 },
+]
+
+[[package]]
+name = "py4j"
+version = "0.10.9.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/38/31/0b210511177070c8d5d3059556194352e5753602fa64b85b7ab81ec1a009/py4j-0.10.9.9.tar.gz", hash = "sha256:f694cad19efa5bd1dee4f3e5270eb406613c974394035e5bfc4ec1aba870b879", size = 761089 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/bd/db/ea0203e495be491c85af87b66e37acfd3bf756fd985f87e46fc5e3bf022c/py4j-0.10.9.9-py2.py3-none-any.whl", hash = "sha256:c7c26e4158defb37b0bb124933163641a2ff6e3a3913f7811b0ddbe07ed61533", size = 203008 },
 ]
 
 [[package]]
@@ -629,6 +666,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/7c/2d/c3338d48ea6cc0feb
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8a/0b/9fcc47d19c48b59121088dd6da2488a49d5f72dacf8262e2790a1d2c7d15/pygments-2.19.1-py3-none-any.whl", hash = "sha256:9ea1544ad55cecf4b8242fab6dd35a93bbce657034b0611ee383099054ab6d8c", size = 1225293 },
 ]
+
+[[package]]
+name = "pyspark"
+version = "4.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "py4j" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/0e/5b38d51f1b1c2618cccfbf35093268665af9a3bdb493e5a3ecd991def633/pyspark-4.0.0.tar.gz", hash = "sha256:38db1b4f6095a080d7605e578d775528990e66dc326311d93e94a71cfc24e5a5", size = 434132212 }
 
 [[package]]
 name = "pytest"
@@ -746,6 +792,29 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050 },
+]
+
+[[package]]
+name = "sqlframe"
+version = "3.39.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "prettytable" },
+    { name = "sqlglot" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e8/2a/4e2c3a5a3086589a6f607be880d768b31cf0700b882aae55fdfa172673dc/sqlframe-3.39.2.tar.gz", hash = "sha256:38304d1402ffaf5eaaae2701749f69c58eb5e339769e4e6b932ecc734c211284", size = 29482555 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5e/46/506eb9a7989c28f390c90760d4b700fd83a3e825861af173de3fd2e88fde/sqlframe-3.39.2-py3-none-any.whl", hash = "sha256:569f1a4bdbc6472cb38fe6e722c73eb14038a2ed13496fa3ddcfd68d3b957ba5", size = 206756 },
+]
+
+[[package]]
+name = "sqlglot"
+version = "27.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ce/d6/dbe5a442ba5f0badf5d82f97fd4b83a7045bde563430d1bbfb90e7da5b71/sqlglot-27.8.0.tar.gz", hash = "sha256:026ca21be0106d23f67519d583a24131d27131ceb80b595efa2a59a2746f351f", size = 5418660 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/29/ffa987296beffe2ae7fc83c6fd9a62166d0abc4d2d16600605a5864c7d7f/sqlglot-27.8.0-py3-none-any.whl", hash = "sha256:3961277277bc5bae459762294e160b6b7ce998e7d016f5adf8311a1d50b7a1a7", size = 501092 },
 ]
 
 [[package]]

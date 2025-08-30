@@ -4,40 +4,53 @@ from binscatter.main import binscatter
 import plotly.graph_objs as go
 import duckdb
 import pytest
+import pandas as pd
+from pyspark.sql import SparkSession
+
+# import cudf
+
+# import pyspark.sql as spark_sql
+
+
+RNG = np.random.default_rng(42)
 
 
 @pytest.fixture
 def df_good():
-    x = pl.Series("x0", range(100))
-    y = pl.Series("y0", [i + np.random.normal(0, 5) for i in range(100)])
-    return pl.DataFrame([x, y])
+    x = np.arange(100)
+    y = x + RNG.normal(0, 5, size=100)
+    return pd.DataFrame({"x0": x, "y0": y})
 
 
 @pytest.fixture
 def df_x_num():
-    x = pl.Series("x0", np.random.normal(0, 100, 100))
-    y = pl.Series("y0", [i + np.random.normal(0, 5) for i in range(100)])
-    return pl.DataFrame([x, y])
+    # x is numeric (normal), y is numeric with noise
+    x = pd.Series(RNG.normal(0, 100, 100), name="x0")
+    y = pd.Series(np.arange(100) + RNG.normal(0, 5, 100), name="y0")
+    return pd.concat([x, y], axis=1)
 
 
 @pytest.fixture
 def df_missing_column():
-    x = pl.Series("x0", range(100))
-    return pl.DataFrame([x])  # missing y
+    # Only x0 present; y0 is missing
+    x = pd.Series(np.arange(100), name="x0")
+    return pd.DataFrame({"x0": x})
 
 
 @pytest.fixture
 def df_nulls():
-    x = pl.Series("x0", [None] * 100)
-    y = pl.Series("y0", [None] * 100)
-    return pl.DataFrame([x, y])
+    # Both columns are entirely null
+    x = pd.Series([np.nan] * 100, name="x0")
+    y = pd.Series([np.nan] * 100, name="y0")
+    return pd.concat([x, y], axis=1)
 
 
 @pytest.fixture
 def df_duplicates():
-    x = pl.Series("x0", [1] * 100)
-    y = pl.Series("y0", [2] * 100)
-    return pl.DataFrame([x, y])
+    # Duplicate rows: constant values in both columns
+    x = pd.Series([1] * 100, name="x0")
+    y = pd.Series([2] * 100, name="y0")
+    return pd.concat([x, y], axis=1)
 
 
 fixt_dat = [
@@ -47,52 +60,41 @@ fixt_dat = [
     ("df_nulls", True),
     ("df_duplicates", True),
 ]
+fix_data_types = []
+DF_TYPES = ["pandas", "polars", "duckdb", "pyspark"]
+for df_type in DF_TYPES:
+    for pair in fixt_dat:
+        triple = (*pair, df_type)
+        fix_data_types.append(triple)
+
+
+def conv(df: pd.DataFrame, df_type):
+    match df_type:
+        case "pandas":
+            return df
+        case "polars":
+            return pl.from_pandas(df)
+        case "duckdb":
+            con = duckdb.connect()
+            con.register("df", df)
+            return con.execute("SELECT * FROM df").df()
+        case "pyspark":
+            spark = SparkSession.builder.getOrCreate()
+            return spark.createDataFrame(df)
 
 
 @pytest.mark.parametrize(
-    "df_fixture,expect_error",
-    fixt_dat,
+    "df_fixture,expect_error,df_type",
+    fix_data_types,
 )
-def test_binscatter(df_fixture, expect_error, request):
+def test_binscatter(df_fixture, expect_error, df_type, request):
     df = request.getfixturevalue(df_fixture)
+    df_to_type = conv(df, df_type)
     if expect_error:
         with pytest.raises(Exception):
-            binscatter(df, "x0", "y0")
+            binscatter(df_to_type, "x0", "y0")
     else:
-        p = binscatter(df, "x0", "y0")
-        assert isinstance(p, go.Figure)
-
-
-@pytest.mark.parametrize(
-    "df_fixture,expect_error",
-    fixt_dat,
-)
-def test_binscatter_pandas(df_fixture, expect_error, request):
-    df = request.getfixturevalue(df_fixture)
-    df = df.to_pandas()
-    if expect_error:
-        with pytest.raises(Exception):
-            binscatter(df, "x0", "y0")
-    else:
-        p = binscatter(df, "x0", "y0")
-        assert isinstance(p, go.Figure)
-
-
-@pytest.mark.parametrize(
-    "df_fixture,expect_error",
-    fixt_dat,
-)
-def test_binscatter_duckdb(df_fixture, expect_error, request):
-    df = request.getfixturevalue(df_fixture)
-
-    con = duckdb.connect()
-    con.register("df", df.to_pandas())
-    df_duckdb = con.execute("SELECT * FROM df").df()
-    if expect_error:
-        with pytest.raises(Exception):
-            binscatter(df_duckdb, "x0", "y0")
-    else:
-        p = binscatter(df_duckdb, "x0", "y0")
+        p = binscatter(df_to_type, "x0", "y0")
         assert isinstance(p, go.Figure)
 
 
