@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Binscatter Demo Script
 
