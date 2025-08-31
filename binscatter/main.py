@@ -1,4 +1,4 @@
-from typing import Iterable, Literal, Tuple, Callable, Any
+from typing import Iterable, Literal, Tuple, Callable, Any, List
 import numpy as np
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
@@ -329,9 +329,56 @@ def _remove_bad_values(df: nw.LazyFrame) -> nw.LazyFrame:
     return df.filter(~final_bad_condition)
 
 
+# Defined here for testability
+def _add_fallback(
+    df: nw.LazyFrame, profile: Profile, probs: List[float]
+) -> nw.LazyFrame:
+    try:
+        qs = df.select(
+            [
+                profile.x_col.quantile(p, interpolation="linear").alias(f"q{p}")
+                for p in probs
+            ]
+        ).collect()
+    except TypeError:
+        qs = df.select(
+            [profile.x_col.quantile(p).alias(f"q{p}") for p in probs]
+        ).collect()
+    except Exception as e:
+        logger.debug(
+            "Tried making quantiles with and without interpolation method for df of type: %s",
+            type(df),
+        )
+        raise e
+    qs_long = (
+        qs.unpivot(variable_name="prob", value_name="quantile")
+        .sort("quantile")
+        .with_row_index(profile.bin_name)
+    )
+
+    # Sorting is not always necessary - but for safety we sort
+    return (
+        df.sort(profile.x_name)
+        .join_asof(
+            qs_long.select("quantile", profile.bin_name),
+            left_on=profile.x_name,
+            right_on="quantile",
+            strategy="forward",
+        )
+        .drop("quantile")
+    )
+
+
+def _make_probs(num_bins) -> List[float]:
+    return [i / num_bins for i in range(1, num_bins + 1)]
+
+
 # Quantiles
 def configure_quantile_handler(profile: Profile) -> Callable:
-    probs = [i / profile.num_bins for i in range(1, profile.num_bins + 1)]
+    probs = _make_probs(profile.num_bins)
+
+    def add_fallback(df: nw.DataFrame):
+        return _add_fallback(df, profile, probs)
 
     def add_to_pandas(df: nw.DataFrame) -> nw.LazyFrame:
         try:
@@ -438,9 +485,7 @@ def configure_quantile_handler(profile: Profile) -> Callable:
     elif profile.implementation == Implementation.DUCKDB:
         return add_to_duckdb
     else:
-        # TODO add fallback
-        msg = f"Implementation {profile.implementation} not supported"
-        raise NotImplementedError(msg)
+        return add_fallback
 
 
 def _compute_quantiles(
