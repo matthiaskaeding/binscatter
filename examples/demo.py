@@ -14,14 +14,12 @@ import sys
 
 import numpy as np
 
-# Configure logging before other imports
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# Suppress Spark logging noise
 os.environ["SPARK_LOG_LEVEL"] = "ERROR"
 
 
@@ -37,7 +35,7 @@ def demo_polars():
     """Demonstrate binscatter with Polars DataFrame."""
     try:
         import polars as pl
-        from your_package import binscatter  # Replace with actual import
+        from binscatter import binscatter
 
         logger.info("Running Polars demo...")
         x, y = create_sample_data()
@@ -59,12 +57,11 @@ def demo_duckdb():
     try:
         import duckdb
         import pandas as pd
-        from your_package import binscatter  # Replace with actual import
+        from binscatter import binscatter
 
         logger.info("Running DuckDB demo...")
         x, y = create_sample_data()
 
-        # Create via pandas then convert to DuckDB relation
         tmp_df = pd.DataFrame({"x": x, "y": y})
         con = duckdb.connect(":memory:")
         rel = con.from_df(tmp_df)
@@ -84,7 +81,7 @@ def demo_pyspark():
     """Demonstrate binscatter with PySpark DataFrame."""
     try:
         from pyspark.sql import SparkSession
-        from your_package import binscatter  # Replace with actual import
+        from binscatter import binscatter
 
         logger.info("Running PySpark demo...")
 
@@ -111,8 +108,6 @@ def demo_pyspark():
         print("PySpark result:")
         result.show()
         print()
-
-        # Clean up
         spark.stop()
 
     except ImportError as e:
@@ -125,7 +120,7 @@ def demo_plotly():
     """Demonstrate plotly output."""
     try:
         import polars as pl
-        from your_package import binscatter  # Replace with actual import
+        from binscatter import binscatter
 
         logger.info("Running Plotly demo...")
         x, y = create_sample_data()
