@@ -7,10 +7,7 @@ import pytest
 import pandas as pd
 from pyspark.sql import SparkSession
 import pyspark
-# import cudf
-
-# import pyspark.sql as spark_sql
-
+from pandas.testing import assert_series_equal, assert_frame_equal
 
 RNG = np.random.default_rng(42)
 
@@ -40,17 +37,16 @@ def quantile_bins(x, n_bins=10):
 
 
 @pytest.fixture
-def df_good():
-    x = np.arange(100)
-    y = x + RNG.normal(0, 5, size=100)
+def df_good(N=10000):
+    x = np.arange(N)
+    y = x + RNG.normal(0, 5, size=N)
     return pd.DataFrame({"x0": x, "y0": y})
 
 
 @pytest.fixture
-def df_x_num():
-    # x is numeric (normal), y is numeric with noise
-    x = pd.Series(RNG.normal(0, 100, 100), name="x0")
-    y = pd.Series(np.arange(100) + RNG.normal(0, 5, 100), name="y0")
+def df_x_num(N=10000):
+    x = pd.Series(RNG.normal(0, 100, N), name="x0")
+    y = pd.Series(np.arange(N) + RNG.normal(0, 5, N), name="y0")
     return pd.concat([x, y], axis=1)
 
 
@@ -153,23 +149,19 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
                 assert isinstance(quant_df, pyspark.sql.DataFrame)
                 quant_df_pd = quant_df.toPandas()
         assert isinstance(quant_df_pd, pd.DataFrame)
+        assert "x0" in quant_df_pd.columns
+        assert "y0" in quant_df_pd.columns
+        assert quant_df_pd.shape[1] == 3
+        assert quant_df_pd.shape[0] == num_bins
+
         quant_df_pd.sort_values(quant_df_pd.columns[0], inplace=True)
 
         assert quant_df_pd.shape == ref.shape
 
-        if df_type != "pyspark":
-            atol = 0.5
-        else:
-            atol = 16  # TODO check pyspark implementation for approx quamtiles, this is a lot
-        assert np.allclose(quant_df_pd["x0"], ref["x0"], atol=atol), f""" type={df_type}
-Want:
-{ref["x0"]}
-Got:
-{quant_df_pd["x0"]}
-"""
-        assert np.allclose(quant_df_pd["y0"], ref["y0"], atol=atol), f""" type={df_type}
-Want:
-{ref["y0"]}
-Got:
-{quant_df_pd["y0"]}
-"""
+        assert_frame_equal(
+            quant_df_pd.reset_index()[["x0", "y0"]],
+            ref.reset_index()[["x0", "y0"]],
+            check_exact=False,
+            rtol=0.01,
+            check_names=False,
+        )
