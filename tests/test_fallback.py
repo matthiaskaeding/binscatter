@@ -18,6 +18,7 @@ def test_add_fallback_adds_bins_and_is_monotonic():
 
     # Use prep to get a real Profile (and implicitly validate inputs)
     # We don't need the returned df_with_bins here, only the profile.
+    # This seems bad but okay.
     _, profile = prep(df_in, x_name="x", y_name="y", controls=(), num_bins=4)
 
     # Recreate the filtered lazy frame exactly like prep does
