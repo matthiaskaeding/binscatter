@@ -7,7 +7,7 @@ import pytest
 import pandas as pd
 from pyspark.sql import SparkSession
 import pyspark
-from pandas.testing import assert_series_equal, assert_frame_equal
+from pandas.testing import assert_frame_equal
 
 RNG = np.random.default_rng(42)
 

@@ -20,7 +20,7 @@ def binscatter(
     df: IntoDataFrame,
     x: str,
     y: str,
-    controls: Iterable[str] = [],
+    controls: Iterable[str] = (),
     num_bins=20,
     return_type: Literal["plotly", "native"] = "plotly",
 ) -> plotly.graph_objects.Figure | Any:
@@ -32,10 +32,12 @@ def binscatter(
         y (str): Name y column
         controls (Iterable[str]): names of control variables (not used yet)
         num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default "plotly" gives a plotly plot. Otherwise "native" returns a dataframe close or equal in type to input dataframe.
+        return_type (str): Return type. Default "plotly" gives a plotly plot.
+        Otherwise "native" returns a dataframe that is natural match to input dataframe.
+
 
     Returns:
-        plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
+        plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
     """
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
@@ -116,8 +118,10 @@ def prep(
     """Prepares the input data and derives profile.
 
     Args:
-        df: Input dataframe, either polars or pandas. Must have at least 2 columns.
-            First column is treated as y variable, second as x variable.
+        df: Input dataframe.
+        x_name: name of x col
+        y_name: name of y col
+        controls: Iterable of control vars
         num_bins: Number of bins to use for binscatter. Must be less than number of rows.
 
     Returns:
@@ -471,47 +475,3 @@ def _compute_quantiles(
         .sort("quantile")
         .with_row_index(bin_name, order_by="quantile")
     )
-
-
-if __name__ == "__main__":
-    import polars as pl
-    import numpy as np
-    import duckdb
-    import pandas as pd
-    import os
-
-    os.environ["SPARK_LOG_LEVEL"] = "ERROR"
-
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s:%(funcName)s:%(lineno)d - %(levelname)s - %(message)s",
-    )
-    logger.setLevel(logging.DEBUG)
-
-    logger.info("Running binscatter demo...")
-    n = 100
-    x = np.linspace(0, 10, n)
-    y = x + np.random.normal(0, 1, n)
-    df = pl.DataFrame({"x0": x, "y0": y})
-
-    plotdf = binscatter(df, "x0", "y0", num_bins=20, return_type="native")
-    print(plotdf.head())
-
-    logger.debug("Running binscatter with DuckDB DataFrame...")
-
-    tmp = pd.DataFrame({"x0": [1] * 100, "y0": [1] * 100})
-    con = duckdb.connect()  # in-memory DB
-    rel = con.from_df(tmp)
-
-    plotdf = binscatter(rel, "x0", "y0", num_bins=20, return_type="native")
-    print(plotdf)
-
-    logger.debug("Pyspark...")
-
-    from pyspark.sql import SparkSession
-
-    spark = SparkSession.builder.getOrCreate()
-    spark.sparkContext.setLogLevel("ERROR")
-    df_spark = spark.createDataFrame(df.to_pandas())
-
-    plotdf = binscatter(df_spark, "x0", "y0", num_bins=20, return_type="native")
-    plotdf.show()
