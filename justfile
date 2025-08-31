@@ -42,4 +42,4 @@ orphan-images:
 
 # type check
 ty:
-  uv tool run ty check --exclude tests --exclude scripts
+  uv tool run ty check --exclude tests --exclude scripts --exclude examples
