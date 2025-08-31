@@ -19,8 +19,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-os.environ["SPARK_LOG_LEVEL"] = "ERROR"
-
 
 def create_sample_data(n: int = 100, seed: int = 42) -> tuple[np.ndarray, np.ndarray]:
     """Create sample data for demonstration."""
