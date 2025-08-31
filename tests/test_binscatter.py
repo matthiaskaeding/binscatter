@@ -6,27 +6,47 @@ import duckdb
 import pytest
 import pandas as pd
 from pyspark.sql import SparkSession
-
-# import cudf
-
-# import pyspark.sql as spark_sql
-
+import pyspark
+from pandas.testing import assert_frame_equal
 
 RNG = np.random.default_rng(42)
 
 
+def quantile_bins(x, n_bins=10):
+    """
+    Returns:
+      idx   : int array of bin indices in [0, n_bins-1]
+      edges : float array of bin edges of length n_bins+1
+              Intervals are [edges[i], edges[i+1]) for i<n_bins-1
+              and [edges[-2], edges[-1]] for the last bin.
+    """
+    x = np.asarray(x)
+
+    qs = np.linspace(0.0, 1.0, n_bins + 1)
+    # NumPy changed 'interpolation' -> 'method' in newer versions; support both:
+    try:
+        edges = np.quantile(x, qs, method="linear")
+    except TypeError:
+        edges = np.quantile(x, qs, interpolation="linear")
+
+    # Left-closed bins via searchsorted(..., side='right'), then clip to keep the last bin closed.
+    idx = np.searchsorted(edges, x, side="right") - 1
+    idx = np.clip(idx, 0, len(edges) - 2)  # ensures max(x) falls in the last bin
+
+    return idx, edges
+
+
 @pytest.fixture
-def df_good():
-    x = np.arange(100)
-    y = x + RNG.normal(0, 5, size=100)
+def df_good(N=10000):
+    x = np.arange(N)
+    y = x + RNG.normal(0, 5, size=N)
     return pd.DataFrame({"x0": x, "y0": y})
 
 
 @pytest.fixture
-def df_x_num():
-    # x is numeric (normal), y is numeric with noise
-    x = pd.Series(RNG.normal(0, 100, 100), name="x0")
-    y = pd.Series(np.arange(100) + RNG.normal(0, 5, 100), name="y0")
+def df_x_num(N=10000):
+    x = pd.Series(RNG.normal(0, 100, N), name="x0")
+    y = pd.Series(np.arange(N) + RNG.normal(0, 5, N), name="y0")
     return pd.concat([x, y], axis=1)
 
 
@@ -75,9 +95,7 @@ def conv(df: pd.DataFrame, df_type):
         case "polars":
             return pl.from_pandas(df)
         case "duckdb":
-            con = duckdb.connect()
-            con.register("df", df)
-            return con.execute("SELECT * FROM df").df()
+            return duckdb.from_df(df)
         case "pyspark":
             spark = SparkSession.builder.getOrCreate()
             return spark.createDataFrame(df)
@@ -90,95 +108,60 @@ def conv(df: pd.DataFrame, df_type):
 def test_binscatter(df_fixture, expect_error, df_type, request):
     df = request.getfixturevalue(df_fixture)
     df_to_type = conv(df, df_type)
+    num_bins = 20
     if expect_error:
-        with pytest.raises(Exception):
-            binscatter(df_to_type, "x0", "y0")
+        try:
+            binscatter(df_to_type, "x0", "y0", num_bins=num_bins)
+        except Exception:
+            pass
+        else:
+            assert False, """Expected an error but binscatter ran successfully"""
     else:
-        p = binscatter(df_to_type, "x0", "y0")
+        p = binscatter(df_to_type, "x0", "y0", num_bins=num_bins)
         assert isinstance(p, go.Figure)
 
+        quant_df = binscatter(
+            df_to_type, "x0", "y0", num_bins=num_bins, return_type="native"
+        )
+        # Reference: bin using pandas qcut, groupby bin, take mean, sort by bin
+        # Use qcut to assign bins
+        bins, _ = quantile_bins(df["x0"], num_bins)
+        ref = (
+            df.assign(bin=bins)
+            .groupby("bin")[["x0", "y0"]]
+            .mean()
+            .reset_index()
+            .sort_values("bin")
+        )
+        # Convert quant_df to pandas if needed
+        match df_type:
+            case "pandas":
+                assert isinstance(quant_df, pd.DataFrame)
+                quant_df_pd = quant_df
+            case "polars":
+                assert isinstance(quant_df, pl.DataFrame)
+                quant_df_pd = quant_df.to_pandas()
+            case "duckdb":
+                want = duckdb.duckdb.DuckDBPyRelation
+                assert isinstance(quant_df, want), f"{want=}\ngot={type(quant_df)}"
+                quant_df_pd = quant_df.df()
+            case "pyspark":
+                assert isinstance(quant_df, pyspark.sql.DataFrame)
+                quant_df_pd = quant_df.toPandas()
+        assert isinstance(quant_df_pd, pd.DataFrame)
+        assert "x0" in quant_df_pd.columns
+        assert "y0" in quant_df_pd.columns
+        assert quant_df_pd.shape[1] == 3
+        assert quant_df_pd.shape[0] == num_bins
 
-# def test_binscatter(df):
-#     """Test that scatter() creates a binned scatter plot correctly"""
+        quant_df_pd.sort_values(quant_df_pd.columns[0], inplace=True)
 
-#     p = binscatter(df, "x0", "y0")
-#     assert isinstance(p, go.Figure)
+        assert quant_df_pd.shape == ref.shape
 
-#     # Test with duckdb
-#     con = duckdb.connect()
-#     con.register("df", df.to_pandas())
-#     df_duckdb = con.execute("SELECT * FROM df").df()
-#     p_duckdb = binscatter(df_duckdb, "x0", "y0")
-#     assert isinstance(p_duckdb, go.Figure)
-
-#     # Test with custom bins
-#     p = binscatter(df, "x0", "y0", num_bins=10)
-#     assert isinstance(p, go.Figure)
-
-#     # # Test that plot has correct labels
-#     # print(p.labels)
-#     # assert p.labels.x == "x0"
-#     # assert p.labels.y == "y0"
-
-#     # # Test with small dataset
-#     # df_small = pl.DataFrame({"y": [1, 2, 3], "x": [4, 5, 6]})
-#     # p = binscatter(df_small, "x", "y", num_bins=2)
-#     # assert isinstance(p, go.Figure)
-
-#     # # Test with negative values
-#     # df_neg = pl.DataFrame({"y": [-1, -2, 0, 1], "x": [-4, -2, 0, 2]})
-#     # p = binscatter(df_neg, "x", "y", num_bins=2)
-#     # assert isinstance(p, go.Figure)
-
-#     # # Test with non-monotonic relationship
-#     # df_nonmono = pl.DataFrame({"y": [1, 3, 2, 4], "x": [1, 2, 3, 4]})
-#     # p = binscatter(df_nonmono, "x", "y", num_bins=2)
-#     # assert isinstance(p, go.Figure)
-
-#     # # Test with floating point values
-#     # df_float = pl.DataFrame({"y": [1.5, 2.5, 3.5], "x": [0.1, 0.2, 0.3]})
-#     # p = binscatter(df_float, "x", "y", num_bins=2)
-#     # assert isinstance(p, go.Figure)
-
-#     # # Test with controls
-#     # N = 1000
-#     # x = np.random.normal(0, 1, N)
-#     # z = np.random.normal(0, 1, N)
-#     # # y depends on both x and z
-#     # y = 2 * x + 3 * z + np.random.normal(0, 0.1, N)
-
-#     # # Create categorical variable
-#     # categories = ["A", "B", "C"]
-#     # cat = np.random.choice(categories, size=N)
-
-#     # df_controls = pl.DataFrame({"x": x, "y": y, "z": z, "category": cat})
-
-#     # # Test binscatter with numeric and categorical controls
-#     # # p = binscatter(df_controls, "x", "y", controls=["z", "category"])
-#     # # assert isinstance(p, go.Figure)
-
-#     # # Test with multiple controls including categorical
-#     # w = np.random.normal(0, 1, N)
-#     # df_controls = df_controls.with_columns(pl.Series("w", w))
-#     # # p = binscatter(df_controls, "x", "y", controls=["z", "w", "category"])
-#     # # assert isinstance(p, go.Figure)
-
-#     # r = binscatter(df_controls, "x", "y", return_type="native")
-#     # assert isinstance(r, pl.DataFrame)
-#     # # r = binscatter(
-#     # #     df_controls, "x", "y", controls=["z", "w", "category"], return_type="pandas"
-#     # # )
-#     # # assert isinstance(r, pd.DataFrame)
-
-#     # # r = binscatter(df_controls, "x", "y", return_type="polars")
-#     # # assert isinstance(r, pl.DataFrame)
-#     # # r = binscatter(df_controls, "x", "y", return_type="pandas")
-#     # # assert isinstance(r, pd.DataFrame)
-
-#     # # monkeypatch.setattr(go.Figure, "show", lambda self: None)
-#     # # r = binscatter(df_controls, "x", "y", return_type="none")
-#     # # assert r is None
-
-
-# # def test_binscatter_libs():
-# #     # cuDF, Modin, PyArrow, Dask, DuckDB, Ibis, PySpark, SQLFrame
+        assert_frame_equal(
+            quant_df_pd.reset_index()[["x0", "y0"]],
+            ref.reset_index()[["x0", "y0"]],
+            check_exact=False,
+            rtol=0.01,
+            check_names=False,
+        )

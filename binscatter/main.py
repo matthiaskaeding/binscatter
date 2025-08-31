@@ -1,44 +1,50 @@
-from typing import Iterable, Literal, Tuple
+from typing import Iterable, Literal, Tuple, Callable, Any
 import numpy as np
 import narwhals as nw
 from narwhals.typing import IntoDataFrame
 from narwhals import Implementation
 import plotly.express as px
 import narwhals.selectors as ncs
-from typing import List, NamedTuple
+from typing import NamedTuple
 import uuid
 import math
 from functools import reduce
 import operator
+import logging
+import plotly
+
+logger = logging.getLogger(__name__)
 
 
 def binscatter(
     df: IntoDataFrame,
     x: str,
     y: str,
-    controls: Iterable[str] = [],
+    controls: Iterable[str] = (),
     num_bins=20,
     return_type: Literal["plotly", "native"] = "plotly",
-):
+) -> plotly.graph_objects.Figure | Any:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
-        df (Union[polars.DataFrame, pandas.DataFrame]): Input dataframe
+        df (IntoDataFrame): Input dataframe - must be a type supported by narwhals
         x (str): Name of x column
         y (str): Name y column
         controls (Iterable[str]): names of control variables (not used yet)
         num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default a ggplot, otherwise "polars" for polars dataframe or "pandas" for pandas dataframe
+        return_type (str): Return type. Default "plotly" gives a plotly plot.
+        Otherwise "native" returns a dataframe that is natural match to input dataframe.
+
 
     Returns:
-        plotnine.ggplot: A ggplot object containing the binned scatter plot with x and y axis labels
+        plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
     """
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
 
     # Prepare dataframe: sort, remove non numerics and add bins
-    df_prepped, config = prep(df, x, y, controls, num_bins)
+    df_prepped, profile = prep(df, x, y, controls, num_bins)
 
     # Currently there are 2 cases:
     # (1) no controls: the easy one, just compute the means by bin
@@ -46,28 +52,42 @@ def binscatter(
     # and partial out the effect of the controls
     # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
     if not controls:
-        df_plotting: nw.DataFrame = (
-            df_prepped.group_by(config.bin_name)
-            .agg(config.x_col.mean(), config.y_col.mean())
-            .collect()
+        df_plotting: nw.LazyFrame = df_prepped.group_by(profile.bin_name).agg(
+            profile.x_col.mean(), profile.y_col.mean()
         )
+        if profile.implementation != Implementation.PYSPARK:
+            # pyspark handler has already cast
+            df_plotting = df_plotting.with_columns(
+                nw.col(profile.bin_name).cast(nw.Int32)
+            )
+
     else:
         x_controls = make_controls_mat(df_prepped, controls)
-        x_bins = make_b(df_prepped, config)
-        df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, config)
-
-    if df_plotting.shape[0] < config.num_bins:
-        raise ValueError("Quantiles are not unique. Decrease number of bins.")
+        x_bins = make_b(df_prepped, profile)
+        df_plotting = partial_out_controls(x_bins, x_controls, df_prepped, profile)
 
     match return_type:
         case "plotly":
-            return make_plot_plotly(df_plotting, config)
+            return make_plot_plotly(df_plotting, profile)
         case "native":
-            return df_plotting.to_native().collect()
+            df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
+            logger.debug(
+                "Type of df_out_nw: %s, implementation: %s",
+                type(df_out_nw),
+                df_out_nw.implementation,
+            )
+
+            if profile.implementation in (
+                Implementation.PYSPARK,
+                Implementation.DUCKDB,
+            ):
+                return df_out_nw.to_native()
+            else:
+                return df_out_nw.collect().to_native()
 
 
-class Config(NamedTuple):
-    """Main config which holds bunch of data derived from dataframe."""
+class Profile(NamedTuple):
+    """Main profile which holds bunch of data derived from dataframe."""
 
     x_name: str
     y_name: str
@@ -76,6 +96,8 @@ class Config(NamedTuple):
     bin_name: str
     x_bounds: Tuple[float, float]
     distinct_suffix: str
+    is_lazy_input: bool
+    implementation: Implementation
 
     @property
     def x_col(self) -> nw.Expr:
@@ -92,12 +114,14 @@ def prep(
     y_name: str | None,
     controls: Iterable[str] | str = (),
     num_bins: int = 20,
-) -> Tuple[nw.DataFrame, Config]:
-    """Prepares the input data and builds configuration.
+) -> Tuple[nw.DataFrame, Profile]:
+    """Prepares the input data and derives profile.
 
     Args:
-        df: Input dataframe, either polars or pandas. Must have at least 2 columns.
-            First column is treated as y variable, second as x variable.
+        df: Input dataframe.
+        x_name: name of x col
+        y_name: name of y col
+        controls: Iterable of control vars
         num_bins: Number of bins to use for binscatter. Must be less than number of rows.
 
     Returns:
@@ -117,7 +141,16 @@ def prep(
     if controls:
         raise NotImplementedError("Controls not yet implemented")
 
-    dfl = nw.from_native(df_in).lazy()
+    dfn = nw.from_native(df_in)
+    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
+    if type(dfn) is nw.DataFrame:
+        is_lazy_input = False
+    elif type(dfn) is nw.LazyFrame:
+        is_lazy_input = True
+    else:
+        msg = f"Unexpected narwhals type {(type(dfn))}"
+        raise ValueError(msg)
+    dfl = dfn.lazy()
 
     if isinstance(controls, str):
         controls = (controls,)
@@ -126,6 +159,7 @@ def prep(
 
     try:
         df = dfl.select(x_name, y_name, *controls)
+        assert df
     except Exception as e:
         cols = dfl.columns
         for c in [x_name, y_name, *controls]:
@@ -137,7 +171,7 @@ def prep(
     assert num_bins > 1
 
     # Find name for bins
-    distinct_suffix = str(uuid.uuid4())
+    distinct_suffix = str(uuid.uuid4()).replace("-", "_")
     bin_name = f"bins____{distinct_suffix}"
     df_filtered = _remove_bad_values(df)
 
@@ -152,7 +186,7 @@ def prep(
             msg = f"{fun}({x_name})={val}"
             raise ValueError(msg)
 
-    config = Config(
+    profile = Profile(
         num_bins=num_bins,
         x_name=x_name,
         y_name=y_name,
@@ -160,10 +194,15 @@ def prep(
         controls=controls,
         x_bounds=x_bounds,
         distinct_suffix=distinct_suffix,
+        is_lazy_input=is_lazy_input,
+        implementation=df_filtered.implementation,
     )
-    df_prepped = add_quantile_bins(df_filtered, config)
+    logger.debug("Profile: %s", profile)
 
-    return df_prepped, config
+    quantile_handler = configure_quantile_handler(profile)
+    df_with_bins = quantile_handler(df_filtered)
+
+    return df_with_bins, profile
 
 
 def make_controls_mat(df: nw.DataFrame, controls: Iterable[str]) -> np.ndarray:
@@ -194,67 +233,73 @@ def make_controls_mat(df: nw.DataFrame, controls: Iterable[str]) -> np.ndarray:
     return np.concat((x_num, x_cat), axis=1)
 
 
-def make_b(df_prepped: nw.DataFrame, config: Config):
+def make_b(df_prepped: nw.DataFrame, profile: Profile):
     """Makes the design matrix corresponding to the bins"""
 
-    B = df_prepped.select(config.bin_name).to_dummies(drop_first=False, separator="_")
+    B = df_prepped.select(profile.bin_name).to_dummies(drop_first=False, separator="_")
     # assert B.shape[1] == config.num_bins, (
     #     f"B must have {config.num_bins} columns but has {B.width}, this indicates too many bins"
     # )
     # Reorder so that column i corresponds always to bin i
-    cols = [f"{config.bin_name}_{i}" for i in range(config.num_bins)]
+    cols = [f"{profile.bin_name}_{i}" for i in range(profile.num_bins)]
 
     return B.select(cols).to_numpy()
 
 
 def partial_out_controls(
-    x_bins: np.array, x_controls: np.ndarray, df_prepped: nw.DataFrame, config: Config
+    x_bins: np.array, x_controls: np.ndarray, df_prepped: nw.DataFrame, profile: Profile
 ) -> nw.DataFrame:
     """Concatenate bin dummies and control variables horizontally."""
     x_conc = np.concatenate((x_bins, x_controls), axis=1)
 
-    y = df_prepped.get_column(config.y_name).to_numpy()
+    y = df_prepped.get_column(profile.y_name).to_numpy()
     theta = np.linalg.lstsq(x_conc, y)[0]
     x_controls_means = np.mean(x_controls, axis=0)
     # Extract coefficients
-    beta = theta[: config.num_bins]
-    gamma = theta[config.num_bins :]
+    beta = theta[: profile.num_bins]
+    gamma = theta[profile.num_bins :]
     # Evaluate
     y_vals = nw.new_series(
-        name=config.y_name,
+        name=profile.y_name,
         values=beta + np.dot(x_controls_means, gamma),
         backend=df_prepped.implementation,
     )
 
     # Build output data frame - should be analog to the one build without controls
     df_plotting = (
-        df_prepped.group_by(config.bin_name)
+        df_prepped.group_by(profile.bin_name)
         .agg(
-            config.x_col.mean(),
+            profile.x_col.mean(),
         )
-        .sort(config.bin_name)
+        .sort(profile.bin_name)
         .with_columns(y_vals)
     )
 
-    assert df_plotting.shape[0] == config.num_bins
+    assert df_plotting.shape[0] == profile.num_bins
     assert df_plotting.shape[1] == 3
 
     return df_plotting
 
 
-def make_plot_plotly(df_prepped: nw.DataFrame, config: Config):
+def make_plot_plotly(df_prepped: nw.LazyFrame, profile: Profile):
     """Make plot from prepared dataframe.
 
     Args:
-      df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in config"""
-    data = df_prepped.select(config.x_name, config.y_name)
-    x = data.get_column(config.x_name).to_list()
-    y = data.get_column(config.y_name).to_list()
+      df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile"""
+    data = df_prepped.select(profile.x_name, profile.y_name).collect()
+    if data.shape[0] < profile.num_bins:
+        raise ValueError("Quantiles are not unique. Decrease number of bins.")
 
-    fig = px.scatter(x=x, y=y, range_x=config.x_bounds).update_layout(
+    x = data.get_column(profile.x_name).to_list()
+    if len(set(x)) < profile.num_bins:
+        msg = f"Unique number of bins is {len(set(x))} fewer than {profile.num_bins} as desired. Decrease parameter num_bins."
+        raise ValueError(msg)
+    y = data.get_column(profile.y_name).to_list()
+
+    fig = px.scatter(x=x, y=y, range_x=profile.x_bounds).update_layout(
         title="Binscatter",
-        xaxis_title=config.x_name,
-        yaxis_title=config.y_name,
+        xaxis_title=profile.x_name,
+        yaxis_title=profile.y_name,
     )
 
     return fig
@@ -262,18 +307,22 @@ def make_plot_plotly(df_prepped: nw.DataFrame, config: Config):
 
 def _remove_bad_values(df: nw.LazyFrame) -> nw.LazyFrame:
     """Removes nulls and infinites"""
+    # TODO makes this less inefficient
 
     bad_conditions = []
 
-    cols_numeric = df.select(ncs.numeric()).columns
+    df_num = df.select(ncs.numeric())  # HAS to be present
+    cols_numeric = df_num.columns
     for c in cols_numeric:
         col = nw.col(c)
         bad_cond = col.is_null() | ~col.is_finite() | col.is_nan()
         bad_conditions.append(bad_cond)
 
-    cols_cat = df.select(ncs.categorical()).columns
-    for c in cols_cat:
-        bad_conditions.append(nw.col(c).is_null())
+    df_cat = df.select(ncs.categorical())  # Might be present
+    if df_cat is not None and hasattr(df_cat, "columns") and df_cat.columns:
+        cols_cat = df_cat.columns
+        for c in cols_cat:
+            bad_conditions.append(nw.col(c).is_null())
 
     final_bad_condition = reduce(operator.or_, bad_conditions)
 
@@ -281,118 +330,117 @@ def _remove_bad_values(df: nw.LazyFrame) -> nw.LazyFrame:
 
 
 # Quantiles
+def configure_quantile_handler(profile: Profile) -> Callable:
+    probs = [i / profile.num_bins for i in range(1, profile.num_bins + 1)]
 
+    def add_to_pandas(df: nw.DataFrame) -> nw.LazyFrame:
+        try:
+            from pandas import cut
+        except ImportError:
+            raise ImportError("Pandas support requires pandas to be installed.")
+        df_native = df.to_native()
+        x = df_native[profile.x_name]
+        quantiles = x.quantile(probs[:-1])
 
-# Specific handlers
-def add_to_pandas(
-    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float]
-) -> nw.LazyFrame:
-    try:
-        from pandas import qcut
-    except ImportError:
-        raise ImportError("Pandas support requires pandas to be installed.")
-    df_native = df.to_native()
-    buckets = qcut(df_native[x_name], labels=False, q=probs)
-    df_native[bin_name] = buckets
+        bins = (float("-Inf"), *quantiles, float("Inf"))
+        buckets = cut(
+            df_native[profile.x_name],
+            bins=bins,
+            labels=range(len(probs)),
+            include_lowest=False,
+            right=False,
+        )
+        df_native[profile.bin_name] = buckets
 
-    return nw.from_native(df_native).lazy()
+        return nw.from_native(df_native).lazy()
 
+    def add_to_polars(df: nw.DataFrame) -> nw.LazyFrame:
+        try:
+            import polars as pl
+        except ImportError:
+            raise ImportError("Polars support requires Polars to be installed.")
+        # Because cut and qcut are not stable we use when-then
+        df_native = df.to_native()
+        x_col = pl.col(profile.x_name)
 
-def add_to_polars(
-    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float]
-) -> nw.LazyFrame:
-    try:
-        import polars as pl
-    except ImportError:
-        raise ImportError("Polars support requires Polars to be installed.")
-    # Because cut and qcut are not stable we use when-then
-    df_native = df.to_native()
-    x_col = pl.col(x_name)
+        qs = df_native.select(
+            [x_col.quantile(p, interpolation="linear").alias(f"q{p}") for p in probs]
+        ).collect()
+        expr = pl
+        n = qs.width
+        for i in range(n):
+            thr = qs.item(0, i)
+            cond = x_col.le(thr) if i == n - 1 else x_col.lt(thr)
+            expr = expr.when(cond).then(pl.lit(i))
+        expr = expr.alias(profile.bin_name)
+        df_native_with_bin = df_native.with_columns(expr)
 
-    qs = df_native.select([x_col.quantile(p).alias(f"q{p}") for p in probs]).collect()
-    expr = pl
-    n = qs.width
-    for i in range(n):
-        thr = qs.item(0, i)
-        cond = x_col.le(thr) if i == n - 1 else x_col.lt(thr)
-        expr = expr.when(cond).then(pl.lit(i))
-    expr = expr.alias(bin_name)
-    df_native_with_bin = df_native.with_columns(expr)
+        return nw.from_native(df_native_with_bin)
 
-    return nw.from_native(df_native_with_bin)
+    def add_to_duckdb(df: nw.DataFrame) -> nw.LazyFrame:
+        try:
+            import duckdb
 
+            rel = df.to_native()
+            assert isinstance(rel, duckdb.DuckDBPyRelation), f"{type(rel)=}"
 
-def add_to_duckdb(
-    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float]
-) -> nw.LazyFrame:
-    try:
-        rel = df.to_native()
-    except Exception as e:
-        raise RuntimeError(
-            "Failed to use df.to_native(); DuckDB may not be installed."
-        ) from e
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to use df.to_native(); DuckDB may not be installed."
+            ) from e
 
-    order_expr = f"{x_name} ASC"
-    rel_with_bins = rel.project(
-        f"*, ntile({len(probs)}) OVER (ORDER BY {order_expr}) - 1 AS {bin_name}"
-    )
-
-    return nw.from_native(rel_with_bins)
-
-
-def add_to_pyspark(
-    df: nw.DataFrame, x_name: str, bin_name: str, probs: List[float], x_max: float
-) -> nw.LazyFrame:
-    try:
-        from pyspark.ml.feature import Bucketizer
-    except ImportError:
-        raise ImportError("PySpark support requires pyspark to be installed.")
-
-    sdf = df.to_native()
-    qs = sdf.approxQuantile(x_name, probs[:-1], relativeError=1e-3)
-    qs.append(x_max)
-
-    if len(set(qs)) < len(qs):
-        raise ValueError("Quantiles not unique. Decrease number of bins.")
-    # Build strictly increasing splits for Bucketizer: (a, b] bins
-    splits = [-float("inf"), *qs, float("inf")]
-
-    bucketizer = Bucketizer(
-        splits=splits,
-        inputCol=x_name,
-        outputCol=bin_name,
-        handleInvalid="keep",
-    )
-
-    sdf_binned = bucketizer.transform(sdf)
-
-    return nw.from_native(sdf_binned)
-
-
-def add_quantile_bins(df: nw.DataFrame, config: Config):
-    # Common arguments
-    kwargs = {
-        "df": df,
-        "x_name": config.x_name,
-        "bin_name": config.bin_name,
-        "probs": [i / config.num_bins for i in range(1, config.num_bins + 1)],
-    }
-
-    if df.implementation == Implementation.PANDAS:
-        quantile_handler = add_to_pandas
-    elif df.implementation == Implementation.POLARS:
-        quantile_handler = add_to_polars
-    elif df.implementation == Implementation.PYSPARK:
-        quantile_handler = add_to_pyspark
-        kwargs["x_max"] = config.x_bounds[1]
-    elif df.implementation == Implementation.DUCKDB:
-        quantile_handler = add_to_duckdb
-    else:
-        raise NotImplementedError(
-            f"No implementation available for {df.implementation}"
+        order_expr = f"{profile.x_name} ASC"
+        rel_with_bins = rel.project(
+            f"*, ntile({len(probs)}) OVER (ORDER BY {order_expr}) - 1 AS {profile.bin_name}"
+        )
+        assert isinstance(rel_with_bins, duckdb.DuckDBPyRelation), (
+            f"{type(rel_with_bins)=}"
         )
 
-    return quantile_handler(**kwargs)
+        return nw.from_native(rel_with_bins)
+
+    def add_to_pyspark(df: nw.DataFrame) -> nw.LazyFrame:
+        try:
+            from pyspark.ml.feature import Bucketizer
+            from pyspark.sql.functions import col
+        except ImportError as e:
+            raise ImportError(
+                f"PySpark support requires pyspark to be installed. Original error: {e}"
+            ) from e
+        sdf = df.to_native()
+        qs = sdf.approxQuantile(profile.x_name, (0.0, *probs), relativeError=0)
+        logger.debug(
+            "Pyspark quantile vs exact quantiles:\n%s",
+            list(zip(qs, sdf.toPandas()[profile.x_name].quantile((0.0, *probs)))),
+        )
+        if len(set(qs)) < len(qs):
+            raise ValueError("Quantiles not unique. Decrease number of bins.")
+
+        bucketizer = Bucketizer(
+            splits=qs,
+            inputCol=profile.x_name,
+            outputCol=profile.bin_name,
+            handleInvalid="keep",
+        )
+
+        sdf_binned = bucketizer.transform(sdf).withColumn(
+            profile.bin_name, col(profile.bin_name).cast("int")
+        )
+
+        return nw.from_native(sdf_binned)
+
+    if profile.implementation == Implementation.PANDAS:
+        return add_to_pandas
+    elif profile.implementation == Implementation.POLARS:
+        return add_to_polars
+    elif profile.implementation == Implementation.PYSPARK:
+        return add_to_pyspark
+    elif profile.implementation == Implementation.DUCKDB:
+        return add_to_duckdb
+    else:
+        # TODO add fallback
+        msg = f"Implementation {profile.implementation} not supported"
+        raise NotImplementedError(msg)
 
 
 def _compute_quantiles(
