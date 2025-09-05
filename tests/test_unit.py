@@ -1,7 +1,7 @@
-from binscatter.main import prep
+from binscatter.core import prep
 import polars as pl
 import numpy as np
-from binscatter.main import make_b
+from binscatter.core import make_b
 import narwhals as nw
 
 import pytest

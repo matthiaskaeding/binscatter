@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import narwhals as nw
 
-from binscatter.main import prep, _add_fallback, _remove_bad_values, _make_probs
+from binscatter.core import prep, _add_fallback, _remove_bad_values, _make_probs
 
 
 def test_add_fallback_adds_bins_and_is_monotonic():

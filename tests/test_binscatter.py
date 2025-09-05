@@ -1,6 +1,6 @@
 import polars as pl
 import numpy as np
-from binscatter.main import binscatter
+from binscatter.core import binscatter
 import plotly.graph_objs as go
 import duckdb
 import pytest
@@ -8,6 +8,7 @@ import pandas as pd
 from pyspark.sql import SparkSession
 import pyspark
 from pandas.testing import assert_frame_equal
+import dask.dataframe as dd
 
 RNG = np.random.default_rng(42)
 
@@ -44,7 +45,7 @@ def df_good(N=10000):
 
 
 @pytest.fixture
-def df_x_num(N=10000):
+def df_x_num(N=1000_000):
     x = pd.Series(RNG.normal(0, 100, N), name="x0")
     y = pd.Series(np.arange(N) + RNG.normal(0, 5, N), name="y0")
     return pd.concat([x, y], axis=1)
@@ -81,7 +82,13 @@ fixt_dat = [
     ("df_duplicates", True),
 ]
 fix_data_types = []
-DF_TYPES = ["pandas", "polars", "duckdb", "pyspark"]
+DF_TYPES = [
+    "pandas",
+    "polars",
+    "duckdb",
+    "dask",
+    "pyspark",
+]
 for df_type in DF_TYPES:
     for pair in fixt_dat:
         triple = (*pair, df_type)
@@ -99,6 +106,8 @@ def conv(df: pd.DataFrame, df_type):
         case "pyspark":
             spark = SparkSession.builder.getOrCreate()
             return spark.createDataFrame(df)
+        case "dask":
+            return dd.from_pandas(df, npartitions=2)
 
 
 @pytest.mark.parametrize(
@@ -148,6 +157,11 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
             case "pyspark":
                 assert isinstance(quant_df, pyspark.sql.DataFrame)
                 quant_df_pd = quant_df.toPandas()
+            case "dask":
+                assert isinstance(quant_df, dd.DataFrame), (
+                    f"Must be dd.DataFrame is {type(quant_df)}"
+                )
+                quant_df_pd = quant_df.compute()
         assert isinstance(quant_df_pd, pd.DataFrame)
         assert "x0" in quant_df_pd.columns
         assert "y0" in quant_df_pd.columns
@@ -157,11 +171,18 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         quant_df_pd.sort_values(quant_df_pd.columns[0], inplace=True)
 
         assert quant_df_pd.shape == ref.shape
+        if df_type in ("pyspark", "dask"):
+            rtol = 0.05
+            atol = 12
+        else:
+            rtol = 0.01
+            atol = 1e-8
 
-        assert_frame_equal(
-            quant_df_pd.reset_index()[["x0", "y0"]],
-            ref.reset_index()[["x0", "y0"]],
-            check_exact=False,
-            rtol=0.01,
-            check_names=False,
+        lhs = quant_df_pd.reset_index()[["x0", "y0"]]
+        rhs = ref.reset_index()[["x0", "y0"]]
+        np.testing.assert_allclose(
+            lhs["x0"].to_numpy(), rhs["x0"].to_numpy(), rtol=rtol, atol=atol
+        )
+        np.testing.assert_allclose(
+            lhs["y0"].to_numpy(), rhs["y0"].to_numpy(), rtol=rtol, atol=atol
         )

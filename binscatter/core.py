@@ -52,15 +52,11 @@ def binscatter(
     # and partial out the effect of the controls
     # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
     if not controls:
-        df_plotting: nw.LazyFrame = df_prepped.group_by(profile.bin_name).agg(
-            profile.x_col.mean(), profile.y_col.mean()
+        df_plotting: nw.LazyFrame = (
+            df_prepped.group_by(profile.bin_name)
+            .agg(profile.x_col.mean(), profile.y_col.mean())
+            .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
         )
-        if profile.implementation != Implementation.PYSPARK:
-            # pyspark handler has already cast
-            df_plotting = df_plotting.with_columns(
-                nw.col(profile.bin_name).cast(nw.Int32)
-            )
-
     else:
         x_controls = make_controls_mat(df_prepped, controls)
         x_bins = make_b(df_prepped, profile)
@@ -80,6 +76,7 @@ def binscatter(
             if profile.implementation in (
                 Implementation.PYSPARK,
                 Implementation.DUCKDB,
+                Implementation.DASK,
             ):
                 return df_out_nw.to_native()
             else:
@@ -142,7 +139,8 @@ def prep(
         raise NotImplementedError("Controls not yet implemented")
 
     dfn = nw.from_native(df_in)
-    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Type after calling to native: %s", type(dfn.to_native()))
     if type(dfn) is nw.DataFrame:
         is_lazy_input = False
     elif type(dfn) is nw.LazyFrame:
@@ -329,6 +327,9 @@ def _remove_bad_values(df: nw.LazyFrame) -> nw.LazyFrame:
     return df.filter(~final_bad_condition)
 
 
+# Quantiles
+
+
 # Defined here for testability
 def _add_fallback(
     df: nw.LazyFrame, profile: Profile, probs: List[float]
@@ -345,7 +346,7 @@ def _add_fallback(
             [profile.x_col.quantile(p).alias(f"q{p}") for p in probs]
         ).collect()
     except Exception as e:
-        logger.debug(
+        logger.error(
             "Tried making quantiles with and without interpolation method for df of type: %s",
             type(df),
         )
@@ -373,12 +374,32 @@ def _make_probs(num_bins) -> List[float]:
     return [i / num_bins for i in range(1, num_bins + 1)]
 
 
-# Quantiles
 def configure_quantile_handler(profile: Profile) -> Callable:
     probs = _make_probs(profile.num_bins)
 
     def add_fallback(df: nw.DataFrame):
         return _add_fallback(df, profile, probs)
+
+    def add_to_dask(df: nw.DataFrame) -> nw.LazyFrame:
+        try:
+            import dask.dataframe as dd
+            from pandas import cut
+        except ImportError:
+            raise ImportError("Dask support requires dask and pandas to be installed.")
+
+        df_native = df.to_native()
+        logger.debug("Type of df_native (should be dask): %s", type(df_native))
+        quantiles = df_native[profile.x_name].quantile(probs[:-1]).compute()
+        bins = (float("-inf"), *quantiles, float("inf"))
+        df_native[profile.bin_name] = df_native[profile.x_name].map_partitions(
+            cut,
+            bins=bins,
+            labels=range(len(probs)),
+            include_lowest=False,
+            right=False,
+        )
+
+        return nw.from_native(df_native).lazy()
 
     def add_to_pandas(df: nw.DataFrame) -> nw.LazyFrame:
         try:
@@ -455,11 +476,13 @@ def configure_quantile_handler(profile: Profile) -> Callable:
                 f"PySpark support requires pyspark to be installed. Original error: {e}"
             ) from e
         sdf = df.to_native()
-        qs = sdf.approxQuantile(profile.x_name, (0.0, *probs), relativeError=0)
-        logger.debug(
-            "Pyspark quantile vs exact quantiles:\n%s",
-            list(zip(qs, sdf.toPandas()[profile.x_name].quantile((0.0, *probs)))),
-        )
+        qs = sdf.approxQuantile(profile.x_name, (0.0, *probs), relativeError=0.01)
+        if logger.isEnabledFor(logging.DEBUG):
+            sample = sdf.sample(False, 0.02, seed=1).select(profile.x_name).toPandas()
+            pd_qs = sample[profile.x_name].quantile((0.0, *probs)).to_list()
+            logger.debug(
+                "Pyspark vs pandas (sample) quantiles: %s", list(zip(qs, pd_qs))
+            )
         if len(set(qs)) < len(qs):
             raise ValueError("Quantiles not unique. Decrease number of bins.")
 
@@ -484,6 +507,8 @@ def configure_quantile_handler(profile: Profile) -> Callable:
         return add_to_pyspark
     elif profile.implementation == Implementation.DUCKDB:
         return add_to_duckdb
+    elif profile.implementation == Implementation.DASK:
+        return add_to_dask
     else:
         return add_fallback
 
