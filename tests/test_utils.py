@@ -1,7 +1,7 @@
 import narwhals as nw
 import numpy as np
 import pandas as pd
-from binscatter.main import (
+from binscatter.core import (
     _remove_bad_values,
 )
 import polars as pl
