@@ -7,7 +7,6 @@ import pytest
 import pandas as pd
 from pyspark.sql import SparkSession
 import pyspark
-from pandas.testing import assert_frame_equal
 import dask.dataframe as dd
 
 RNG = np.random.default_rng(42)
