@@ -160,7 +160,7 @@ def prep(
         cols = dfl.columns
         for c in [x_name, y_name, *controls]:
             if c not in cols:
-                msg = f"{x_name} not in input dataframe"
+                msg = f"{c} not in input dataframe"
                 raise ValueError(msg)
         raise e
 
@@ -210,7 +210,18 @@ def prep(
     logger.debug("Profile: %s", profile)
 
     quantile_handler = configure_quantile_handler(profile)
-    df_with_bins = quantile_handler(df_filtered)
+    try:
+        df_with_bins = quantile_handler(df_filtered)
+    except ValueError as err:
+        err_text = str(err)
+        if (
+            "Quantiles are not unique" in err_text
+            or "Bin edges must be unique" in err_text
+        ):
+            raise ValueError(
+                "Quantiles are not unique. Decrease number of bins."
+            ) from err
+        raise
 
     return df_with_bins, profile
 
@@ -246,14 +257,12 @@ def partial_out_controls(
     for c in categorical_controls:
         if c not in profile.categorical_columns:
             raise TypeError(f"Control '{c}' is not recognized as categorical")
-        series = df_prepped.select(nw.col(c)).collect().get_column(c)
-        dummy_df = series.to_dummies(drop_first=True)
-        column_names = getattr(dummy_df, "columns", [])
-        for col_name in column_names:
-            if "_" in col_name:
-                _, value = col_name.split("_", 1)
-            else:
-                value = col_name
+
+        unique_values = df_prepped.select(c).unique().collect().get_column(c)
+        values = unique_values.to_list()
+        if len(values) <= 1:
+            continue
+        for value in values[1:]:
             alias = f"__ctrl_{len(control_aliases) + len(dummy_aliases)}"
             expr = (nw.col(c) == value).cast(nw.Float64).alias(alias)
             dummy_exprs.append(expr)
@@ -280,6 +289,9 @@ def partial_out_controls(
     ).collect()
 
     counts = per_bin.get_column("__count").to_numpy()
+    if counts.size < profile.num_bins:
+        msg = "Quantiles are not unique. Decrease number of bins."
+        raise ValueError(msg)
     sum_y = per_bin.get_column("__sum_y").to_numpy()
     if control_aliases:
         bin_control_sums = np.column_stack(
