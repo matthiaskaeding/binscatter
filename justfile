@@ -4,8 +4,11 @@ lint:
     uv tool run ruff check --fix 
 
 # Run tests
-test:
-    uv run pytest tests
+test skip_pyspark="0":
+	BINSCATTER_SKIP_PYSPARK={{skip_pyspark}} uv run pytest tests
+
+test-fast:
+	just test 1
 
 
 # Makes a notebook from try_binscatter

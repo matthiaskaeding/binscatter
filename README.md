@@ -19,3 +19,8 @@ This package implements binscatter plots following:
 ## Example
 
 ![combined](https://github.com/matthiaskaeding/binscatter/blob/images/images/readme/combined.png?raw=true)
+
+## Tests
+
+- Run the full backend matrix, including PySpark: `just test`
+- Use the faster run without PySpark: `just test-fast`

@@ -8,7 +8,6 @@ Demonstrates binscatter functionality across different dataframe backends:
 """
 
 import logging
-import os
 import sys
 
 import numpy as np

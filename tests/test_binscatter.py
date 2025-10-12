@@ -1,3 +1,5 @@
+import os
+
 import polars as pl
 import numpy as np
 from binscatter.core import binscatter
@@ -5,9 +7,20 @@ import plotly.graph_objs as go
 import duckdb
 import pytest
 import pandas as pd
-from pyspark.sql import SparkSession
-import pyspark
 import dask.dataframe as dd
+
+SKIP_PYSPARK = os.getenv("BINSCATTER_SKIP_PYSPARK", "").lower() in {"1", "true", "yes"}
+
+if not SKIP_PYSPARK:
+    try:
+        from pyspark.sql import SparkSession
+        import pyspark
+    except ImportError:  # pragma: no cover - optional dependency
+        SparkSession = None
+        pyspark = None
+else:
+    SparkSession = None
+    pyspark = None
 
 RNG = np.random.default_rng(42)
 
@@ -86,8 +99,9 @@ DF_TYPES = [
     "polars",
     "duckdb",
     "dask",
-    "pyspark",
 ]
+if not SKIP_PYSPARK and SparkSession is not None:
+    DF_TYPES.append("pyspark")
 for df_type in DF_TYPES:
     for pair in fixt_dat:
         triple = (*pair, df_type)
@@ -103,6 +117,8 @@ def conv(df: pd.DataFrame, df_type):
         case "duckdb":
             return duckdb.from_df(df)
         case "pyspark":
+            if SparkSession is None:
+                pytest.skip("PySpark not available or explicitly skipped")
             spark = SparkSession.builder.getOrCreate()
             return spark.createDataFrame(df)
         case "dask":

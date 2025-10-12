@@ -382,7 +382,6 @@ def configure_quantile_handler(profile: Profile) -> Callable:
 
     def add_to_dask(df: nw.DataFrame) -> nw.LazyFrame:
         try:
-            import dask.dataframe as dd
             from pandas import cut
         except ImportError:
             raise ImportError("Dask support requires dask and pandas to be installed.")
