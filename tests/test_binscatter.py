@@ -406,3 +406,15 @@ def test_binscatter_categorical_controls_only():
     np.testing.assert_allclose(
         result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
     )
+
+
+def test_binscatter_controls_collapsed_bins_error():
+    df = pd.DataFrame(
+        {
+            "x0": np.ones(50),
+            "y0": np.linspace(0.0, 1.0, num=50),
+            "z": np.linspace(-1.0, 1.0, num=50),
+        }
+    )
+    with pytest.raises(ValueError, match="Quantiles are not unique"):
+        binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
