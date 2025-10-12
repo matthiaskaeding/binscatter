@@ -18,11 +18,11 @@ This package implements binscatter plots following:
 
 ## Example
 
-We started from the noisy scatterplot below and used binscatter to clean up the relationship:
+We made this noisy scatterplot:
 
 ![Noisy scatterplot](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/scatter.png)
 
-To reproduce the binscatter with controls shown above:
+This is how we make a nice binscatter plot, controlling for a set of features:
 
 ```python
 from binscatter import binscatter
@@ -42,8 +42,6 @@ p_binscatter_controls = binscatter(
     num_bins=35,
 )
 ```
-
-![Binscatter (20 bins)](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter.png)
 
 ![Binscatter with controls (35 bins)](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png)
 
