@@ -2,10 +2,10 @@
 # requires-python = ">=3.11"
 # dependencies = [
 #     "pandas",
-#     "plotnine",
 #     "polars",
 #     "pyarrow",
 #     "pyfixest",
+#     "plotly",
 # ]
 # ///
 
@@ -19,14 +19,11 @@
 # Exactly as in Catteneo et al.
 # %%
 import polars as pl
-import plotnine as pn
+import plotly.express as px
 from pathlib import Path
 from pandas import read_stata as pd_read_stata
 import pyfixest as pf
 import sys
-
-sys.path.append(".")
-from binscatter import binscatter
 
 
 def read_stata(*args, **kwargs):
@@ -34,11 +31,16 @@ def read_stata(*args, **kwargs):
 
 
 proj_dir = Path(__file__).parent.parent.resolve()
+if str(proj_dir) not in sys.path:
+    sys.path.insert(0, str(proj_dir))
+
+from binscatter import binscatter
+
 print("project dir =", proj_dir)
 data_dir = proj_dir / "artifacts"
 data_dir.mkdir(exist_ok=True, parents=True)
-img_dir = data_dir / "images"
-img_dir.mkdir(exist_ok=True, parents=True)
+docs_dir = proj_dir / "docs"
+docs_dir.mkdir(exist_ok=True, parents=True)
 # %%
 fl = data_dir / "dataverse_files/REPLICATION_PACKET/Data/state_data.dta"
 df = read_stata(fl).filter(pl.col("year") >= 1939)
@@ -58,8 +60,9 @@ pf.feols(
 ).summary()
 
 # %%
-p_scatter = pn.ggplot(df) + pn.aes("mtr90_lag3", "lnpat") + pn.geom_point()
-p_scatter.save(img_dir / "scatter.png")
+scatter_df = df.select("mtr90_lag3", "lnpat").to_pandas()
+p_scatter = px.scatter(scatter_df, x="mtr90_lag3", y="lnpat")
+p_scatter.write_html(docs_dir / "scatter.html")
 # %%
 p_binscatter = binscatter(
     df,
@@ -67,7 +70,7 @@ p_binscatter = binscatter(
     "lnpat",
     num_bins=20,
 )
-p_binscatter.save(img_dir / "binscatter.png")
+p_binscatter.write_html(docs_dir / "binscatter.html")
 # %%
 df = df.with_columns(pl.col("statenum", "year").cast(pl.String))
 p_binscatter_controls = binscatter(
@@ -84,5 +87,5 @@ p_binscatter_controls = binscatter(
     ],
     num_bins=35,
 )
-p_binscatter_controls.save(img_dir / "binscatter_controls.png")
+p_binscatter_controls.write_html(docs_dir / "binscatter_controls.html")
 # %%
