@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import narwhals as nw
+import narwhals.selectors as ncs
 
 from binscatter.core import prep, _add_fallback, _remove_bad_values, _make_probs
 
@@ -25,7 +26,9 @@ def test_add_fallback_adds_bins_and_is_monotonic():
     dfn = nw.from_native(df_in)
     dfl = dfn.lazy()
     df_xy = dfl.select("x", "y")
-    df_filtered = _remove_bad_values(df_xy)
+    cols_numeric = tuple(df_xy.select(ncs.numeric()).columns)
+    cols_cat = tuple(df_xy.select(ncs.categorical()).columns)
+    df_filtered = _remove_bad_values(df_xy, cols_numeric, cols_cat)
 
     # Same probabilities prep/configure_quantile_handler would use
     probs = _make_probs(profile.num_bins)

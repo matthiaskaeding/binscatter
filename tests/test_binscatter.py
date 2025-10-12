@@ -1,4 +1,5 @@
 import os
+from typing import Iterable
 
 import polars as pl
 import numpy as np
@@ -201,3 +202,207 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         np.testing.assert_allclose(
             lhs["y0"].to_numpy(), rhs["y0"].to_numpy(), rtol=rtol, atol=atol
         )
+
+
+def _manual_binscatter_with_controls(
+    df: pd.DataFrame,
+    num_bins: int,
+    control_cols: Iterable[str] | None = None,
+    categorical_controls: Iterable[str] | None = None,
+):
+    """Reference implementation following paper's specification."""
+    if control_cols is None:
+        control_cols = ["z"]
+    control_cols = list(control_cols)
+    categorical_controls = set(categorical_controls or [])
+
+    bins = pd.qcut(df["x0"], q=num_bins, labels=False, duplicates="drop")
+    if bins.isna().any():
+        raise AssertionError("Unexpected NA bins during reference construction")
+    df_with_bin = df.assign(_bin=bins)
+    x_means = (
+        df_with_bin.groupby("_bin", observed=True)["x0"].mean().sort_index().to_numpy()
+    )
+    B = pd.get_dummies(df_with_bin["_bin"], drop_first=False)
+    if B.shape[1] != num_bins:
+        raise AssertionError(
+            f"qcut produced {B.shape[1]} bins (expected {num_bins}); increase sample size"
+        )
+
+    control_matrices: list[np.ndarray] = []
+    mean_parts: list[np.ndarray] = []
+    numeric_controls = [c for c in control_cols if c not in categorical_controls]
+    if numeric_controls:
+        numeric_matrix = df_with_bin[numeric_controls].to_numpy()
+        control_matrices.append(numeric_matrix)
+        mean_parts.append(df_with_bin[numeric_controls].mean().to_numpy())
+
+    for cat in categorical_controls:
+        dummies = pd.get_dummies(df_with_bin[cat], prefix=cat, drop_first=True)
+        if dummies.shape[1] == 0:
+            continue
+        control_matrices.append(dummies.to_numpy())
+        mean_parts.append(dummies.mean().to_numpy())
+
+    if control_matrices:
+        W = np.column_stack(control_matrices)
+        mean_controls = np.concatenate(mean_parts)
+        design = np.column_stack([B.to_numpy(), W])
+    else:
+        mean_controls = np.array([])
+        design = B.to_numpy()
+
+    theta, *_ = np.linalg.lstsq(design, df_with_bin["y0"].to_numpy(), rcond=None)
+    beta = theta[:num_bins]
+    gamma = theta[num_bins:]
+    fitted = beta + (mean_controls @ gamma if gamma.size else 0.0)
+    return x_means, fitted
+
+
+def _to_pandas(df_native):
+    if isinstance(df_native, pd.DataFrame):
+        return df_native
+    if hasattr(df_native, "to_pandas"):
+        return df_native.to_pandas()
+    if hasattr(df_native, "df"):
+        return df_native.df()
+    if isinstance(df_native, dd.DataFrame):
+        return df_native.compute()
+    if pyspark is not None and isinstance(df_native, pyspark.sql.DataFrame):
+        return df_native.toPandas()
+    raise TypeError(f"Unsupported dataframe type: {type(df_native)}")
+
+
+def test_binscatter_controls_matches_reference():
+    rng = np.random.default_rng(123)
+    n = 2000
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = 1.5 * x + 2.75 * z + rng.normal(scale=0.5, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "z": z})
+    num_bins = 15
+
+    expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
+    result = binscatter(
+        df,
+        "x0",
+        "y0",
+        controls=["z"],
+        num_bins=num_bins,
+        return_type="native",
+    )
+    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    if df_type in ("dask", "pyspark"):
+        rtol_y, atol_y = 5e-3, 2e-1
+    else:
+        rtol_y = atol_y = 1e-6
+    np.testing.assert_allclose(
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol_y, atol=atol_y
+    )
+
+
+def test_binscatter_controls_lazy_polars():
+    rng = np.random.default_rng(456)
+    n = 1500
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = 0.75 * x - 1.2 * z + rng.normal(scale=0.3, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "z": z})
+    num_bins = 12
+
+    expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
+    polars_lazy = pl.from_pandas(df).lazy()
+    result = binscatter(
+        polars_lazy,
+        "x0",
+        "y0",
+        controls=["z"],
+        num_bins=num_bins,
+        return_type="native",
+    )
+    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    if df_type in ("dask", "pyspark"):
+        rtol_x, atol_x = 1e-3, 1e-1
+        rtol_y, atol_y = 5e-3, 2e-1
+    else:
+        rtol_x = atol_x = 1e-6
+        rtol_y = atol_y = 1e-6
+    np.testing.assert_allclose(
+        result_pd["x0"].to_numpy(), expected_x, rtol=rtol_x, atol=atol_x
+    )
+    np.testing.assert_allclose(
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol_y, atol=atol_y
+    )
+
+
+@pytest.mark.parametrize("df_type", DF_TYPES)
+def test_binscatter_controls_across_backends(df_type):
+    if df_type == "dask":
+        pytest.importorskip("dask")
+    rng = np.random.default_rng(789)
+    n = 800
+    x = rng.normal(size=n)
+    z1 = rng.normal(size=n)
+    z2 = rng.normal(size=n)
+    cat = np.where(rng.random(size=n) > 0.5, "alpha", "beta")
+    y = 0.3 * x + 1.1 * z1 - 0.85 * z2 + np.where(cat == "alpha", 0.6, -0.4)
+    y = y + rng.normal(scale=0.4, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "z1": z1, "z2": z2, "cat": cat})
+    num_bins = 10
+
+    _, expected_y = _manual_binscatter_with_controls(
+        df,
+        num_bins,
+        control_cols=["z1", "z2", "cat"],
+        categorical_controls=["cat"],
+    )
+    df_backend = conv(df, df_type)
+    result = binscatter(
+        df_backend,
+        "x0",
+        "y0",
+        controls=["z1", "z2", "cat"],
+        num_bins=num_bins,
+        return_type="native",
+    )
+    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    if df_type in ("dask", "pyspark"):
+        rtol_y, atol_y = 5e-3, 2e-1
+    else:
+        rtol_y = atol_y = 1e-6
+    np.testing.assert_allclose(
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol_y, atol=atol_y
+    )
+
+
+def test_binscatter_categorical_controls_only():
+    rng = np.random.default_rng(321)
+    n = 1200
+    x = rng.normal(size=n)
+    cat = rng.choice(["red", "green", "blue"], p=[0.4, 0.35, 0.25], size=n)
+    effects = {"red": 0.8, "green": -0.3, "blue": 0.2}
+    y = 1.2 * x + np.vectorize(effects.get)(cat) + rng.normal(scale=0.5, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "cat": cat})
+    num_bins = 14
+
+    expected_x, expected_y = _manual_binscatter_with_controls(
+        df,
+        num_bins,
+        control_cols=["cat"],
+        categorical_controls=["cat"],
+    )
+    result = binscatter(
+        df,
+        "x0",
+        "y0",
+        controls=["cat"],
+        num_bins=num_bins,
+        return_type="native",
+    )
+    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    np.testing.assert_allclose(
+        result_pd["x0"].to_numpy(), expected_x, rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
+    )
