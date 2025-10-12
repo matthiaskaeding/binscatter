@@ -8,6 +8,7 @@ dependencies = ["narwhals>=2.1.2", "numpy>=2.3.2", "plotly>=6.3.0"]
 
 [dependency-groups]
 dev = [
+  "kaleido>=0.2.1",
   "ipykernel>=6.29.5",
   "pytest>=8.3.5",
   "polars>=1.22.0",

@@ -18,12 +18,14 @@
 #  so the data will not be filtered
 # Exactly as in Catteneo et al.
 # %%
-import polars as pl
-import plotly.express as px
+import importlib
+import sys
 from pathlib import Path
+
+import plotly.express as px
+import polars as pl
 from pandas import read_stata as pd_read_stata
 import pyfixest as pf
-import sys
 
 
 def read_stata(*args, **kwargs):
@@ -34,13 +36,13 @@ proj_dir = Path(__file__).parent.parent.resolve()
 if str(proj_dir) not in sys.path:
     sys.path.insert(0, str(proj_dir))
 
-from binscatter import binscatter
+binscatter = importlib.import_module("binscatter").binscatter
 
 print("project dir =", proj_dir)
 data_dir = proj_dir / "artifacts"
 data_dir.mkdir(exist_ok=True, parents=True)
-docs_dir = proj_dir / "docs"
-docs_dir.mkdir(exist_ok=True, parents=True)
+assets_dir = proj_dir / "images" / "readme"
+assets_dir.mkdir(exist_ok=True, parents=True)
 # %%
 fl = data_dir / "dataverse_files/REPLICATION_PACKET/Data/state_data.dta"
 df = read_stata(fl).filter(pl.col("year") >= 1939)
@@ -60,9 +62,12 @@ pf.feols(
 ).summary()
 
 # %%
-scatter_df = df.select("mtr90_lag3", "lnpat").to_pandas()
-p_scatter = px.scatter(scatter_df, x="mtr90_lag3", y="lnpat")
-p_scatter.write_html(docs_dir / "scatter.html")
+p_scatter = px.scatter(
+    df.select("mtr90_lag3", "lnpat").to_pandas(),
+    x="mtr90_lag3",
+    y="lnpat",
+)
+p_scatter.write_image(assets_dir / "scatter.png", width=800, height=600)
 # %%
 p_binscatter = binscatter(
     df,
@@ -70,7 +75,7 @@ p_binscatter = binscatter(
     "lnpat",
     num_bins=20,
 )
-p_binscatter.write_html(docs_dir / "binscatter.html")
+p_binscatter.write_image(assets_dir / "binscatter.png", width=800, height=600)
 # %%
 df = df.with_columns(pl.col("statenum", "year").cast(pl.String))
 p_binscatter_controls = binscatter(
@@ -87,5 +92,7 @@ p_binscatter_controls = binscatter(
     ],
     num_bins=35,
 )
-p_binscatter_controls.write_html(docs_dir / "binscatter_controls.html")
+p_binscatter_controls.write_image(
+    assets_dir / "binscatter_controls.png", width=800, height=600
+)
 # %%
