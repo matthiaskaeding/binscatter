@@ -26,7 +26,9 @@ jobs:
       - name: Install project with dev dependencies
         run: |
           uv venv
-          uv pip install -e .[dev]
+          uv pip install -e
+          uv pip compile pyproject.toml --group dev --no-emit-package pyspark > reqs.txt
+          uv pip install -r reqs.txt
 
       - name: Ruff lint
         run: uv tool run ruff check src tests
