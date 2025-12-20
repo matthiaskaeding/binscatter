@@ -1,8 +1,8 @@
-from collections.abc import Iterable as IterableABC
 import logging
 import math
 import operator
 import uuid
+import warnings
 from functools import reduce
 from typing import (
     Any,
@@ -35,6 +35,8 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins=20,
     return_type: Literal["plotly"] = "plotly",
+    plot_args=None,
+    **kwargs,
 ) -> go.Figure: ...
 
 
@@ -46,6 +48,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins=20,
     return_type: Literal["native"] = "native",
+    **kwargs,
 ) -> object: ...
 
 
@@ -56,6 +59,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int = 20,
     return_type: Literal["plotly", "native"] = "plotly",
+    **kwargs_binscatter,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
@@ -67,6 +71,7 @@ def binscatter(
             following Cattaneo et al. (2024).
         num_bins (int, optional): Number of bins to use. Defaults to 20
         return_type (str): Return type. Default "plotly" gives a plotly plot.
+        kwargs (dict, optional): Additional arguments used in plotly.express.scatter to make the binscatter plot.
         Otherwise "native" returns a dataframe that is natural match to input dataframe.
 
 
@@ -76,7 +81,6 @@ def binscatter(
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
-
     # Prepare dataframe: sort, remove non numerics and add bins
     df_prepped, profile = prep(df, x, y, controls, num_bins)
 
@@ -96,7 +100,9 @@ def binscatter(
 
     match return_type:
         case "plotly":
-            return make_plot_plotly(df_plotting, profile)
+            return make_plot_plotly(
+                df_plotting, profile, kwargs_binscatter=kwargs_binscatter
+            )
         case "native":
             df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
             logger.debug(
@@ -270,7 +276,7 @@ def prep(
 def partial_out_controls(df_prepped: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
 
-    controls = list(profile.controls)
+    controls = profile.controls
     if not controls:
         raise ValueError("Controls must be provided for partial_out_controls")
 
@@ -413,7 +419,9 @@ def partial_out_controls(df_prepped: nw.LazyFrame, profile: Profile) -> nw.LazyF
     return df_plotting
 
 
-def make_plot_plotly(df_prepped: nw.LazyFrame, profile: Profile) -> go.Figure:
+def make_plot_plotly(
+    df_prepped: nw.LazyFrame, profile: Profile, kwargs_binscatter: dict[str, Any]
+) -> go.Figure:
     """Make plot from prepared dataframe.
 
     Args:
@@ -428,13 +436,24 @@ def make_plot_plotly(df_prepped: nw.LazyFrame, profile: Profile) -> go.Figure:
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
 
-    fig = px.scatter(x=x, y=y, range_x=profile.x_bounds).update_layout(
-        title="Binscatter",
-        xaxis_title=profile.x_name,
-        yaxis_title=profile.y_name,
-    )
+    scatter_args = {
+        "x": x,
+        "y": y,
+        "range_x": profile.x_bounds,
+        "title": "Binscatter",
+        "labels": {
+            "x": profile.x_name,
+            "y": profile.y_name,
+        },
+    }
+    for k in kwargs_binscatter:
+        if k in ("x", "y", "range_x"):
+            msg = f"px.scatter will ignore keyword argument '{k}'"
+            warnings.warn(msg)
+            continue
+        scatter_args[k] = kwargs_binscatter[k]
 
-    return fig
+    return px.scatter(**scatter_args)
 
 
 def _remove_bad_values(
