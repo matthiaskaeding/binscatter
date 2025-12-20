@@ -26,7 +26,7 @@ jobs:
       - name: Install project with dev dependencies
         run: |
           uv venv
-          uv pip install -e
+          uv pip install -e .
 
       - name: Ruff lint
         run: uv tool run ruff check src tests
