@@ -14,6 +14,14 @@ This package implements binscatter plots following:
 - Uses `plotly` as graphics backend - because: (1) its great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
+## Installation
+
+We recommend using [uv](https://docs.astral.sh/uv/) for reproducible environments:
+
+```bash
+pip install binscatter
+```
+
 ---
 
 ## Example
@@ -31,7 +39,7 @@ p_binscatter_controls = binscatter(
     df,
     "mtr90_lag3",
     "lnpat",
-    [
+    controls=[
         "top_corp_lag3",
         "real_gdp_pc",
         "population_density",

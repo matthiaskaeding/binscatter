@@ -5,7 +5,7 @@ lint:
 
 # type check
 ty:
-    uv tool run ty check binscatter
+    uv tool run ty check src
 
 # lint, format and type check
 ok:
