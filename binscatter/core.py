@@ -96,7 +96,7 @@ def binscatter(
             .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
         ).lazy()
     else:
-        df_plotting = partial_out_controls(df_prepped, profile)
+        df_plotting, _ = partial_out_controls(df_prepped, profile)
 
     match return_type:
         case "plotly":
@@ -273,7 +273,9 @@ def prep(
     return df_with_bins.lazy(), profile
 
 
-def partial_out_controls(df_prepped: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
+def partial_out_controls(
+    df_prepped: nw.LazyFrame, profile: Profile
+) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
 
     controls = profile.controls
@@ -416,7 +418,7 @@ def partial_out_controls(df_prepped: nw.LazyFrame, profile: Profile) -> nw.LazyF
 
     df_plotting = per_bin.select(bin_index, profile.x_name).with_columns(y_vals).lazy()
 
-    return df_plotting
+    return df_plotting, {"beta": beta, "gamma": gamma}
 
 
 def make_plot_plotly(
