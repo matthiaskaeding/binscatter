@@ -3,12 +3,13 @@ from typing import Iterable
 
 import polars as pl
 import numpy as np
-from binscatter.core import binscatter
+from binscatter.core import binscatter, prep, partial_out_controls
 import plotly.graph_objs as go
 import duckdb
 import pytest
 import pandas as pd
 import dask.dataframe as dd
+import statsmodels.api as sm
 
 SKIP_PYSPARK = os.getenv("BINSCATTER_SKIP_PYSPARK", "").lower() in {"1", "true", "yes"}
 
@@ -41,7 +42,7 @@ def quantile_bins(x, n_bins=10):
     try:
         edges = np.quantile(x, qs, method="linear")
     except TypeError:
-        edges = np.quantile(x, qs, interpolation="linear")
+        edges = np.quantile(x, qs, method="linear")
 
     # Left-closed bins via searchsorted(..., side='right'), then clip to keep the last bin closed.
     idx = np.searchsorted(edges, x, side="right") - 1
@@ -273,6 +274,11 @@ def _to_pandas(df_native):
     raise TypeError(f"Unsupported dataframe type: {type(df_native)}")
 
 
+def _collect_lazyframe_to_pandas(frame):
+    """Helper to collect a narwhals LazyFrame into a pandas DataFrame."""
+    return _to_pandas(frame.collect().to_native())
+
+
 def test_binscatter_controls_matches_reference():
     rng = np.random.default_rng(123)
     n = 2000
@@ -418,3 +424,89 @@ def test_binscatter_controls_collapsed_bins_error():
     )
     with pytest.raises(ValueError, match="Quantiles are not unique"):
         binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
+
+
+def test_partial_out_controls_matches_statsmodels():
+    rng = np.random.default_rng(2025)
+    n = 1500
+    x0 = rng.normal(size=n)
+    z = rng.normal(size=n)
+    region = rng.choice(["north", "south", "east"], size=n, p=[0.4, 0.35, 0.25])
+    campaign = rng.choice(["alpha", "beta", "gamma"], size=n, p=[0.3, 0.4, 0.3])
+    region_effect = {"north": 0.5, "south": -0.2, "east": 0.1}
+    campaign_effect = {"alpha": 0.4, "beta": -0.3, "gamma": 0.2}
+    y0 = (
+        1.1 * x0
+        + 0.8 * z
+        + np.vectorize(region_effect.get)(region)
+        + np.vectorize(campaign_effect.get)(campaign)
+        + rng.normal(scale=0.4, size=n)
+    )
+    df = pd.DataFrame(
+        {
+            "x0": x0,
+            "y0": y0,
+            "z_num": z,
+            "region": region,
+            "campaign": campaign,
+        }
+    )
+    num_bins = 12
+    df_prepped, profile = prep(
+        df,
+        "x0",
+        "y0",
+        controls=["z_num", "region", "campaign"],
+        num_bins=num_bins,
+    )
+    df_with_bins = _collect_lazyframe_to_pandas(df_prepped)
+    df_result, coeffs = partial_out_controls(df_prepped, profile)
+    result = (
+        _collect_lazyframe_to_pandas(df_result)
+        .sort_values(profile.bin_name)
+        .reset_index(drop=True)
+    )
+
+    bin_means = (
+        df_with_bins.groupby(profile.bin_name, observed=True)[profile.x_name]
+        .mean()
+        .sort_index()
+    )
+    np.testing.assert_allclose(
+        result[profile.x_name].to_numpy(),
+        bin_means.to_numpy(),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+    bin_dummies = pd.get_dummies(
+        df_with_bins[profile.bin_name], prefix="bin", drop_first=False
+    )
+    z_vals = df_with_bins["z_num"].to_numpy()
+    control_blocks = [z_vals[:, None]]
+    control_means = [np.array([z_vals.mean()])]
+    for cat_col in ["region", "campaign"]:
+        dummies = pd.get_dummies(df_with_bins[cat_col], prefix=cat_col, drop_first=True)
+        if not dummies.empty:
+            control_blocks.append(dummies.to_numpy())
+            control_means.append(dummies.mean().to_numpy())
+    control_matrix = np.column_stack(control_blocks)
+    design_matrix = np.column_stack([bin_dummies.to_numpy(), control_matrix])
+    mean_controls = np.concatenate(control_means)
+
+    model = sm.OLS(df_with_bins[profile.y_name].to_numpy(), design_matrix).fit()
+    theta = model.params
+    beta = theta[: profile.num_bins]
+    gamma = theta[profile.num_bins :]
+    fitted = beta + (mean_controls @ gamma if gamma.size else 0.0)
+
+    np.testing.assert_allclose(
+        result[profile.y_name].to_numpy(),
+        fitted,
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+    beta_ref = beta - beta[0]
+    beta_actual = coeffs["beta"] - coeffs["beta"][0]
+    np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)

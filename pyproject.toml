@@ -21,6 +21,7 @@ dev = [
   "dask>=2025.7.0",
   "nbformat>=5.10.4",
   "ty>=0.0.4",
+  "statsmodels>=0.14.6",
 ]
 [tool.setuptools]
 packages = ["binscatter"]
