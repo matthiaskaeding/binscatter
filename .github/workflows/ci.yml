@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.11"
+
+      - name: Install project with dev dependencies
+        run: uv pip install -e .[dev]
+
+      - name: Ruff lint
+        run: uv tool run ruff check src tests
+
+      - name: Run fast tests (skip PySpark)
+        run: BINSCATTER_SKIP_PYSPARK=1 uv run pytest tests
