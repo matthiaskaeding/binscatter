@@ -1,29 +1,62 @@
-from typing import Iterable, Literal, Tuple, Callable, Any, List
-import numpy as np
-import narwhals as nw
-from narwhals.typing import IntoDataFrame
-from narwhals import Implementation
-import plotly.express as px
-import narwhals.selectors as ncs
-from typing import NamedTuple
-import uuid
-import math
-from functools import reduce
-import operator
+from collections.abc import Iterable as IterableABC
 import logging
-import plotly
+import math
+import operator
+import uuid
+from functools import reduce
+from typing import (
+    Any,
+    Callable,
+    Iterable,
+    List,
+    Literal,
+    NamedTuple,
+    Tuple,
+    cast,
+    overload,
+)
+
+import narwhals as nw
+import narwhals.selectors as ncs
+import numpy as np
+import plotly.express as px
+from narwhals import Implementation
+from narwhals.typing import IntoDataFrame
+from plotly import graph_objects as go
 
 logger = logging.getLogger(__name__)
+
+
+@overload
+def binscatter(
+    df: IntoDataFrame,
+    x: str,
+    y: str,
+    controls: Iterable[str] | str | None = None,
+    num_bins=20,
+    return_type: Literal["plotly"] = "plotly",
+) -> go.Figure: ...
+
+
+@overload
+def binscatter(
+    df: IntoDataFrame,
+    x: str,
+    y: str,
+    controls: Iterable[str] | str | None = None,
+    num_bins=20,
+    return_type: Literal["native"] = "native",
+) -> object: ...
 
 
 def binscatter(
     df: IntoDataFrame,
     x: str,
     y: str,
-    controls: Iterable[str] = (),
+    controls: Iterable[str] | str | None = None,
     num_bins=20,
     return_type: Literal["plotly", "native"] = "plotly",
-) -> plotly.graph_objects.Figure | Any:
+) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
@@ -57,7 +90,7 @@ def binscatter(
             df_prepped.group_by(profile.bin_name)
             .agg(profile.x_col.mean(), profile.y_col.mean())
             .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
-        )
+        ).lazy()
     else:
         df_plotting = partial_out_controls(df_prepped, profile)
 
@@ -87,7 +120,7 @@ class Profile(NamedTuple):
 
     x_name: str
     y_name: str
-    controls: Tuple[str]
+    controls: Tuple[str, ...]
     num_bins: int
     bin_name: str
     x_bounds: Tuple[float, float]
@@ -108,11 +141,11 @@ class Profile(NamedTuple):
 
 def prep(
     df_in: IntoDataFrame,
-    x_name: str | None,
-    y_name: str | None,
-    controls: Iterable[str] | str = (),
+    x_name: str,
+    y_name: str,
+    controls: Iterable[str] | str | None = None,
     num_bins: int = 20,
-) -> Tuple[nw.DataFrame, Profile]:
+) -> Tuple[nw.LazyFrame, Profile]:
     """Prepares the input data and derives profile.
 
     Args:
@@ -123,9 +156,9 @@ def prep(
         num_bins: Number of bins to use for binscatter. Must be less than number of rows.
 
     Returns:
-        tuple: (polars.DataFrame, Config)
-            - Sorted input dataframe converted to polars
-            - Config object with metadata about the data
+        tuple: (narwhals.LazyFrame, Profile)
+            - Sorted input dataframe converted to a narwhals LazyFrame
+            - Profile object with metadata about the data
 
     Raises:
         AssertionError: If input validation fails
@@ -136,14 +169,23 @@ def prep(
         raise TypeError("x_name must be a string")
     if not isinstance(y_name, str):
         raise TypeError("y_name must be a string")
-    if isinstance(controls, str):
+
+    if controls is None:
+        controls = ()
+    elif isinstance(controls, str):
         controls = (controls,)
     else:
-        controls = tuple(controls)
+        try:
+            controls = tuple(controls)
+        except TypeError:
+            raise TypeError(
+                f"controls must be a string, iterable, or None, got {type(controls)}"
+            )
+    if not all(isinstance(c, str) for c in controls):
+        raise TypeError("controls must contain only strings")
 
-    dfn = nw.from_native(df_in)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("Type after calling to native: %s", type(dfn.to_native()))
+    dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
+    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
     if type(dfn) is nw.DataFrame:
         is_lazy_input = False
     elif type(dfn) is nw.LazyFrame:
@@ -151,11 +193,10 @@ def prep(
     else:
         msg = f"Unexpected narwhals type {(type(dfn))}"
         raise ValueError(msg)
-    dfl = dfn.lazy()
+    dfl: nw.LazyFrame = dfn.lazy()
 
     try:
         df = dfl.select(x_name, y_name, *controls)
-        assert df
     except Exception as e:
         cols = dfl.columns
         for c in [x_name, y_name, *controls]:
@@ -223,12 +264,10 @@ def prep(
             ) from err
         raise
 
-    return df_with_bins, profile
+    return df_with_bins.lazy(), profile
 
 
-def partial_out_controls(
-    df_prepped: nw.LazyFrame | nw.DataFrame, profile: Profile
-) -> nw.LazyFrame:
+def partial_out_controls(df_prepped: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
 
     controls = list(profile.controls)
@@ -374,7 +413,7 @@ def partial_out_controls(
     return df_plotting
 
 
-def make_plot_plotly(df_prepped: nw.LazyFrame, profile: Profile):
+def make_plot_plotly(df_prepped: nw.LazyFrame, profile: Profile) -> go.Figure:
     """Make plot from prepared dataframe.
 
     Args:
@@ -470,9 +509,8 @@ def _add_fallback(
             ]
         ).collect()
     except TypeError:
-        qs = df.select(
-            [profile.x_col.quantile(p).alias(f"q{p}") for p in probs]
-        ).collect()
+        expr = cast(Any, profile.x_col)
+        qs = df.select([expr.quantile(p).alias(f"q{p}") for p in probs]).collect()
     except Exception as e:
         logger.error(
             "Tried making quantiles with and without interpolation method for df of type: %s",
@@ -485,11 +523,13 @@ def _add_fallback(
         .with_row_index(profile.bin_name)
     )
 
+    quantile_bins = qs_long.select("quantile", profile.bin_name).lazy()
+
     # Sorting is not always necessary - but for safety we sort
     return (
         df.sort(profile.x_name)
         .join_asof(
-            qs_long.select("quantile", profile.bin_name),
+            quantile_bins,
             left_on=profile.x_name,
             right_on="quantile",
             strategy="forward",
@@ -505,7 +545,7 @@ def _make_probs(num_bins) -> List[float]:
 def configure_quantile_handler(profile: Profile) -> Callable:
     probs = _make_probs(profile.num_bins)
 
-    def add_fallback(df: nw.DataFrame):
+    def add_fallback(df: nw.LazyFrame):
         return _add_fallback(df, profile, probs)
 
     def add_to_dask(df: nw.DataFrame) -> nw.LazyFrame:
@@ -570,7 +610,7 @@ def configure_quantile_handler(profile: Profile) -> Callable:
         expr = expr.alias(profile.bin_name)
         df_native_with_bin = df_native.with_columns(expr)
 
-        return nw.from_native(df_native_with_bin)
+        return nw.from_native(df_native_with_bin).lazy()
 
     def add_to_duckdb(df: nw.DataFrame) -> nw.LazyFrame:
         try:
@@ -592,7 +632,7 @@ def configure_quantile_handler(profile: Profile) -> Callable:
             f"{type(rel_with_bins)=}"
         )
 
-        return nw.from_native(rel_with_bins)
+        return nw.from_native(rel_with_bins).lazy()
 
     def add_to_pyspark(df: nw.DataFrame) -> nw.LazyFrame:
         try:
@@ -624,7 +664,7 @@ def configure_quantile_handler(profile: Profile) -> Callable:
             profile.bin_name, col(profile.bin_name).cast("int")
         )
 
-        return nw.from_native(sdf_binned)
+        return nw.from_native(sdf_binned).lazy()
 
     if profile.implementation == Implementation.PANDAS:
         return add_to_pandas
@@ -671,4 +711,5 @@ def _compute_quantiles(
         qs.unpivot(variable_name="prob", value_name="quantile")
         .sort("quantile")
         .with_row_index(bin_name, order_by="quantile")
+        .lazy()
     )
