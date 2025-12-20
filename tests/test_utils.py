@@ -1,5 +1,3 @@
-import os
-
 import narwhals as nw
 import narwhals.selectors as ncs
 import numpy as np
@@ -15,18 +13,9 @@ import duckdb
 import dask.dataframe as dd
 import pytest
 
-SKIP_PYSPARK = os.getenv("BINSCATTER_SKIP_PYSPARK", "").lower() in {
-    "1",
-    "true",
-    "yes",
-}
-
-if not SKIP_PYSPARK:
-    try:
-        from pyspark.sql import SparkSession
-    except ImportError:  # pragma: no cover - optional dependency
-        SparkSession = None
-else:
+try:  # pragma: no cover - optional dependency
+    from pyspark.sql import SparkSession
+except ImportError:  # pragma: no cover - optional dependency
     SparkSession = None
 
 
@@ -72,9 +61,7 @@ def test_get_columns_numeric_categorical(frame_factory):
     assert set(categorical) == {"cat"}
 
 
-@pytest.mark.skipif(
-    SKIP_PYSPARK, reason="PySpark tests skipped via BINSCATTER_SKIP_PYSPARK"
-)
+@pytest.mark.pyspark
 def test_get_columns_pyspark():
     if SparkSession is None:
         pytest.skip("PySpark not installed")
