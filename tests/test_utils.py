@@ -1,3 +1,5 @@
+import os
+
 import narwhals as nw
 import narwhals.selectors as ncs
 import numpy as np
@@ -11,8 +13,21 @@ from binscatter.core import (
 import polars as pl
 import duckdb
 import dask.dataframe as dd
-from pyspark.sql import SparkSession
 import pytest
+
+SKIP_PYSPARK = os.getenv("BINSCATTER_SKIP_PYSPARK", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+
+if not SKIP_PYSPARK:
+    try:
+        from pyspark.sql import SparkSession
+    except ImportError:  # pragma: no cover - optional dependency
+        SparkSession = None
+else:
+    SparkSession = None
 
 
 def test_filter_all_numeric_basic():
@@ -57,7 +72,10 @@ def test_get_columns_numeric_categorical(frame_factory):
     assert set(categorical) == {"cat"}
 
 
+@pytest.mark.skipif(SKIP_PYSPARK, reason="PySpark tests skipped via BINSCATTER_SKIP_PYSPARK")
 def test_get_columns_pyspark():
+    if SparkSession is None:
+        pytest.skip("PySpark not installed")
     spark = (
         SparkSession.builder.master("local[1]").appName("binscatter-test").getOrCreate()
     )
