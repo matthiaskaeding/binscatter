@@ -32,4 +32,4 @@ jobs:
         run: uv tool run ruff check src tests
 
       - name: Run fast tests (skip PySpark)
-        run: BINSCATTER_SKIP_PYSPARK=1 uv run pytest tests --group ci
+        run: BINSCATTER_SKIP_PYSPARK=1 uv run pytest tests --only-group ci
