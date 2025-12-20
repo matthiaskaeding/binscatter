@@ -54,7 +54,7 @@ def binscatter(
     x: str,
     y: str,
     controls: Iterable[str] | str | None = None,
-    num_bins=20,
+    num_bins: int = 20,
     return_type: Literal["plotly", "native"] = "plotly",
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
