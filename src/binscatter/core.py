@@ -56,6 +56,7 @@ def binscatter(
     df: IntoDataFrame,
     x: str,
     y: str,
+    *,
     controls: Iterable[str] | str | None = None,
     num_bins: int = 20,
     return_type: Literal["plotly", "native"] = "plotly",

@@ -7,11 +7,11 @@ This package implements binscatter plots following:
 > American Economic Review, 114(5), pp. 1488-1514  
 > [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
 
-- Uses `narwhals` as dataframe layer `binscatter`.
+- Uses `narwhals` as dataframe layer.
   - Currently supports: pandas, Polars, DuckDB, Dask, and PySpark
   - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
 - Lightweight - little dependencies
-- Uses `plotly` as graphics backend - because: (1) its great (2) it uses `narwhals` as well, minimizing dependencies
+- Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
 ## Installation
@@ -33,7 +33,7 @@ This is how we make a nice binscatter plot, controlling for a set of features:
 ```python
 from binscatter import binscatter
 
-p_binscatter_controls = binscatter(
+binscatter(
     df,
     "mtr90_lag3",
     "lnpat",
