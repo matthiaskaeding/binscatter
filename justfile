@@ -3,6 +3,18 @@ lint:
     uv tool run ruff format
     uv tool run ruff check --fix
 
+# type check
+ty:
+    uv tool run ty check binscatter
+
+# lint, format and type check
+ok:
+    @just lint
+    @echo ""
+    @just ty
+
+
+
 # Run tests
 test skip_pyspark="0":
     BINSCATTER_SKIP_PYSPARK={{ skip_pyspark }} uv run pytest tests
@@ -42,7 +54,3 @@ orphan-images:
     git add -A
     git commit -m "Initial orphan commit on images (preserving artifacts/images)"
     git push origin images --force
-
-# type check
-ty:
-    uv tool run ty check binscatter

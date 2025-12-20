@@ -118,7 +118,8 @@ def test_partial_out_controls_matches_closed_form():
     frame = nw.from_native(df_native).lazy()
     profile = _sample_profile(10, ["c1", "c2", "c3", "c4", "c5"])
 
-    result = partial_out_controls(frame, profile).collect()
+    result, _ = partial_out_controls(frame, profile)
+    result = result.collect()
     x_means = result.get_column("x0").to_numpy()
     y_estimated = result.get_column("y0").to_numpy()
 
