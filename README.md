@@ -16,8 +16,6 @@ This package implements binscatter plots following:
 
 ## Installation
 
-We recommend using [uv](https://docs.astral.sh/uv/) for reproducible environments:
-
 ```bash
 pip install binscatter
 ```
