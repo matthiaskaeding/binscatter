@@ -20,6 +20,7 @@ dev = [
   "pyspark>=4.0.0",
   "dask>=2025.7.0",
   "nbformat>=5.10.4",
+  "ty>=0.0.4",
 ]
 [tool.setuptools]
 packages = ["binscatter"]
