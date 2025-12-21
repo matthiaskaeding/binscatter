@@ -79,6 +79,7 @@ def binscatter(
     Returns:
         plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
     """
+
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
@@ -321,8 +322,6 @@ def partial_out_controls(
     )
     control_aliases.extend(dummy_aliases)
 
-    bin_index = profile.bin_name
-
     agg_exprs = [
         nw.len().alias("__count"),
         profile.x_col.mean().alias(profile.x_name),
@@ -331,7 +330,7 @@ def partial_out_controls(
     agg_exprs.extend(nw.col(alias).sum().alias(alias) for alias in control_aliases)
 
     per_bin = (
-        df_augmented.group_by(bin_index).agg(*agg_exprs).sort(bin_index)
+        df_augmented.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
     ).collect()
 
     counts = per_bin.get_column("__count").to_numpy()
@@ -415,7 +414,9 @@ def partial_out_controls(
         name=profile.y_name, values=fitted, backend=per_bin.implementation
     )
 
-    df_plotting = per_bin.select(bin_index, profile.x_name).with_columns(y_vals).lazy()
+    df_plotting = (
+        per_bin.select(profile.bin_name, profile.x_name).with_columns(y_vals).lazy()
+    )
 
     return df_plotting, {"beta": beta, "gamma": gamma}
 
@@ -437,10 +438,12 @@ def make_plot_plotly(
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
 
+    pad = (profile.x_bounds[1] - profile.x_bounds[0]) * 0.04
+    padded_range_x = (profile.x_bounds[0] - pad, profile.x_bounds[1] + pad)
     scatter_args = {
         "x": x,
         "y": y,
-        "range_x": profile.x_bounds,
+        "range_x": padded_range_x,
         "title": "Binscatter",
         "labels": {
             "x": profile.x_name,
@@ -598,6 +601,10 @@ def configure_quantile_handler(profile: Profile) -> Callable:
         quantiles = x.quantile(probs[:-1])
 
         bins = (float("-Inf"), *quantiles, float("Inf"))
+        logger.debug("bins: %s", bins)
+        logger.debug("quantiles: %s", quantiles)
+        logger.debug("bounds: %s", profile.x_bounds)
+
         buckets = cut(
             df_native[profile.x_name],
             bins=bins,
@@ -686,6 +693,7 @@ def configure_quantile_handler(profile: Profile) -> Callable:
 
         return nw.from_native(sdf_binned).lazy()
 
+    logger.debug("Configuring quantile handler for %s", profile.implementation)
     if profile.implementation == Implementation.PANDAS:
         return add_to_pandas
     elif profile.implementation == Implementation.POLARS:

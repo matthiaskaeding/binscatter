@@ -34,23 +34,17 @@ install-pkg:
     uv pip install .
 
 # Download simulation from binsreg reference
-dl-sims:
+dl-sims:  
     mkdir -p data
     curl -L \
     https://raw.githubusercontent.com/nppackages/binsreg/5dcdb6f14b1d07698b6834a3b8590d0013456f0b/Python/binsreg_sim.csv \
     -o data/binsreg_sim.csv
 
-# Makes folder artifacts/images
-images:
-    uv run scripts/repl.py
+# prep plots for rpelicateion
+make-data-replication:
+  uv run scripts/replicate_binscatter/prep_data.py
 
-# Makes the orphan branch "images"
 
-# Needs artifacts/images to exist
-orphan-images:
-    git branch -D images 2>/dev/null || true
-    git checkout --orphan images
-    git add --force artifacts/images
-    git add -A
-    git commit -m "Initial orphan commit on images (preserving artifacts/images)"
-    git push origin images --force
+# replicate plots
+replicate-plots:
+  uv run scripts/replicate_binscatter/make_plots.py
