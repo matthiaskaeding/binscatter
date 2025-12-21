@@ -42,16 +42,16 @@ dl-sims:
 
   # Makes the orphan branch "images", needs artifacts/images to exist
 orphan-images:
-  git worktree add -f /tmp/repo-images HEAD && \
-  cd /tmp/repo-images && \
-  git branch -D images 2>/dev/null || true && \
-  git checkout --orphan images && \
-  git reset --mixed && \
-  git add -f images/readme && \
-  git commit -m "Initial orphan commit on images (preserving artifacts/images)" && \
-  git push origin images --force && \
-  cd - >/dev/null && \
-  git worktree remove /tmp/repo-images
+  tmp=$(mktemp -d) && \
+  git --work-tree="$tmp" init -q && \
+  cp -a images "$tmp"/ && \
+  git -C "$tmp" add -A && \
+  git -C "$tmp" commit -m "images branch" && \
+  git -C "$tmp" branch -M images && \
+  git -C "$tmp" remote add origin "$(git remote get-url origin)" && \
+  git -C "$tmp" push -u origin images --force && \
+  rm -rf "$tmp"
+
 
 # prep plots for rpelicateion
 make-data-replication:
