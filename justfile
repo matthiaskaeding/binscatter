@@ -44,6 +44,7 @@ dl-sims:
 orphan-images:
   git checkout --orphan images
   git rm -rf .
+  find images -name .DS_Store -delete
   git add -f images/
   git commit -m "Publish images"
   git push origin images --force
