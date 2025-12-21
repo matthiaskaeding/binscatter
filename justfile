@@ -40,16 +40,17 @@ dl-sims:
     https://raw.githubusercontent.com/nppackages/binsreg/5dcdb6f14b1d07698b6834a3b8590d0013456f0b/Python/binsreg_sim.csv \
     -o data/binsreg_sim.csv
 
-# Makes the orphan branch "images", needs artifacts/images to exist
+  # Makes the orphan branch "images", needs artifacts/images to exist
 orphan-images:
-  git worktree add -f /tmp/repo-images HEAD
-  cd /tmp/repo-images
-  git checkout --orphan images
-  git reset --mixed
-  git add -f images/readme
-  git commit -m "Initial orphan commit on images (preserving artifacts/images)"
-  git push origin images --force
-  cd -
+  git worktree add -f /tmp/repo-images HEAD && \
+  cd /tmp/repo-images && \
+  git branch -D images 2>/dev/null || true && \
+  git checkout --orphan images && \
+  git reset --mixed && \
+  git add -f images/readme && \
+  git commit -m "Initial orphan commit on images (preserving artifacts/images)" && \
+  git push origin images --force && \
+  cd - >/dev/null && \
   git worktree remove /tmp/repo-images
 
 # prep plots for rpelicateion
