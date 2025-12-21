@@ -185,7 +185,9 @@ def prep(
         try:
             controls = tuple(controls)
         except Exception as e:
-            raise ValueError("Failed to cast controls to tuple") from e
+            raise ValueError(
+                "Failed to cast controls to tuple: check that controls is iterable of strings"
+            ) from e
     if not all(isinstance(c, str) for c in controls):
         raise TypeError("controls must contain only strings")
 
