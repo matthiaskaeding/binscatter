@@ -54,3 +54,13 @@ orphan-images:
     git add -A
     git commit -m "Initial orphan commit on images (preserving artifacts/images)"
     git push origin images --force
+
+
+# prep plots for rpelicateion
+make-data-replication:
+  uv run scripts/replicate_binscatter/prep_data.py
+
+
+# replicate plots
+replicate-plots:
+  uv run scripts/replicate_binscatter/make_plots.py
