@@ -438,10 +438,12 @@ def make_plot_plotly(
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
 
+    pad = (profile.x_bounds[1] - profile.x_bounds[0]) * 0.04
+    padded_range_x = (profile.x_bounds[0] - pad, profile.x_bounds[1] + pad)
     scatter_args = {
         "x": x,
         "y": y,
-        "range_x": profile.x_bounds,
+        "range_x": padded_range_x,
         "title": "Binscatter",
         "labels": {
             "x": profile.x_name,
