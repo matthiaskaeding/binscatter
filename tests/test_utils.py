@@ -72,7 +72,9 @@ def test_get_columns_numeric_categorical(frame_factory):
     assert set(categorical) == {"cat"}
 
 
-@pytest.mark.skipif(SKIP_PYSPARK, reason="PySpark tests skipped via BINSCATTER_SKIP_PYSPARK")
+@pytest.mark.skipif(
+    SKIP_PYSPARK, reason="PySpark tests skipped via BINSCATTER_SKIP_PYSPARK"
+)
 def test_get_columns_pyspark():
     if SparkSession is None:
         pytest.skip("PySpark not installed")

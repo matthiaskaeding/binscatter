@@ -177,17 +177,15 @@ def prep(
     if not isinstance(y_name, str):
         raise TypeError("y_name must be a string")
 
-    if controls is None:
+    if not controls:
         controls = ()
     elif isinstance(controls, str):
         controls = (controls,)
     else:
         try:
             controls = tuple(controls)
-        except TypeError:
-            raise TypeError(
-                f"controls must be a string, iterable, or None, got {type(controls)}"
-            )
+        except Exception as e:
+            raise ValueError("Failed to cast controls to tuple") from e
     if not all(isinstance(c, str) for c in controls):
         raise TypeError("controls must contain only strings")
 
@@ -211,8 +209,6 @@ def prep(
                 msg = f"{c} not in input dataframe"
                 raise ValueError(msg)
         raise e
-
-    assert num_bins > 1
 
     # Find name for bins
     distinct_suffix = str(uuid.uuid4()).replace("-", "_")
