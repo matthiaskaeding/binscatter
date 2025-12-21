@@ -57,4 +57,4 @@ Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie, 2021, "Replic
 ## Tests
 
 - Run the full backend matrix, including PySpark: `just test`
-- Use the faster run without PySpark: `just test-fast`
+- Use the faster run without PySpark: `just ftest`
