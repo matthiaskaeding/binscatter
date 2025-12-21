@@ -1,11 +1,10 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#     "pandas",
-#     "polars",
-#     "pyarrow",
-#     "pyfixest",
 #     "plotly",
+#     "polars",
+#     "kaleido",
+#     "pyarrow",
 # ]
 # ///
 
@@ -18,25 +17,33 @@
 #  so the data will not be filtered
 # Exactly as in Catteneo et al.
 # %%
-import importlib
-import sys
+import logging
 from pathlib import Path
+import sys
 
+sys.path.insert(0, str(Path(__file__).parent.parent.parent.resolve()))
+
+proj_dir = Path(__file__).parent.parent.parent.resolve()
+log_file = proj_dir / "artifacts" / "binscatter.log"
+log_file.parent.mkdir(parents=True, exist_ok=True)
+logging.basicConfig(
+    filename=log_file,
+    filemode="w",
+    level=logging.DEBUG,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    force=True,
+)
+logging.getLogger("binscatter.core").setLevel(logging.DEBUG)
+# Ensure pandas/numpy logger noise stays low while keeping binscatter debug lines
+logging.getLogger("numpy").setLevel(logging.WARNING)
+for n in ("choreographer", "kaleido", "numba", "matplotlib", "asyncio", "browser_proc"):
+    logging.getLogger(n).setLevel(logging.ERROR)
+
+
+from src.binscatter.core import binscatter
 import plotly.express as px
 import polars as pl
-from pandas import read_stata as pd_read_stata
-import pyfixest as pf
 
-
-def read_stata(*args, **kwargs):
-    return pl.from_pandas(pd_read_stata(*args, **kwargs))
-
-
-proj_dir = Path(__file__).parent.parent.resolve()
-if str(proj_dir) not in sys.path:
-    sys.path.insert(0, str(proj_dir))
-
-binscatter = importlib.import_module("binscatter").binscatter
 
 print("project dir =", proj_dir)
 data_dir = proj_dir / "artifacts"
@@ -44,26 +51,12 @@ data_dir.mkdir(exist_ok=True, parents=True)
 assets_dir = proj_dir / "images" / "readme"
 assets_dir.mkdir(exist_ok=True, parents=True)
 # %%
-fl = data_dir / "dataverse_files/REPLICATION_PACKET/Data/state_data.dta"
-df = read_stata(fl).filter(pl.col("year") >= 1939)
-df = df.with_columns(
-    pl.col("population_density", "real_gdp_pc").log(),
-    *[
-        (1 - pl.col(x) / 100).log().alias(x)
-        for x in ["mtr90_lag3", "top_corp", "top_corp_lag3"]
-    ],
-)
+parquet_path = data_dir / "state_data_processed.parquet"
+df = pl.read_parquet(parquet_path)
 df.describe()
 # %%
-# Check
-pf.feols(
-    "lnpat ~ mtr90_lag3 + top_corp_lag3 + real_gdp_pc + population_density + rd_credit_lag3 | statenum + year",
-    df,
-).summary()
-
-# %%
 p_scatter = px.scatter(
-    df.select("mtr90_lag3", "lnpat").to_pandas(),
+    df.select("mtr90_lag3", "lnpat"),
     x="mtr90_lag3",
     y="lnpat",
 )
@@ -78,11 +71,15 @@ p_binscatter = binscatter(
 p_binscatter.write_image(assets_dir / "binscatter.png", width=800, height=600)
 # %%
 df = df.with_columns(pl.col("statenum", "year").cast(pl.String))
+# Capture all binscatter logs into artifacts/binscatter.log
+log_file = data_dir / "binscatter.log"
+
+print("Generating binscatter with controls...")
 p_binscatter_controls = binscatter(
-    df,
+    df.to_pandas(),
     "mtr90_lag3",
     "lnpat",
-    [
+    controls=[
         "top_corp_lag3",
         "real_gdp_pc",
         "population_density",
@@ -90,8 +87,12 @@ p_binscatter_controls = binscatter(
         "statenum",
         "year",
     ],
-    num_bins=35,
+    num_bins=25,
 )
+p_binscatter_controls.show()
+
+logging.shutdown()
+
 p_binscatter_controls.write_image(
     assets_dir / "binscatter_controls.png", width=800, height=600
 )
