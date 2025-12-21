@@ -40,18 +40,6 @@ dl-sims:
     https://raw.githubusercontent.com/nppackages/binsreg/5dcdb6f14b1d07698b6834a3b8590d0013456f0b/Python/binsreg_sim.csv \
     -o data/binsreg_sim.csv
 
-# Makes the orphan branch "images", needs artifacts/images to exist
-orphan-images:
-  git checkout --orphan images
-  git rm -rf .
-  find images -name .DS_Store -delete
-  git add -f images/
-  git commit -m "Publish images"
-  git push origin images --force
-  git checkout -
-
-
-
 # prep plots for rpelicateion
 make-data-replication:
   uv run scripts/replicate_binscatter/prep_data.py
