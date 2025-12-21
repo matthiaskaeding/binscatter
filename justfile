@@ -44,7 +44,7 @@ dl-sims:
 orphan-images:
     git branch -D images 2>/dev/null || true
     git checkout --orphan images
-    git add --force artifacts/images
+    git add --force images/readme
     git add -A
     git commit -m "Initial orphan commit on images (preserving artifacts/images)"
     git push origin images --force
