@@ -17,13 +17,19 @@
 #  so the data will not be filtered
 # Exactly as in Catteneo et al.
 # %%
-import logging
-from pathlib import Path
 import sys
+from pathlib import Path  # noqa: E402
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.resolve()))
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT))
 
-proj_dir = Path(__file__).parent.parent.parent.resolve()
+import logging  # noqa: E402
+
+import plotly.express as px  # noqa: E402
+import polars as pl  # noqa: E402
+from src.binscatter.core import binscatter  # noqa: E402
+
+proj_dir = ROOT
 log_file = proj_dir / "artifacts" / "binscatter.log"
 log_file.parent.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
@@ -40,11 +46,6 @@ for n in ("choreographer", "kaleido", "numba", "matplotlib", "asyncio", "browser
     logging.getLogger(n).setLevel(logging.ERROR)
 
 
-from src.binscatter.core import binscatter
-import plotly.express as px
-import polars as pl
-
-
 print("project dir =", proj_dir)
 data_dir = proj_dir / "artifacts"
 data_dir.mkdir(exist_ok=True, parents=True)
@@ -52,6 +53,10 @@ assets_dir = proj_dir / "images" / "readme"
 assets_dir.mkdir(exist_ok=True, parents=True)
 # %%
 parquet_path = data_dir / "state_data_processed.parquet"
+if not parquet_path.exists():
+    raise FileNotFoundError(
+        f"Missing {parquet_path}. Run scripts/replicate_binscatter/prep_data.py first."
+    )
 df = pl.read_parquet(parquet_path)
 df.describe()
 # %%
