@@ -14,13 +14,13 @@ ok:
     @just ty
 
 
+# Skip pyspark
+ftest:
+    uv run pytest tests
 
-# Run tests
-test skip_pyspark="0":
-    BINSCATTER_SKIP_PYSPARK={{ skip_pyspark }} uv run pytest tests
-
-test-fast:
-    just test 1
+# Run all tests
+test:
+    uv run pytest --run-pyspark tests
 
 # Makes a notebook from try_binscatter
 make-nb:

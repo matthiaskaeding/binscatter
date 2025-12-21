@@ -1,4 +1,3 @@
-import os
 from typing import Iterable
 
 import polars as pl
@@ -11,16 +10,10 @@ import pandas as pd
 import dask.dataframe as dd
 import statsmodels.api as sm
 
-SKIP_PYSPARK = os.getenv("BINSCATTER_SKIP_PYSPARK", "").lower() in {"1", "true", "yes"}
-
-if not SKIP_PYSPARK:
-    try:
-        from pyspark.sql import SparkSession
-        import pyspark
-    except ImportError:  # pragma: no cover - optional dependency
-        SparkSession = None
-        pyspark = None
-else:
+try:  # pragma: no cover - optional dependency
+    from pyspark.sql import SparkSession
+    import pyspark
+except ImportError:  # pragma: no cover - optional dependency
     SparkSession = None
     pyspark = None
 
@@ -95,19 +88,22 @@ fixt_dat = [
     ("df_nulls", True),
     ("df_duplicates", True),
 ]
+
+BASE_DF_TYPES = ["pandas", "polars", "duckdb", "dask"]
+HAS_PYSPARK = SparkSession is not None
+
+DF_TYPE_PARAMS = [pytest.param(df_type) for df_type in BASE_DF_TYPES]
+if HAS_PYSPARK:
+    DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
+
 fix_data_types = []
-DF_TYPES = [
-    "pandas",
-    "polars",
-    "duckdb",
-    "dask",
-]
-if not SKIP_PYSPARK and SparkSession is not None:
-    DF_TYPES.append("pyspark")
-for df_type in DF_TYPES:
+for df_type in BASE_DF_TYPES:
     for pair in fixt_dat:
-        triple = (*pair, df_type)
-        fix_data_types.append(triple)
+        fix_data_types.append(pytest.param(*pair, df_type))
+
+if HAS_PYSPARK:
+    for pair in fixt_dat:
+        fix_data_types.append(pytest.param(*pair, "pyspark", marks=pytest.mark.pyspark))
 
 
 def conv(df: pd.DataFrame, df_type):
@@ -120,7 +116,7 @@ def conv(df: pd.DataFrame, df_type):
             return duckdb.from_df(df)
         case "pyspark":
             if SparkSession is None:
-                pytest.skip("PySpark not available or explicitly skipped")
+                pytest.skip("PySpark not available")
             spark = SparkSession.builder.getOrCreate()
             return spark.createDataFrame(df)
         case "dask":
@@ -341,7 +337,7 @@ def test_binscatter_controls_lazy_polars():
     )
 
 
-@pytest.mark.parametrize("df_type", DF_TYPES)
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_binscatter_controls_across_backends(df_type):
     if df_type == "dask":
         pytest.importorskip("dask")
