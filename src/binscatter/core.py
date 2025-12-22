@@ -25,7 +25,6 @@ from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
 logger = logging.getLogger(__name__)
-RULE_OF_THUMB = "rule-of-thumb"
 
 
 @overload
@@ -81,14 +80,21 @@ def binscatter(
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
     if isinstance(num_bins, str):
-        auto_bins = num_bins == RULE_OF_THUMB
+        auto_bins = num_bins == "rule-of-thumb"
         if not auto_bins:
             msg = f"Unknown num_bins string option: {num_bins}"
             raise ValueError(msg)
     else:
+        try:
+            manual_bins = int(num_bins)
+        except (TypeError, ValueError) as err:
+            raise TypeError(
+                "num_bins must be an integer when provided explicitly"
+            ) from err
         if num_bins <= 1:
             raise ValueError("num_bins must be greater than 1")
         auto_bins = False
+
     if not isinstance(x, str):
         raise TypeError("x_name must be a string")
     if not isinstance(y, str):
@@ -120,7 +126,7 @@ def binscatter(
             df_with_regression_features, x, y, regression_features
         )
     else:
-        computed_num_bins = int(num_bins)
+        computed_num_bins = manual_bins
 
     profile = Profile(
         num_bins=computed_num_bins,
