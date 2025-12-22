@@ -68,13 +68,11 @@ def binscatter(
         df (IntoDataFrame): Input dataframe - must be a type supported by narwhals
         x (str): Name of x column
         y (str): Name y column
-        controls (Iterable[str]): Names of control variables (numeric). These are partialled out
+        controls Iterable[str] | str | None : Names of control variable, or name of single control variable. These are partialled out
             following Cattaneo et al. (2024).
         num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default "plotly" gives a plotly plot.
-        kwargs (dict, optional): Additional arguments used in plotly.express.scatter to make the binscatter plot.
-        Otherwise "native" returns a dataframe that is natural match to input dataframe.
-
+        return_type (str): Return type. Default "plotly" gives a plotly plot, "native" gives a dataframe that matches input type.
+        kwargs_binscatter (dict, optional): Additional arguments used in plotly.express.scatter to make the binscatter plot.
 
     Returns:
         plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
