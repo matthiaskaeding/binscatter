@@ -32,10 +32,10 @@ def binscatter(
     df: IntoDataFrame,
     x: str,
     y: str,
+    *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = 20,
+    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly"] = "plotly",
-    plot_args=None,
     **kwargs,
 ) -> go.Figure: ...
 
@@ -45,8 +45,9 @@ def binscatter(
     df: IntoDataFrame,
     x: str,
     y: str,
+    *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = 20,
+    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["native"] = "native",
     **kwargs,
 ) -> object: ...
@@ -60,7 +61,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
-    **kwargs_binscatter,
+    **kwargs,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
@@ -71,7 +72,7 @@ def binscatter(
         controls: Optional control columns to partial out (either a string or iterable of strings).
         num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
-        kwargs_binscatter: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
+        kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
         A Plotly figure or native dataframe, depending on ``return_type``.
