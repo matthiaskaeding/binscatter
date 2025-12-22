@@ -73,7 +73,7 @@ p_binscatter = binscatter(
     "lnpat",
     num_bins=20,
 )
-p_binscatter.write_image(assets_dir / "binscatter.png", width=800, height=600)
+p_binscatter.write_image(assets_dir / "binscatter_bare.png", width=800, height=600)
 # %%
 df = df.with_columns(pl.col("statenum", "year").cast(pl.String))
 # Capture all binscatter logs into artifacts/binscatter.log
