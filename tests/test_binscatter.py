@@ -3,7 +3,6 @@ from typing import Iterable
 
 import polars as pl
 import numpy as np
-import narwhals as nw
 from binscatter.core import (
     binscatter,
     clean_df,
@@ -452,7 +451,9 @@ def test_binscatter_controls_collapsed_bins_error():
             "z": np.linspace(-1.0, 1.0, num=50),
         }
     )
-    with pytest.raises(ValueError, match="Quantiles are not unique|Bin edges must be unique"):
+    with pytest.raises(
+        ValueError, match="Quantiles are not unique|Bin edges must be unique"
+    ):
         binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
 
 
