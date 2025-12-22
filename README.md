@@ -48,6 +48,7 @@ binscatter(
 ```
 
 ![Binscatter](/images/readme/binscatter_controls.png)
+
 By default ``binscatter``picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). The current implementation follows the paper's baseline (piecewise constants with evenly spaced knots) and runs entirely through backend-agnostic summary statistics, so large datasets do not need to be materialized.
 
 The data originates from:
