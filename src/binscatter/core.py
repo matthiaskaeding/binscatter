@@ -79,26 +79,47 @@ def binscatter(
     Returns:
         plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
     """
-
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
-    # Prepare dataframe: sort, remove non numerics and add bins
-    df_prepped, profile = prep(df, x, y, controls, num_bins)
+    if num_bins <= 1:
+        raise ValueError("num_bins must be greater than 1")
+    if not isinstance(x, str):
+        raise TypeError("x_name must be a string")
+    if not isinstance(y, str):
+        raise TypeError("y_name must be a string")
 
+    controls = _clean_controls(controls)
+    df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
+        df, controls, x, y
+    )
+    df_prepped, regression_features = maybe_add_regression_features(
+        df,
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+    )
+
+    distinct_suffix = str(uuid.uuid4()).replace("-", "_")
+    bin_name = f"bins____{distinct_suffix}"
+    profile = Profile(
+        num_bins=num_bins,
+        x_name=x,
+        y_name=y,
+        bin_name=bin_name,
+        regression_features=regression_features,
+        distinct_suffix=distinct_suffix,
+        is_lazy_input=is_lazy_input,
+        implementation=df.implementation,
+    )
     # Currently there are 2 cases:
     # (1) no controls: the easy one, just compute the means by bin
     # (2) controls: here we need to compute regression coefficients
     # and partial out the effect of the controls
     # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
-    if not controls:
-        df_plotting: nw.LazyFrame = (
-            df_prepped.group_by(profile.bin_name)
-            .agg(profile.x_col.mean(), profile.y_col.mean())
-            .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
-        ).lazy()
-    else:
+    if controls:
         df_plotting, _ = partial_out_controls(df_prepped, profile)
+    else:
+        df_plotting = compute_bin_means(df_prepped, profile)
 
     match return_type:
         case "plotly":
@@ -128,15 +149,12 @@ class Profile(NamedTuple):
 
     x_name: str
     y_name: str
-    controls: Tuple[str, ...]
     num_bins: int
     bin_name: str
-    x_bounds: Tuple[float, float]
     distinct_suffix: str
     is_lazy_input: bool
     implementation: Implementation
-    numeric_columns: Tuple[str, ...]
-    categorical_columns: Tuple[str, ...]
+    regression_features: Tuple[str, ...]
 
     @property
     def x_col(self) -> nw.Expr:
@@ -147,10 +165,7 @@ class Profile(NamedTuple):
         return nw.col(self.y_name)
 
 
-def prep(
-    df_in: IntoDataFrame,
-    x_name: str,
-    y_name: str,
+def make_profile(
     controls: Iterable[str] | str | None = None,
     num_bins: int = 20,
 ) -> Tuple[nw.LazyFrame, Profile]:
@@ -171,75 +186,12 @@ def prep(
     Raises:
         AssertionError: If input validation fails
     """
-    if num_bins <= 1:
-        raise ValueError("num_bins must be greater than 1")
-    if not isinstance(x_name, str):
-        raise TypeError("x_name must be a string")
-    if not isinstance(y_name, str):
-        raise TypeError("y_name must be a string")
-
-    if not controls:
-        controls = ()
-    elif isinstance(controls, str):
-        controls = (controls,)
-    else:
-        try:
-            controls = tuple(controls)
-        except Exception as e:
-            raise ValueError(
-                "Failed to cast controls to tuple: check that controls is iterable of strings"
-            ) from e
-    if not all(isinstance(c, str) for c in controls):
-        raise TypeError("controls must contain only strings")
-
-    dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
-    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
-    if type(dfn) is nw.DataFrame:
-        is_lazy_input = False
-    elif type(dfn) is nw.LazyFrame:
-        is_lazy_input = True
-    else:
-        msg = f"Unexpected narwhals type {(type(dfn))}"
-        raise ValueError(msg)
-    dfl: nw.LazyFrame = dfn.lazy()
-
-    try:
-        df = dfl.select(x_name, y_name, *controls)
-    except Exception as e:
-        cols = dfl.columns
-        for c in [x_name, y_name, *controls]:
-            if c not in cols:
-                msg = f"{c} not in input dataframe"
-                raise ValueError(msg)
-        raise e
 
     # Find name for bins
     distinct_suffix = str(uuid.uuid4()).replace("-", "_")
     bin_name = f"bins____{distinct_suffix}"
 
-    cols_numeric, cols_cat = get_columns(df)
-    union_cols = set(cols_numeric) | set(cols_cat)
-    if set(df.columns) - union_cols:
-        missing = [c for c in df.columns if c not in union_cols]
-        msg = f"Columns with unsupported types: {missing}"
-        raise TypeError(msg)
-    missing_controls = [c for c in controls if c not in union_cols]
-    if missing_controls:
-        msg = f"Unknown control columns (neither numeric nor categorical): {missing_controls}"
-        raise TypeError(msg)
-
-    df_filtered = _remove_bad_values(df, cols_numeric, cols_cat)
-
     # We need the range of x for plotting
-    bounds_df = df_filtered.select(
-        nw.col(x_name).min().alias("x_min"),
-        nw.col(x_name).max().alias("x_max"),
-    ).collect()
-    x_bounds = (bounds_df.item(0, "x_min"), bounds_df.item(0, "x_max"))
-    for val, fun in zip(x_bounds, ["min", "max"]):
-        if not math.isfinite(val):
-            msg = f"{fun}({x_name})={val}"
-            raise ValueError(msg)
 
     profile = Profile(
         num_bins=num_bins,
@@ -432,14 +384,17 @@ def make_plot_plotly(
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
 
+    x_min = data.get_column(profile.x_name).min()
+    x_max = data.get_column(profile.x_name).max()
+
     x = data.get_column(profile.x_name).to_list()
     if len(set(x)) < profile.num_bins:
         msg = f"Unique number of bins is {len(set(x))} fewer than {profile.num_bins} as desired. Decrease parameter num_bins."
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
 
-    pad = (profile.x_bounds[1] - profile.x_bounds[0]) * 0.04
-    padded_range_x = (profile.x_bounds[0] - pad, profile.x_bounds[1] + pad)
+    pad = (x_max - x_min) * 0.04
+    padded_range_x = (x_min - pad, x_max + pad)
     scatter_args = {
         "x": x,
         "y": y,
@@ -741,3 +696,100 @@ def _compute_quantiles(
         .with_row_index(bin_name, order_by="quantile")
         .lazy()
     )
+
+
+def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
+    if not controls:
+        return ()
+    if isinstance(controls, str):
+        return (controls,)
+
+    try:
+        controls = tuple(controls)
+    except Exception as e:
+        raise ValueError(
+            "Failed to cast controls to tuple: check that controls is iterable of strings"
+        ) from e
+    if not all(isinstance(c, str) for c in controls):
+        raise TypeError("controls must contain only strings")
+
+    return controls
+
+
+def clean_df(
+    df_in: IntoDataFrame, controls: Tuple[str, ...], x: str, y: str
+) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
+    cols = getattr(df_in, "columns", None)
+    if not cols or len(cols) <= 1:
+        msg = "Input dataframe must have 'columns' attribute and at least 2 cols"
+        raise TypeError(msg)
+    for c in [x, y, *controls]:
+        if c not in cols:
+            msg = f"{c} not in input dataframe"
+            raise ValueError(msg)
+
+    dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
+
+    if type(dfn) is nw.DataFrame:
+        is_lazy_input = False
+    elif type(dfn) is nw.LazyFrame:
+        is_lazy_input = True
+    else:
+        msg = f"Unexpected narwhals type {(type(dfn))}"
+        raise ValueError(msg)
+
+    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
+    dfl: nw.LazyFrame = dfn.lazy()
+
+    df = dfl.select(x, y, *controls)
+    cols_numeric, cols_cat = get_columns(df)
+
+    df_filtered = _remove_bad_values(df, cols_numeric, cols_cat)
+
+    return df_filtered.lazy(), is_lazy_input, cols_numeric, cols_cat
+
+
+def add_bins(df, profile):
+    quantile_handler = configure_quantile_handler(profile)
+    try:
+        df_with_bins = quantile_handler(df)
+    except ValueError as err:
+        err_text = str(err)
+        if (
+            "Quantiles are not unique" in err_text
+            or "Bin edges must be unique" in err_text
+        ):
+            raise ValueError(
+                "Quantiles are not unique. Decrease number of bins."
+            ) from err
+        raise
+
+    return df_with_bins
+
+
+def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
+    df_plotting: nw.LazyFrame = (
+        df.group_by(profile.bin_name)
+        .agg(profile.x_col.mean(), profile.y_col.mean())
+        .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
+    ).lazy()
+
+    return df_plotting
+
+
+def maybe_add_regression_features(
+    df: nw.LazyFrame,
+    numeric_columns: Tuple[str],
+    categorical_columns: Tuple[str],
+) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+    """Adds regression features to dataframe if needed.
+
+    Args:
+        df: Input dataframe
+        numeric_columns: List of numeric columns
+        categorical_columns: List of categorical columns
+    """
+    if not numeric_columns and not categorical_columns:
+        return df, ()
+    if numeric_columns and not categorical_columns:
+        return df, numeric_columns
