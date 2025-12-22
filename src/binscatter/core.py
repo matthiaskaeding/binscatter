@@ -59,7 +59,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = 20,
+    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
     **kwargs_binscatter,
 ) -> object:
