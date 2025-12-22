@@ -1,3 +1,4 @@
+from pandas.tests.indexing.multiindex.test_indexing_slow import cols
 import logging
 import operator
 import uuid
@@ -319,12 +320,11 @@ def _remove_bad_values(
 
     bad_conditions = []
 
+    df = df.drop_nulls(subset=[*cols_numeric, *cols_cat])
+
     for c in cols_numeric:
         col = nw.col(c)
-        bad_conditions.append(col.is_null() | ~col.is_finite() | col.is_nan())
-
-    for c in cols_cat:
-        bad_conditions.append(nw.col(c).is_null())
+        bad_conditions.append(~col.is_finite() | col.is_nan())
 
     if not bad_conditions:
         return df
