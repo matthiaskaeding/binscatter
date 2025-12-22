@@ -25,7 +25,7 @@ pip install binscatter
 
 We made this noisy scatterplot:
 
-![Noisy scatterplot](images/readme/scatter.png)
+![Noisy scatterplot](/images/readme/scatter.png)
 
 This is how we make a nice binscatter plot, controlling for a set of features:
 
