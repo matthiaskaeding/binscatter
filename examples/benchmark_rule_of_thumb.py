@@ -18,9 +18,10 @@ class BenchmarkResult:
 
 def make_dataframe(n_rows: int, rng: np.random.Generator) -> pd.DataFrame:
     x = rng.normal(size=n_rows)
-    w = rng.normal(scale=0.5, size=n_rows)
-    y = 1.5 * x - 0.25 * w + rng.normal(scale=0.75, size=n_rows)
-    return pd.DataFrame({"x": x, "y": y, "w": w})
+    w_num = rng.normal(scale=0.5, size=n_rows)
+    w_cat = np.where(rng.random(size=n_rows) > 0.5, "A", "B")
+    y = 1.5 * x - 0.25 * w_num + rng.normal(scale=0.75, size=n_rows)
+    return pd.DataFrame({"x": x, "y": y, "w_num": w_num, "segment": w_cat})
 
 
 def run_benchmark(df: pd.DataFrame, label_prefix: str) -> Iterable[BenchmarkResult]:
@@ -28,11 +29,12 @@ def run_benchmark(df: pd.DataFrame, label_prefix: str) -> Iterable[BenchmarkResu
     df_clean = df.copy()
 
     start = time.perf_counter()
+    controls = ["w_num", "segment"]
     binscatter(
         df_clean,
         "x",
         "y",
-        controls=["w"],
+        controls=controls,
         num_bins=30,
         return_type="native",
     )
@@ -43,7 +45,7 @@ def run_benchmark(df: pd.DataFrame, label_prefix: str) -> Iterable[BenchmarkResu
         df_clean,
         "x",
         "y",
-        controls=["w"],
+        controls=controls,
         num_bins="rule-of-thumb",
         return_type="native",
     )
