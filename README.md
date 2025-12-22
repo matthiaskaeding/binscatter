@@ -1,11 +1,6 @@
 # Dataframe agnostic binscatter plots
 
-This package implements binscatter plots following:
-
-> Cattaneo, Crump, Farrell and Feng (2024)  
-> "On Binscatter"  
-> American Economic Review, 114(5), pp. 1488-1514  
-> [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
+**TL;DR:** Fast binscatter plots for all kinds of dataframes. 
 
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
   - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
@@ -14,6 +9,13 @@ This package implements binscatter plots following:
 - Efficiently avoids materializing large intermediate datasets
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
+
+This package implements binscatter plots following:
+
+> Cattaneo, Crump, Farrell and Feng (2024)  
+> "On Binscatter"  
+> American Economic Review, 114(5), pp. 1488-1514  
+> [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
 
 ## Installation
 
