@@ -1,5 +1,4 @@
 import logging
-import math
 import operator
 import uuid
 import warnings
@@ -88,16 +87,25 @@ def binscatter(
         raise TypeError("y_name must be a string")
 
     controls = _clean_controls(controls)
+    if x in controls:
+        raise ValueError("x cannot be in controls")
+    if y in controls:
+        raise ValueError("y cannot be in controls")
+    if len(set(controls)) < len(controls):
+        raise ValueError("controls contains duplicate entries")
+
     df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
         df, controls, x, y
     )
-    df_prepped, regression_features = maybe_add_regression_features(
+    df_with_regression_features, regression_features = maybe_add_regression_features(
         df,
         numeric_controls=numeric_columns,
         categorical_controls=categorical_columns,
     )
 
-    distinct_suffix = str(uuid.uuid4()).replace("-", "_")
+    distinct_suffix = str(uuid.uuid4()).replace(
+        "-", "_"
+    )  # "-" in col names can cause issues
     bin_name = f"bins____{distinct_suffix}"
     profile = Profile(
         num_bins=num_bins,
@@ -109,6 +117,9 @@ def binscatter(
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
     )
+    add_bins: Callable = configure_quantile_handler(profile)
+    df_prepped = add_bins(df_with_regression_features)
+
     if not controls:
         # The easy one, just compute the means by bin
         df_plotting = compute_bin_means(df_prepped, profile)
@@ -324,7 +335,7 @@ def _remove_bad_values(
     return df.filter(~final_bad_condition)
 
 
-def get_columns(
+def split_columns(
     frame: nw.LazyFrame | nw.DataFrame,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
     """Return tuples of numeric and categorical column names for a narwhals frame."""
@@ -356,6 +367,7 @@ def get_columns(
     numeric_cols = _safe_columns(frame.select(ncs.numeric()))
     frame_columns = tuple(frame.columns)
     categorical_cols = tuple(col for col in frame_columns if col not in numeric_cols)
+
     return numeric_cols, categorical_cols
 
 
@@ -606,7 +618,7 @@ def clean_df(
     df_in: IntoDataFrame, controls: Tuple[str, ...], x: str, y: str
 ) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
     cols = getattr(df_in, "columns", None)
-    if not cols or len(cols) <= 1:
+    if cols is None or len(cols) <= 1:
         msg = "Input dataframe must have 'columns' attribute and at least 2 cols"
         raise TypeError(msg)
     for c in [x, y, *controls]:
@@ -628,11 +640,25 @@ def clean_df(
     dfl: nw.LazyFrame = dfn.lazy()
 
     df = dfl.select(x, y, *controls)
-    cols_numeric, cols_cat = get_columns(df)
+    cols_numeric, cols_cat = split_columns(df)
+    union_cols = set(cols_numeric) | set(cols_cat)
+    missing_controls = [c for c in controls if c not in union_cols]
+    if missing_controls:
+        msg = f"Unknown control columns (neither numeric nor categorical): {missing_controls}"
+        raise TypeError(msg)
+    if x not in cols_numeric:
+        msg = f"x column '{x}' must be numeric"
+        raise TypeError(msg)
+    if y not in cols_numeric:
+        msg = f"y column '{y}' must be numeric"
+        raise TypeError(msg)
 
     df_filtered = _remove_bad_values(df, cols_numeric, cols_cat)
 
-    return df_filtered.lazy(), is_lazy_input, cols_numeric, cols_cat
+    numeric_controls = tuple(c for c in controls if c in cols_numeric)
+    categorical_controls = tuple(c for c in controls if c in cols_cat)
+
+    return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
 
 
 def add_bins(df, profile):
