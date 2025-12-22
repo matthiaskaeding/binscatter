@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from binscatter.core import (
     _remove_bad_values,
-    get_columns,
+    split_columns,
     partial_out_controls,
     Profile,
 )
@@ -56,7 +56,7 @@ def test_filter_all_numeric_basic():
 def test_get_columns_numeric_categorical(frame_factory):
     df = pd.DataFrame({"x": [1, 2, 3], "y": [4.0, 5.0, 6.0], "cat": ["a", "b", "c"]})
     frame = frame_factory(df)
-    numeric, categorical = get_columns(frame)
+    numeric, categorical = split_columns(frame)
     assert set(numeric) == {"x", "y"}
     assert set(categorical) == {"cat"}
 
@@ -73,7 +73,7 @@ def test_get_columns_pyspark():
             pd.DataFrame({"x": [1, 2, 3], "y": [4.0, 5.0, 6.0], "cat": ["a", "b", "c"]})
         )
         frame = nw.from_native(df)
-        numeric, categorical = get_columns(frame)
+        numeric, categorical = split_columns(frame)
         assert set(numeric) == {"x", "y"}
         assert set(categorical) == {"cat"}
     finally:
@@ -84,17 +84,14 @@ def _sample_profile(bin_count: int, controls: list[str]) -> Profile:
     return Profile(
         x_name="x0",
         y_name="y0",
-        controls=tuple(controls),
         num_bins=bin_count,
         bin_name="bin",
-        x_bounds=(0.0, 1.0),
         distinct_suffix="test",
         is_lazy_input=True,
         implementation=nw.from_native(
             pd.DataFrame({"x0": [0], "y0": [0]})
         ).implementation,
-        numeric_columns=tuple(["x0", "y0", *controls]),
-        categorical_columns=tuple(),
+        regression_features=tuple(controls),
     )
 
 

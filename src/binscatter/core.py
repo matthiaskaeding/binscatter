@@ -1,5 +1,4 @@
 import logging
-import math
 import operator
 import uuid
 import warnings
@@ -65,39 +64,68 @@ def binscatter(
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
-        df (IntoDataFrame): Input dataframe - must be a type supported by narwhals
-        x (str): Name of x column
-        y (str): Name y column
-        controls (Iterable[str]): Names of control variables (numeric). These are partialled out
-            following Cattaneo et al. (2024).
-        num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default "plotly" gives a plotly plot.
-        kwargs (dict, optional): Additional arguments used in plotly.express.scatter to make the binscatter plot.
-        Otherwise "native" returns a dataframe that is natural match to input dataframe.
-
+        df: Any dataframe supported by narwhals.
+        x: Name of the x column.
+        y: Name of the y column.
+        controls: Optional control columns to partial out (either a string or iterable of strings).
+        num_bins: Number of quantile bins to form.
+        return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
+        kwargs_binscatter: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
-        plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
+        A Plotly figure or native dataframe, depending on ``return_type``.
     """
-
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
-    # Prepare dataframe: sort, remove non numerics and add bins
-    df_prepped, profile = prep(df, x, y, controls, num_bins)
+    if num_bins <= 1:
+        raise ValueError("num_bins must be greater than 1")
+    if not isinstance(x, str):
+        raise TypeError("x_name must be a string")
+    if not isinstance(y, str):
+        raise TypeError("y_name must be a string")
 
-    # Currently there are 2 cases:
-    # (1) no controls: the easy one, just compute the means by bin
-    # (2) controls: here we need to compute regression coefficients
-    # and partial out the effect of the controls
-    # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
+    controls = _clean_controls(controls)
+    if x in controls:
+        raise ValueError("x cannot be in controls")
+    if y in controls:
+        raise ValueError("y cannot be in controls")
+    if len(set(controls)) < len(controls):
+        raise ValueError("controls contains duplicate entries")
+
+    df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
+        df, controls, x, y
+    )
+    df_with_regression_features, regression_features = maybe_add_regression_features(
+        df,
+        numeric_controls=numeric_columns,
+        categorical_controls=categorical_columns,
+    )
+
+    distinct_suffix = str(uuid.uuid4()).replace(
+        "-", "_"
+    )  # "-" in col names can cause issues
+    bin_name = f"bins____{distinct_suffix}"
+    profile = Profile(
+        num_bins=num_bins,
+        x_name=x,
+        y_name=y,
+        bin_name=bin_name,
+        regression_features=regression_features,
+        distinct_suffix=distinct_suffix,
+        is_lazy_input=is_lazy_input,
+        implementation=df.implementation,
+    )
+    add_bins: Callable = configure_quantile_handler(profile)
+    df_prepped = add_bins(df_with_regression_features)
+
     if not controls:
-        df_plotting: nw.LazyFrame = (
-            df_prepped.group_by(profile.bin_name)
-            .agg(profile.x_col.mean(), profile.y_col.mean())
-            .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
-        ).lazy()
+        # The easy one, just compute the means by bin
+        df_plotting = compute_bin_means(df_prepped, profile)
     else:
+        # Compute regression coefficients
+        # and partial out the effect of the controls
+        # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
         df_plotting, _ = partial_out_controls(df_prepped, profile)
 
     match return_type:
@@ -106,21 +134,7 @@ def binscatter(
                 df_plotting, profile, kwargs_binscatter=kwargs_binscatter
             )
         case "native":
-            df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
-            logger.debug(
-                "Type of df_out_nw: %s, implementation: %s",
-                type(df_out_nw),
-                df_out_nw.implementation,
-            )
-
-            if profile.implementation in (
-                Implementation.PYSPARK,
-                Implementation.DUCKDB,
-                Implementation.DASK,
-            ):
-                return df_out_nw.to_native()
-            else:
-                return df_out_nw.collect().to_native()
+            return make_native_dataframe(df_plotting, profile)
 
 
 class Profile(NamedTuple):
@@ -128,15 +142,12 @@ class Profile(NamedTuple):
 
     x_name: str
     y_name: str
-    controls: Tuple[str, ...]
     num_bins: int
     bin_name: str
-    x_bounds: Tuple[float, float]
     distinct_suffix: str
     is_lazy_input: bool
     implementation: Implementation
-    numeric_columns: Tuple[str, ...]
-    categorical_columns: Tuple[str, ...]
+    regression_features: Tuple[str, ...]
 
     @property
     def x_col(self) -> nw.Expr:
@@ -147,190 +158,20 @@ class Profile(NamedTuple):
         return nw.col(self.y_name)
 
 
-def prep(
-    df_in: IntoDataFrame,
-    x_name: str,
-    y_name: str,
-    controls: Iterable[str] | str | None = None,
-    num_bins: int = 20,
-) -> Tuple[nw.LazyFrame, Profile]:
-    """Prepares the input data and derives profile.
-
-    Args:
-        df: Input dataframe.
-        x_name: name of x col
-        y_name: name of y col
-        controls: Iterable of control vars
-        num_bins: Number of bins to use for binscatter. Must be less than number of rows.
-
-    Returns:
-        tuple: (narwhals.LazyFrame, Profile)
-            - Sorted input dataframe converted to a narwhals LazyFrame
-            - Profile object with metadata about the data
-
-    Raises:
-        AssertionError: If input validation fails
-    """
-    if num_bins <= 1:
-        raise ValueError("num_bins must be greater than 1")
-    if not isinstance(x_name, str):
-        raise TypeError("x_name must be a string")
-    if not isinstance(y_name, str):
-        raise TypeError("y_name must be a string")
-
-    if not controls:
-        controls = ()
-    elif isinstance(controls, str):
-        controls = (controls,)
-    else:
-        try:
-            controls = tuple(controls)
-        except Exception as e:
-            raise ValueError(
-                "Failed to cast controls to tuple: check that controls is iterable of strings"
-            ) from e
-    if not all(isinstance(c, str) for c in controls):
-        raise TypeError("controls must contain only strings")
-
-    dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
-    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
-    if type(dfn) is nw.DataFrame:
-        is_lazy_input = False
-    elif type(dfn) is nw.LazyFrame:
-        is_lazy_input = True
-    else:
-        msg = f"Unexpected narwhals type {(type(dfn))}"
-        raise ValueError(msg)
-    dfl: nw.LazyFrame = dfn.lazy()
-
-    try:
-        df = dfl.select(x_name, y_name, *controls)
-    except Exception as e:
-        cols = dfl.columns
-        for c in [x_name, y_name, *controls]:
-            if c not in cols:
-                msg = f"{c} not in input dataframe"
-                raise ValueError(msg)
-        raise e
-
-    # Find name for bins
-    distinct_suffix = str(uuid.uuid4()).replace("-", "_")
-    bin_name = f"bins____{distinct_suffix}"
-
-    cols_numeric, cols_cat = get_columns(df)
-    union_cols = set(cols_numeric) | set(cols_cat)
-    if set(df.columns) - union_cols:
-        missing = [c for c in df.columns if c not in union_cols]
-        msg = f"Columns with unsupported types: {missing}"
-        raise TypeError(msg)
-    missing_controls = [c for c in controls if c not in union_cols]
-    if missing_controls:
-        msg = f"Unknown control columns (neither numeric nor categorical): {missing_controls}"
-        raise TypeError(msg)
-
-    df_filtered = _remove_bad_values(df, cols_numeric, cols_cat)
-
-    # We need the range of x for plotting
-    bounds_df = df_filtered.select(
-        nw.col(x_name).min().alias("x_min"),
-        nw.col(x_name).max().alias("x_max"),
-    ).collect()
-    x_bounds = (bounds_df.item(0, "x_min"), bounds_df.item(0, "x_max"))
-    for val, fun in zip(x_bounds, ["min", "max"]):
-        if not math.isfinite(val):
-            msg = f"{fun}({x_name})={val}"
-            raise ValueError(msg)
-
-    profile = Profile(
-        num_bins=num_bins,
-        x_name=x_name,
-        y_name=y_name,
-        bin_name=bin_name,
-        controls=controls,
-        x_bounds=x_bounds,
-        distinct_suffix=distinct_suffix,
-        is_lazy_input=is_lazy_input,
-        implementation=df_filtered.implementation,
-        numeric_columns=cols_numeric,
-        categorical_columns=cols_cat,
-    )
-    logger.debug("Profile: %s", profile)
-
-    quantile_handler = configure_quantile_handler(profile)
-    try:
-        df_with_bins = quantile_handler(df_filtered)
-    except ValueError as err:
-        err_text = str(err)
-        if (
-            "Quantiles are not unique" in err_text
-            or "Bin edges must be unique" in err_text
-        ):
-            raise ValueError(
-                "Quantiles are not unique. Decrease number of bins."
-            ) from err
-        raise
-
-    return df_with_bins.lazy(), profile
-
-
 def partial_out_controls(
     df_prepped: nw.LazyFrame, profile: Profile
 ) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
 
-    controls = profile.controls
-    if not controls:
-        raise ValueError("Controls must be provided for partial_out_controls")
-
-    numeric_controls = [c for c in controls if c in profile.numeric_columns]
-    categorical_controls = [c for c in controls if c in profile.categorical_columns]
-    unknown_controls = [
-        c for c in controls if c not in numeric_controls + categorical_controls
-    ]
-    if unknown_controls:
-        msg = f"Controls with unsupported types: {unknown_controls}"
-        raise TypeError(msg)
-
-    control_aliases: list[str] = []
-    new_columns = []
-
-    for c in numeric_controls:
-        alias = f"__ctrl_{len(control_aliases)}"
-        new_columns.append(nw.col(c).cast(nw.Float64).alias(alias))
-        control_aliases.append(alias)
-
-    dummy_exprs: list[nw.Expr] = []
-    dummy_aliases: list[str] = []
-    for c in categorical_controls:
-        if c not in profile.categorical_columns:
-            raise TypeError(f"Control '{c}' is not recognized as categorical")
-
-        unique_values = df_prepped.select(c).unique().collect().get_column(c)
-        values = unique_values.to_list()
-        if len(values) <= 1:
-            continue
-        for value in values[1:]:
-            alias = f"__ctrl_{len(control_aliases) + len(dummy_aliases)}"
-            expr = (nw.col(c) == value).cast(nw.Float64).alias(alias)
-            dummy_exprs.append(expr)
-            dummy_aliases.append(alias)
-
-    df_augmented = (
-        df_prepped.with_columns(*new_columns, *dummy_exprs)
-        if (new_columns or dummy_exprs)
-        else df_prepped
-    )
-    control_aliases.extend(dummy_aliases)
-
     agg_exprs = [
         nw.len().alias("__count"),
         profile.x_col.mean().alias(profile.x_name),
         profile.y_col.sum().alias("__sum_y"),
+        *[nw.col(c).sum().alias(c) for c in profile.regression_features],
     ]
-    agg_exprs.extend(nw.col(alias).sum().alias(alias) for alias in control_aliases)
 
     per_bin = (
-        df_augmented.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
+        df_prepped.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
     ).collect()
 
     counts = per_bin.get_column("__count").to_numpy()
@@ -338,43 +179,51 @@ def partial_out_controls(
         msg = "Quantiles are not unique. Decrease number of bins."
         raise ValueError(msg)
     sum_y = per_bin.get_column("__sum_y").to_numpy()
-    if control_aliases:
+    if profile.regression_features:
         bin_control_sums = np.column_stack(
-            [per_bin.get_column(alias).to_numpy() for alias in control_aliases]
+            [
+                per_bin.get_column(alias).to_numpy()
+                for alias in profile.regression_features
+            ]
         )
-    else:
+    else:  # This should never happen
         bin_control_sums = np.zeros((profile.num_bins, 0))
 
     total_exprs = [nw.len().alias("__total_count")]
     total_exprs.extend(
         nw.col(alias).sum().alias(f"__total_ctrl_{idx}")
-        for idx, alias in enumerate(control_aliases)
+        for idx, alias in enumerate(profile.regression_features)
     )
     total_exprs.extend(
         (nw.col(alias) * profile.y_col).sum().alias(f"__wy_{idx}")
-        for idx, alias in enumerate(control_aliases)
+        for idx, alias in enumerate(profile.regression_features)
     )
-    for i, alias_i in enumerate(control_aliases):
-        for j, alias_j in enumerate(control_aliases[i:], start=i):
+    for i, alias_i in enumerate(profile.regression_features):
+        for j, alias_j in enumerate(profile.regression_features[i:], start=i):
             total_exprs.append(
                 (nw.col(alias_i) * nw.col(alias_j)).sum().alias(f"__ww_{i}_{j}")
             )
 
-    totals = df_augmented.select(*total_exprs).collect()
+    totals = df_prepped.select(*total_exprs).collect()
     total_count = totals.item(0, "__total_count")
-    if control_aliases:
+    if profile.regression_features:
         total_ctrl_sums = np.array(
             [
                 totals.item(0, f"__total_ctrl_{idx}")
-                for idx in range(len(control_aliases))
+                for idx in range(len(profile.regression_features))
             ]
         )
         wy = np.array(
-            [totals.item(0, f"__wy_{idx}") for idx in range(len(control_aliases))]
+            [
+                totals.item(0, f"__wy_{idx}")
+                for idx in range(len(profile.regression_features))
+            ]
         )
-        ww = np.zeros((len(control_aliases), len(control_aliases)))
-        for i in range(len(control_aliases)):
-            for j in range(i, len(control_aliases)):
+        ww = np.zeros(
+            (len(profile.regression_features), len(profile.regression_features))
+        )
+        for i in range(len(profile.regression_features)):
+            for j in range(i, len(profile.regression_features)):
                 alias = f"__ww_{i}_{j}"
                 value = totals.item(0, alias)
                 ww[i, j] = value
@@ -386,7 +235,7 @@ def partial_out_controls(
 
     # Assemble normal equations
     num_bins = profile.num_bins
-    k = len(control_aliases)
+    k = len(profile.regression_features)
     size = num_bins + k
     XTX = np.zeros((size, size))
     XTy = np.zeros(size)
@@ -422,15 +271,18 @@ def partial_out_controls(
 
 
 def make_plot_plotly(
-    df_prepped: nw.LazyFrame, profile: Profile, kwargs_binscatter: dict[str, Any]
+    df_plotting: nw.LazyFrame, profile: Profile, kwargs_binscatter: dict[str, Any]
 ) -> go.Figure:
     """Make plot from prepared dataframe.
 
     Args:
       df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile"""
-    data = df_prepped.select(profile.x_name, profile.y_name).collect()
+    data = df_plotting.select(profile.x_name, profile.y_name).collect()
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
+
+    x_min = data.get_column(profile.x_name).min()
+    x_max = data.get_column(profile.x_name).max()
 
     x = data.get_column(profile.x_name).to_list()
     if len(set(x)) < profile.num_bins:
@@ -438,8 +290,8 @@ def make_plot_plotly(
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
 
-    pad = (profile.x_bounds[1] - profile.x_bounds[0]) * 0.04
-    padded_range_x = (profile.x_bounds[0] - pad, profile.x_bounds[1] + pad)
+    pad = (x_max - x_min) * 0.04
+    padded_range_x = (x_min - pad, x_max + pad)
     scatter_args = {
         "x": x,
         "y": y,
@@ -482,7 +334,7 @@ def _remove_bad_values(
     return df.filter(~final_bad_condition)
 
 
-def get_columns(
+def split_columns(
     frame: nw.LazyFrame | nw.DataFrame,
 ) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
     """Return tuples of numeric and categorical column names for a narwhals frame."""
@@ -514,6 +366,7 @@ def get_columns(
     numeric_cols = _safe_columns(frame.select(ncs.numeric()))
     frame_columns = tuple(frame.columns)
     categorical_cols = tuple(col for col in frame_columns if col not in numeric_cols)
+
     return numeric_cols, categorical_cols
 
 
@@ -566,6 +419,7 @@ def _make_probs(num_bins) -> List[float]:
 
 
 def configure_quantile_handler(profile: Profile) -> Callable:
+    """Return a backend-specific function that assigns quantile bins."""
     probs = _make_probs(profile.num_bins)
 
     def add_fallback(df: nw.LazyFrame):
@@ -603,7 +457,6 @@ def configure_quantile_handler(profile: Profile) -> Callable:
         bins = (float("-Inf"), *quantiles, float("Inf"))
         logger.debug("bins: %s", bins)
         logger.debug("quantiles: %s", quantiles)
-        logger.debug("bounds: %s", profile.x_bounds)
 
         buckets = cut(
             df_native[profile.x_name],
@@ -741,3 +594,152 @@ def _compute_quantiles(
         .with_row_index(bin_name, order_by="quantile")
         .lazy()
     )
+
+
+def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
+    if not controls:
+        return ()
+    if isinstance(controls, str):
+        return (controls,)
+
+    try:
+        controls = tuple(controls)
+    except Exception as e:
+        raise ValueError(
+            "Failed to cast controls to tuple: check that controls is iterable of strings"
+        ) from e
+    if not all(isinstance(c, str) for c in controls):
+        raise TypeError("controls must contain only strings")
+
+    return controls
+
+
+def clean_df(
+    df_in: IntoDataFrame, controls: Tuple[str, ...], x: str, y: str
+) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
+    """Normalize the input dataframe and split controls by type.
+
+    Returns a lazy narwhals frame containing only the requested columns, whether
+    the original input was lazy, and tuples of numeric / categorical controls.
+    """
+    cols = getattr(df_in, "columns", None)
+    if cols is None or len(cols) <= 1:
+        msg = "Input dataframe must have 'columns' attribute and at least 2 cols"
+        raise TypeError(msg)
+    for c in [x, y, *controls]:
+        if c not in cols:
+            msg = f"{c} not in input dataframe"
+            raise ValueError(msg)
+
+    dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
+
+    if type(dfn) is nw.DataFrame:
+        is_lazy_input = False
+    elif type(dfn) is nw.LazyFrame:
+        is_lazy_input = True
+    else:
+        msg = f"Unexpected narwhals type {(type(dfn))}"
+        raise ValueError(msg)
+
+    logger.debug("Type after calling to native: %s", type(dfn.to_native()))
+    dfl: nw.LazyFrame = dfn.lazy()
+
+    df = dfl.select(x, y, *controls)
+    cols_numeric, cols_cat = split_columns(df)
+    union_cols = set(cols_numeric) | set(cols_cat)
+    missing_controls = [c for c in controls if c not in union_cols]
+    if missing_controls:
+        msg = f"Unknown control columns (neither numeric nor categorical): {missing_controls}"
+        raise TypeError(msg)
+    if x not in cols_numeric:
+        msg = f"x column '{x}' must be numeric"
+        raise TypeError(msg)
+    if y not in cols_numeric:
+        msg = f"y column '{y}' must be numeric"
+        raise TypeError(msg)
+
+    df_filtered = _remove_bad_values(df, cols_numeric, cols_cat)
+
+    numeric_controls = tuple(c for c in controls if c in cols_numeric)
+    categorical_controls = tuple(c for c in controls if c in cols_cat)
+
+    return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
+
+
+def add_bins(df, profile):
+    quantile_handler = configure_quantile_handler(profile)
+    try:
+        df_with_bins = quantile_handler(df)
+    except ValueError as err:
+        err_text = str(err)
+        if (
+            "Quantiles are not unique" in err_text
+            or "Bin edges must be unique" in err_text
+        ):
+            raise ValueError(
+                "Quantiles are not unique. Decrease number of bins."
+            ) from err
+        raise
+
+    return df_with_bins
+
+
+def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
+    df_plotting: nw.LazyFrame = (
+        df.group_by(profile.bin_name)
+        .agg(profile.x_col.mean(), profile.y_col.mean())
+        .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
+    ).lazy()
+
+    return df_plotting
+
+
+def maybe_add_regression_features(
+    df: nw.LazyFrame,
+    numeric_controls: Tuple[str, ...],
+    categorical_controls: Tuple[str, ...],
+) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+    """Inject numeric controls and one-hot categorical controls when requested."""
+    if not numeric_controls and not categorical_controls:
+        return df, ()
+    if numeric_controls and not categorical_controls:
+        return df, numeric_controls
+
+    dummy_exprs: list[nw.Expr] = []
+    dummy_cols: list[str] = []
+    for c in categorical_controls:
+        distinct_values: List[Any] = (
+            df.select(c).unique().collect().get_column(c).sort().to_list()
+        )
+        if len(distinct_values) <= 1:
+            continue
+        for i, v in enumerate(distinct_values[1:]):
+            alias = f"__ctrl_{v}_{i}"
+            expr = (nw.col(c) == v).cast(nw.Float64).alias(alias)
+            dummy_exprs.append(expr)
+            dummy_cols.append(alias)
+
+    if not dummy_exprs:
+        logger.debug("No dummy expressions created, all categorical controls constant")
+        return df, tuple(numeric_controls)
+
+    return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
+
+
+def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDataFrame:
+    """Convert the plotting frame into the native backend expected by the caller."""
+    df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
+    logger.debug(
+        "Type of df_out_nw: %s, implementation: %s",
+        type(df_out_nw),
+        df_out_nw.implementation,
+    )
+
+    if profile.implementation in (
+        Implementation.PYSPARK,
+        Implementation.DUCKDB,
+        Implementation.DASK,
+    ):
+        return df_out_nw.to_native()
+    else:
+        return df_out_nw.collect().to_native()
