@@ -1,17 +1,15 @@
 # Dataframe agnostic binscatter plots
 
-This package implements binscatter plots following:
-
-> Cattaneo, Crump, Farrell and Feng (2024)  
-> "On Binscatter"  
-> American Economic Review, 114(5), pp. 1488-1514  
-> [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
+**TL;DR:** Fast binscatter plots for all kinds of dataframes.
 
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
   - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
 - Lightweight - little dependencies
+- Just works: by default picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024) - no manual tuning
+- Efficiently avoids materializing large intermediate datasets
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
+
 
 ## Installation
 
@@ -23,11 +21,11 @@ pip install binscatter
 
 ## Example
 
-We made this noisy scatterplot:
+Lets say we made this noisy scatterplot:
 
-![Noisy scatterplot](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/scatter.png)
+![Noisy scatterplot](/images/readme/scatter.png)
 
-This is how we make a nice binscatter plot, controlling for a set of features:
+This is how we make a nice binscatter plot instead, controlling for a set of features:
 
 ```python
 from binscatter import binscatter
@@ -44,17 +42,20 @@ binscatter(
         "statenum",
         "year",
     ],
-    num_bins=35,
+    # num_bins="rule-of-thumb",  # optional: let the selector choose the bin count
+    # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
 )
 ```
 
-![Binscatter with controls (35 bins)](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png)
+![Binscatter](/images/readme/binscatter_controls.png)
 
-Set `num_bins="rule-of-thumb"` to let the library pick the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). The current implementation follows the paper's baseline (piecewise constants with evenly spaced knots) and runs entirely through backend-agnostic summary statistics, so large datasets do not need to be materialized.
+This package implements binscatter plots following:
 
-The data originates from:
+- Cattaneo, Matias D.; Crump, Richard K.; Farrell, Max H.; Feng, Yingjie (2024), “On Binscatter,” *American Economic Review*, 114(5), 1488–1514. [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
 
-Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie, 2021, "Replication Data for: 'Taxation and Innovation in the 20th Century'", https://doi.org/10.7910/DVN/SR410I, Harvard Dataverse, V1
+Data for the example originates from:
+
+- Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie (2021), “Replication Data for: ‘Taxation and Innovation in the 20th Century’,” *Harvard Dataverse*, V1. [DOI: 10.7910/DVN/SR410I](https://doi.org/10.7910/DVN/SR410I)
 
 ## Tests
 
