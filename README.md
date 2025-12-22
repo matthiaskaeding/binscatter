@@ -1,6 +1,6 @@
 # Dataframe agnostic binscatter plots
 
-**TL;DR:** Fast binscatter plots for all kinds of dataframes. 
+**TL;DR:** Fast binscatter plots for all kinds of dataframes.
 
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
   - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
@@ -10,12 +10,6 @@
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
-This package implements binscatter plots following:
-
-> Cattaneo, Crump, Farrell and Feng (2024)  
-> "On Binscatter"  
-> American Economic Review, 114(5), pp. 1488-1514  
-> [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
 
 ## Installation
 
@@ -53,9 +47,15 @@ binscatter(
 
 ![Binscatter](/images/readme/binscatter_controls.png)
 
-The data originates from:
+Set `nbins` to manually control the number of bins, or leave it out to use the default rule-of-thumb selector. Set return_type to "native" to get the binned dataframe back instead of the plot.
 
-Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie, 2021, "Replication Data for: 'Taxation and Innovation in the 20th Century'", https://doi.org/10.7910/DVN/SR410I, Harvard Dataverse, V1
+This package implements binscatter plots following:
+
+- Cattaneo, Matias D.; Crump, Richard K.; Farrell, Max H.; Feng, Yingjie (2024), “On Binscatter,” *American Economic Review*, 114(5), 1488–1514. [DOI: 10.1257/aer.20221576](https://doi.org/10.1257/aer.20221576)
+
+Data for the example originates from:
+
+- Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie (2021), “Replication Data for: ‘Taxation and Innovation in the 20th Century’,” *Harvard Dataverse*, V1. [DOI: 10.7910/DVN/SR410I](https://doi.org/10.7910/DVN/SR410I)
 
 ## Tests
 
