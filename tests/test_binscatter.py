@@ -3,6 +3,7 @@ from typing import Iterable
 
 import polars as pl
 import numpy as np
+from binsreg import binsregselect
 from binscatter.core import (
     binscatter,
     clean_df,
@@ -10,6 +11,7 @@ from binscatter.core import (
     maybe_add_regression_features,
     partial_out_controls,
     Profile,
+    _select_rule_of_thumb_bins,
 )
 import plotly.graph_objs as go
 import duckdb
@@ -148,6 +150,29 @@ def conv(df: pd.DataFrame, df_type):
     return convert_to_backend(df, df_type)
 
 
+def _get_rot_bins(
+    df,
+    x: str,
+    y: str,
+    controls: Iterable[str] | None = None,
+) -> int:
+    controls_tuple = tuple(controls or ())
+    df_clean, _, numeric_controls, categorical_controls = clean_df(
+        df,
+        controls_tuple,
+        x,
+        y,
+    )
+    df_with_features, regression_features = maybe_add_regression_features(
+        df_clean,
+        numeric_controls=numeric_controls,
+        categorical_controls=categorical_controls,
+    )
+    return _select_rule_of_thumb_bins(
+        df_with_features, x, y, regression_features
+    )
+
+
 @pytest.mark.parametrize(
     "df_fixture,expect_error,df_type",
     fix_data_types,
@@ -224,6 +249,61 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         np.testing.assert_allclose(
             lhs["y0"].to_numpy(), rhs["y0"].to_numpy(), rtol=rtol, atol=atol
         )
+
+
+def test_rule_of_thumb_matches_helper(df_good):
+    expected_bins = _get_rot_bins(df_good, "x0", "y0")
+    native = binscatter(
+        df_good, "x0", "y0", num_bins="rule-of-thumb", return_type="native"
+    )
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == expected_bins
+
+
+def test_rule_of_thumb_with_controls(df_good):
+    df = df_good.copy()
+    df["z_num"] = df["x0"] * 0.5
+    df["z_cat"] = np.where(df["x0"] % 2 == 0, "even", "odd")
+    expected_bins = _get_rot_bins(df, "x0", "y0", controls=["z_num", "z_cat"])
+    native = binscatter(
+        df,
+        "x0",
+        "y0",
+        controls=["z_num", "z_cat"],
+        num_bins="rule-of-thumb",
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == expected_bins
+
+
+def test_rule_of_thumb_similar_to_binsreg_no_controls():
+    rng = np.random.default_rng(0)
+    n = 5000
+    x = rng.normal(size=n)
+    y = 2.0 * x + rng.normal(size=n)
+    df = pd.DataFrame({"x0": x, "y0": y})
+    ours = _get_rot_bins(df, "x0", "y0")
+    theirs = binsregselect(y, x).nbinsrot_regul
+    assert abs(ours - int(theirs)) <= 5
+
+
+def test_rule_of_thumb_similar_to_binsreg_with_controls():
+    rng = np.random.default_rng(1)
+    n = 3500
+    x = rng.normal(size=n)
+    w1 = rng.normal(scale=0.5, size=n)
+    w2 = rng.uniform(-1, 1, size=n)
+    y = 2.5 * x - 1.1 * w1 + 0.8 * w2 + rng.normal(scale=0.75, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "w1": w1, "w2": w2})
+    ours = _get_rot_bins(df, "x0", "y0", controls=["w1", "w2"])
+    theirs = binsregselect(y, x, w=df[["w1", "w2"]].to_numpy()).nbinsrot_regul
+    assert abs(ours - int(theirs)) <= 6
+
+
+def test_binscatter_rejects_unknown_num_bins_string(df_good):
+    with pytest.raises(ValueError):
+        binscatter(df_good, "x0", "y0", num_bins="unknown-option")
 
 
 def _manual_binscatter_with_controls(
