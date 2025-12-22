@@ -25,7 +25,7 @@ pip install binscatter
 
 We made this noisy scatterplot:
 
-![Noisy scatterplot](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/scatter.png)
+![Noisy scatterplot](images/readme/scatter.png)
 
 This is how we make a nice binscatter plot, controlling for a set of features:
 
@@ -44,13 +44,11 @@ binscatter(
         "statenum",
         "year",
     ],
-    num_bins=35,
 )
 ```
 
-![Binscatter with controls (35 bins)](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png)
-
-Set `num_bins="rule-of-thumb"` to let the library pick the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). The current implementation follows the paper's baseline (piecewise constants with evenly spaced knots) and runs entirely through backend-agnostic summary statistics, so large datasets do not need to be materialized.
+![Binscatter](/images/readme/binscatter_controls.png)
+By default ``binscatter``picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). The current implementation follows the paper's baseline (piecewise constants with evenly spaced knots) and runs entirely through backend-agnostic summary statistics, so large datasets do not need to be materialized.
 
 The data originates from:
 
