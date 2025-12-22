@@ -1,4 +1,3 @@
-from pandas.tests.indexing.multiindex.test_indexing_slow import cols
 import logging
 import operator
 import uuid
