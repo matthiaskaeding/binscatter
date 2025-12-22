@@ -64,17 +64,16 @@ def binscatter(
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
 
     Args:
-        df (IntoDataFrame): Input dataframe - must be a type supported by narwhals
-        x (str): Name of x column
-        y (str): Name y column
-        controls Iterable[str] | str | None : Names of control variable, or name of single control variable. These are partialled out
-            following Cattaneo et al. (2024).
-        num_bins (int, optional): Number of bins to use. Defaults to 20
-        return_type (str): Return type. Default "plotly" gives a plotly plot, "native" gives a dataframe that matches input type.
-        kwargs_binscatter (dict, optional): Additional arguments used in plotly.express.scatter to make the binscatter plot.
+        df: Any dataframe supported by narwhals.
+        x: Name of the x column.
+        y: Name of the y column.
+        controls: Optional control columns to partial out (either a string or iterable of strings).
+        num_bins: Number of quantile bins to form.
+        return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
+        kwargs_binscatter: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
-        plotly plot (default) if return_type == "plotly". Otherwise native dataframe, depending on input.
+        A Plotly figure or native dataframe, depending on ``return_type``.
     """
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
@@ -420,6 +419,7 @@ def _make_probs(num_bins) -> List[float]:
 
 
 def configure_quantile_handler(profile: Profile) -> Callable:
+    """Return a backend-specific function that assigns quantile bins."""
     probs = _make_probs(profile.num_bins)
 
     def add_fallback(df: nw.LazyFrame):
@@ -617,6 +617,11 @@ def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
 def clean_df(
     df_in: IntoDataFrame, controls: Tuple[str, ...], x: str, y: str
 ) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
+    """Normalize the input dataframe and split controls by type.
+
+    Returns a lazy narwhals frame containing only the requested columns, whether
+    the original input was lazy, and tuples of numeric / categorical controls.
+    """
     cols = getattr(df_in, "columns", None)
     if cols is None or len(cols) <= 1:
         msg = "Input dataframe must have 'columns' attribute and at least 2 cols"
@@ -694,13 +699,7 @@ def maybe_add_regression_features(
     numeric_controls: Tuple[str, ...],
     categorical_controls: Tuple[str, ...],
 ) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
-    """Adds regression features to dataframe if needed.
-
-    Args:
-        df: Input dataframe
-        numeric_columns: List of numeric columns
-        categorical_columns: List of categorical columns
-    """
+    """Inject numeric controls and one-hot categorical controls when requested."""
     if not numeric_controls and not categorical_controls:
         return df, ()
     if numeric_controls and not categorical_controls:
@@ -728,6 +727,7 @@ def maybe_add_regression_features(
 
 
 def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDataFrame:
+    """Convert the plotting frame into the native backend expected by the caller."""
     df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
     logger.debug(
         "Type of df_out_nw: %s, implementation: %s",
