@@ -13,10 +13,12 @@ import duckdb
 import dask.dataframe as dd
 import pytest
 
-try:  # pragma: no cover - optional dependency
-    from pyspark.sql import SparkSession
-except ImportError:  # pragma: no cover - optional dependency
-    SparkSession = None
+from tests.conftest import (
+    DF_BACKENDS,
+    convert_to_backend,
+    to_pandas_native,
+    SparkSession,
+)
 
 
 def test_filter_all_numeric_basic():
@@ -93,6 +95,37 @@ def _sample_profile(bin_count: int, controls: list[str]) -> Profile:
         ).implementation,
         regression_features=tuple(controls),
     )
+
+
+def _assert_remove_bad_values_backend(backend: str):
+    df = pd.DataFrame(
+        {
+            "x": [1.0, np.nan, np.inf, 4.0],
+            "y": [2.0, 3.0, 4.0, None],
+            "cat": ["a", "b", "c", None],
+        }
+    )
+    native = convert_to_backend(df, backend)
+    frame = nw.from_native(native)
+    lazy = frame.lazy() if isinstance(frame, nw.DataFrame) else frame
+    cols_numeric, cols_cat = split_columns(lazy)
+    cleaned = _remove_bad_values(lazy, cols_numeric, cols_cat)
+    result_native = cleaned.collect().to_native()
+    pdf = to_pandas_native(result_native)
+    assert len(pdf) == 1
+    assert pdf["x"].iloc[0] == 1.0
+
+
+@pytest.mark.parametrize("backend", [b for b in DF_BACKENDS if b != "pyspark"])
+def test_remove_bad_values_all_backends(backend):
+    _assert_remove_bad_values_backend(backend)
+
+
+@pytest.mark.pyspark
+def test_remove_bad_values_pyspark():
+    if SparkSession is None:
+        pytest.skip("PySpark not installed")
+    _assert_remove_bad_values_backend("pyspark")
 
 
 def test_partial_out_controls_matches_closed_form():

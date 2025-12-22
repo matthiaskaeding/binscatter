@@ -18,11 +18,16 @@ import pandas as pd
 import dask.dataframe as dd
 import statsmodels.api as sm
 
-try:  # pragma: no cover - optional dependency
-    from pyspark.sql import SparkSession
+from tests.conftest import (
+    DF_BACKENDS,
+    convert_to_backend,
+    to_pandas_native,
+    SparkSession,
+)
+
+if SparkSession is not None:  # pragma: no cover - optional dependency
     import pyspark
-except ImportError:  # pragma: no cover - optional dependency
-    SparkSession = None
+else:  # pragma: no cover - optional dependency
     pyspark = None
 
 RNG = np.random.default_rng(42)
@@ -122,8 +127,8 @@ fixt_dat = [
     ("df_duplicates", True),
 ]
 
-BASE_DF_TYPES = ["pandas", "polars", "duckdb", "dask"]
-HAS_PYSPARK = SparkSession is not None
+BASE_DF_TYPES = [name for name in DF_BACKENDS if name != "pyspark"]
+HAS_PYSPARK = "pyspark" in DF_BACKENDS
 
 DF_TYPE_PARAMS = [pytest.param(df_type) for df_type in BASE_DF_TYPES]
 if HAS_PYSPARK:
@@ -140,20 +145,7 @@ if HAS_PYSPARK:
 
 
 def conv(df: pd.DataFrame, df_type):
-    match df_type:
-        case "pandas":
-            return df
-        case "polars":
-            return pl.from_pandas(df)
-        case "duckdb":
-            return duckdb.from_df(df)
-        case "pyspark":
-            if SparkSession is None:
-                pytest.skip("PySpark not available")
-            spark = SparkSession.builder.getOrCreate()
-            return spark.createDataFrame(df)
-        case "dask":
-            return dd.from_pandas(df, npartitions=2)
+    return convert_to_backend(df, df_type)
 
 
 @pytest.mark.parametrize(
@@ -289,23 +281,9 @@ def _manual_binscatter_with_controls(
     return x_means, fitted
 
 
-def _to_pandas(df_native):
-    if isinstance(df_native, pd.DataFrame):
-        return df_native
-    if hasattr(df_native, "to_pandas"):
-        return df_native.to_pandas()
-    if hasattr(df_native, "df"):
-        return df_native.df()
-    if isinstance(df_native, dd.DataFrame):
-        return df_native.compute()
-    if pyspark is not None and isinstance(df_native, pyspark.sql.DataFrame):
-        return df_native.toPandas()
-    raise TypeError(f"Unsupported dataframe type: {type(df_native)}")
-
-
 def _collect_lazyframe_to_pandas(frame):
     """Helper to collect a narwhals LazyFrame into a pandas DataFrame."""
-    return _to_pandas(frame.collect().to_native())
+    return to_pandas_native(frame.collect().to_native())
 
 
 def test_binscatter_controls_matches_reference():
@@ -326,7 +304,7 @@ def test_binscatter_controls_matches_reference():
         num_bins=num_bins,
         return_type="native",
     )
-    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
     if df_type in ("dask", "pyspark"):
         rtol_y, atol_y = 5e-3, 2e-1
     else:
@@ -355,7 +333,7 @@ def test_binscatter_controls_lazy_polars():
         num_bins=num_bins,
         return_type="native",
     )
-    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
     if df_type in ("dask", "pyspark"):
         rtol_x, atol_x = 1e-3, 1e-1
         rtol_y, atol_y = 5e-3, 2e-1
@@ -400,7 +378,7 @@ def test_binscatter_controls_across_backends(df_type):
         num_bins=num_bins,
         return_type="native",
     )
-    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
     if df_type in ("dask", "pyspark"):
         rtol_y, atol_y = 5e-3, 2e-1
     else:
@@ -434,7 +412,7 @@ def test_binscatter_categorical_controls_only():
         num_bins=num_bins,
         return_type="native",
     )
-    result_pd = _to_pandas(result).sort_values("bin").reset_index(drop=True)
+    result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
     np.testing.assert_allclose(
         result_pd["x0"].to_numpy(), expected_x, rtol=1e-6, atol=1e-6
     )
