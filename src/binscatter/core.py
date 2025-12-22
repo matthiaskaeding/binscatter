@@ -95,8 +95,8 @@ def binscatter(
     )
     df_prepped, regression_features = maybe_add_regression_features(
         df,
-        numeric_columns=numeric_columns,
-        categorical_columns=categorical_columns,
+        numeric_controls=numeric_columns,
+        categorical_controls=categorical_columns,
     )
 
     distinct_suffix = str(uuid.uuid4()).replace("-", "_")
@@ -111,15 +111,14 @@ def binscatter(
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
     )
-    # Currently there are 2 cases:
-    # (1) no controls: the easy one, just compute the means by bin
-    # (2) controls: here we need to compute regression coefficients
-    # and partial out the effect of the controls
-    # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
-    if controls:
-        df_plotting, _ = partial_out_controls(df_prepped, profile)
-    else:
+    if not controls:
+        # The easy one, just compute the means by bin
         df_plotting = compute_bin_means(df_prepped, profile)
+    else:
+        # Compute regression coefficients
+        # and partial out the effect of the controls
+        # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
+        df_plotting, _ = partial_out_controls(df_prepped, profile)
 
     match return_type:
         case "plotly":
@@ -127,21 +126,7 @@ def binscatter(
                 df_plotting, profile, kwargs_binscatter=kwargs_binscatter
             )
         case "native":
-            df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
-            logger.debug(
-                "Type of df_out_nw: %s, implementation: %s",
-                type(df_out_nw),
-                df_out_nw.implementation,
-            )
-
-            if profile.implementation in (
-                Implementation.PYSPARK,
-                Implementation.DUCKDB,
-                Implementation.DASK,
-            ):
-                return df_out_nw.to_native()
-            else:
-                return df_out_nw.collect().to_native()
+            return make_native_dataframe(df_plotting, profile)
 
 
 class Profile(NamedTuple):
@@ -165,124 +150,20 @@ class Profile(NamedTuple):
         return nw.col(self.y_name)
 
 
-def make_profile(
-    controls: Iterable[str] | str | None = None,
-    num_bins: int = 20,
-) -> Tuple[nw.LazyFrame, Profile]:
-    """Prepares the input data and derives profile.
-
-    Args:
-        df: Input dataframe.
-        x_name: name of x col
-        y_name: name of y col
-        controls: Iterable of control vars
-        num_bins: Number of bins to use for binscatter. Must be less than number of rows.
-
-    Returns:
-        tuple: (narwhals.LazyFrame, Profile)
-            - Sorted input dataframe converted to a narwhals LazyFrame
-            - Profile object with metadata about the data
-
-    Raises:
-        AssertionError: If input validation fails
-    """
-
-    # Find name for bins
-    distinct_suffix = str(uuid.uuid4()).replace("-", "_")
-    bin_name = f"bins____{distinct_suffix}"
-
-    # We need the range of x for plotting
-
-    profile = Profile(
-        num_bins=num_bins,
-        x_name=x_name,
-        y_name=y_name,
-        bin_name=bin_name,
-        controls=controls,
-        x_bounds=x_bounds,
-        distinct_suffix=distinct_suffix,
-        is_lazy_input=is_lazy_input,
-        implementation=df_filtered.implementation,
-        numeric_columns=cols_numeric,
-        categorical_columns=cols_cat,
-    )
-    logger.debug("Profile: %s", profile)
-
-    quantile_handler = configure_quantile_handler(profile)
-    try:
-        df_with_bins = quantile_handler(df_filtered)
-    except ValueError as err:
-        err_text = str(err)
-        if (
-            "Quantiles are not unique" in err_text
-            or "Bin edges must be unique" in err_text
-        ):
-            raise ValueError(
-                "Quantiles are not unique. Decrease number of bins."
-            ) from err
-        raise
-
-    return df_with_bins.lazy(), profile
-
-
 def partial_out_controls(
     df_prepped: nw.LazyFrame, profile: Profile
 ) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
 
-    controls = profile.controls
-    if not controls:
-        raise ValueError("Controls must be provided for partial_out_controls")
-
-    numeric_controls = [c for c in controls if c in profile.numeric_columns]
-    categorical_controls = [c for c in controls if c in profile.categorical_columns]
-    unknown_controls = [
-        c for c in controls if c not in numeric_controls + categorical_controls
-    ]
-    if unknown_controls:
-        msg = f"Controls with unsupported types: {unknown_controls}"
-        raise TypeError(msg)
-
-    control_aliases: list[str] = []
-    new_columns = []
-
-    for c in numeric_controls:
-        alias = f"__ctrl_{len(control_aliases)}"
-        new_columns.append(nw.col(c).cast(nw.Float64).alias(alias))
-        control_aliases.append(alias)
-
-    dummy_exprs: list[nw.Expr] = []
-    dummy_aliases: list[str] = []
-    for c in categorical_controls:
-        if c not in profile.categorical_columns:
-            raise TypeError(f"Control '{c}' is not recognized as categorical")
-
-        unique_values = df_prepped.select(c).unique().collect().get_column(c)
-        values = unique_values.to_list()
-        if len(values) <= 1:
-            continue
-        for value in values[1:]:
-            alias = f"__ctrl_{len(control_aliases) + len(dummy_aliases)}"
-            expr = (nw.col(c) == value).cast(nw.Float64).alias(alias)
-            dummy_exprs.append(expr)
-            dummy_aliases.append(alias)
-
-    df_augmented = (
-        df_prepped.with_columns(*new_columns, *dummy_exprs)
-        if (new_columns or dummy_exprs)
-        else df_prepped
-    )
-    control_aliases.extend(dummy_aliases)
-
     agg_exprs = [
         nw.len().alias("__count"),
         profile.x_col.mean().alias(profile.x_name),
         profile.y_col.sum().alias("__sum_y"),
+        *[nw.col(c).sum().alias(c) for c in profile.regression_features],
     ]
-    agg_exprs.extend(nw.col(alias).sum().alias(alias) for alias in control_aliases)
 
     per_bin = (
-        df_augmented.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
+        df_prepped.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
     ).collect()
 
     counts = per_bin.get_column("__count").to_numpy()
@@ -290,43 +171,51 @@ def partial_out_controls(
         msg = "Quantiles are not unique. Decrease number of bins."
         raise ValueError(msg)
     sum_y = per_bin.get_column("__sum_y").to_numpy()
-    if control_aliases:
+    if profile.regression_features:
         bin_control_sums = np.column_stack(
-            [per_bin.get_column(alias).to_numpy() for alias in control_aliases]
+            [
+                per_bin.get_column(alias).to_numpy()
+                for alias in profile.regression_features
+            ]
         )
-    else:
+    else:  # This should never happen
         bin_control_sums = np.zeros((profile.num_bins, 0))
 
     total_exprs = [nw.len().alias("__total_count")]
     total_exprs.extend(
         nw.col(alias).sum().alias(f"__total_ctrl_{idx}")
-        for idx, alias in enumerate(control_aliases)
+        for idx, alias in enumerate(profile.regression_features)
     )
     total_exprs.extend(
         (nw.col(alias) * profile.y_col).sum().alias(f"__wy_{idx}")
-        for idx, alias in enumerate(control_aliases)
+        for idx, alias in enumerate(profile.regression_features)
     )
-    for i, alias_i in enumerate(control_aliases):
-        for j, alias_j in enumerate(control_aliases[i:], start=i):
+    for i, alias_i in enumerate(profile.regression_features):
+        for j, alias_j in enumerate(profile.regression_features[i:], start=i):
             total_exprs.append(
                 (nw.col(alias_i) * nw.col(alias_j)).sum().alias(f"__ww_{i}_{j}")
             )
 
-    totals = df_augmented.select(*total_exprs).collect()
+    totals = df_prepped.select(*total_exprs).collect()
     total_count = totals.item(0, "__total_count")
-    if control_aliases:
+    if profile.regression_features:
         total_ctrl_sums = np.array(
             [
                 totals.item(0, f"__total_ctrl_{idx}")
-                for idx in range(len(control_aliases))
+                for idx in range(len(profile.regression_features))
             ]
         )
         wy = np.array(
-            [totals.item(0, f"__wy_{idx}") for idx in range(len(control_aliases))]
+            [
+                totals.item(0, f"__wy_{idx}")
+                for idx in range(len(profile.regression_features))
+            ]
         )
-        ww = np.zeros((len(control_aliases), len(control_aliases)))
-        for i in range(len(control_aliases)):
-            for j in range(i, len(control_aliases)):
+        ww = np.zeros(
+            (len(profile.regression_features), len(profile.regression_features))
+        )
+        for i in range(len(profile.regression_features)):
+            for j in range(i, len(profile.regression_features)):
                 alias = f"__ww_{i}_{j}"
                 value = totals.item(0, alias)
                 ww[i, j] = value
@@ -338,7 +227,7 @@ def partial_out_controls(
 
     # Assemble normal equations
     num_bins = profile.num_bins
-    k = len(control_aliases)
+    k = len(profile.regression_features)
     size = num_bins + k
     XTX = np.zeros((size, size))
     XTy = np.zeros(size)
@@ -374,13 +263,13 @@ def partial_out_controls(
 
 
 def make_plot_plotly(
-    df_prepped: nw.LazyFrame, profile: Profile, kwargs_binscatter: dict[str, Any]
+    df_plotting: nw.LazyFrame, profile: Profile, kwargs_binscatter: dict[str, Any]
 ) -> go.Figure:
     """Make plot from prepared dataframe.
 
     Args:
       df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile"""
-    data = df_prepped.select(profile.x_name, profile.y_name).collect()
+    data = df_plotting.select(profile.x_name, profile.y_name).collect()
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
 
@@ -558,7 +447,6 @@ def configure_quantile_handler(profile: Profile) -> Callable:
         bins = (float("-Inf"), *quantiles, float("Inf"))
         logger.debug("bins: %s", bins)
         logger.debug("quantiles: %s", quantiles)
-        logger.debug("bounds: %s", profile.x_bounds)
 
         buckets = cut(
             df_native[profile.x_name],
@@ -779,8 +667,8 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
 
 def maybe_add_regression_features(
     df: nw.LazyFrame,
-    numeric_columns: Tuple[str],
-    categorical_columns: Tuple[str],
+    numeric_controls: Tuple[str, ...],
+    categorical_controls: Tuple[str, ...],
 ) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
     """Adds regression features to dataframe if needed.
 
@@ -789,7 +677,45 @@ def maybe_add_regression_features(
         numeric_columns: List of numeric columns
         categorical_columns: List of categorical columns
     """
-    if not numeric_columns and not categorical_columns:
+    if not numeric_controls and not categorical_controls:
         return df, ()
-    if numeric_columns and not categorical_columns:
-        return df, numeric_columns
+    if numeric_controls and not categorical_controls:
+        return df, numeric_controls
+
+    dummy_exprs: list[nw.Expr] = []
+    dummy_cols: list[str] = []
+    for c in categorical_controls:
+        distinct_values: List[Any] = (
+            df.select(c).unique().collect().get_column(c).sort().to_list()
+        )
+        if len(distinct_values) <= 1:
+            continue
+        for i, v in enumerate(distinct_values[1:]):
+            alias = f"__ctrl_{v}_{i}"
+            expr = (nw.col(c) == v).cast(nw.Float64).alias(alias)
+            dummy_exprs.append(expr)
+            dummy_cols.append(alias)
+
+    if not dummy_exprs:
+        logger.debug("No dummy expressions created, all categorical controls constant")
+        return df, tuple(numeric_controls)
+
+    return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
+
+
+def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDataFrame:
+    df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
+    logger.debug(
+        "Type of df_out_nw: %s, implementation: %s",
+        type(df_out_nw),
+        df_out_nw.implementation,
+    )
+
+    if profile.implementation in (
+        Implementation.PYSPARK,
+        Implementation.DUCKDB,
+        Implementation.DASK,
+    ):
+        return df_out_nw.to_native()
+    else:
+        return df_out_nw.collect().to_native()
