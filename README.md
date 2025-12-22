@@ -23,11 +23,11 @@ pip install binscatter
 
 ## Example
 
-We made this noisy scatterplot:
+Lets say we made this noisy scatterplot:
 
 ![Noisy scatterplot](/images/readme/scatter.png)
 
-This is how we make a nice binscatter plot, controlling for a set of features:
+This is how we make a nice binscatter plot instead, controlling for a set of features:
 
 ```python
 from binscatter import binscatter
