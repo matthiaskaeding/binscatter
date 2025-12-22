@@ -1,8 +1,17 @@
+import uuid
 from typing import Iterable
 
 import polars as pl
 import numpy as np
-from binscatter.core import binscatter, prep, partial_out_controls
+import narwhals as nw
+from binscatter.core import (
+    binscatter,
+    clean_df,
+    configure_quantile_handler,
+    maybe_add_regression_features,
+    partial_out_controls,
+    Profile,
+)
 import plotly.graph_objs as go
 import duckdb
 import pytest
@@ -18,6 +27,31 @@ except ImportError:  # pragma: no cover - optional dependency
     pyspark = None
 
 RNG = np.random.default_rng(42)
+
+
+def _prepare_dataframe(df, x, y, controls, num_bins):
+    controls_tuple = tuple(controls)
+    df_clean, is_lazy, numeric_controls, categorical_controls = clean_df(
+        df, controls_tuple, x, y
+    )
+    df_with_features, regression_features = maybe_add_regression_features(
+        df_clean,
+        numeric_controls=numeric_controls,
+        categorical_controls=categorical_controls,
+    )
+    suffix = str(uuid.uuid4()).replace("-", "_")
+    profile = Profile(
+        x_name=x,
+        y_name=y,
+        num_bins=num_bins,
+        bin_name=f"bin__{suffix}",
+        distinct_suffix=suffix,
+        is_lazy_input=is_lazy,
+        implementation=df_clean.implementation,
+        regression_features=regression_features,
+    )
+    df_with_bins = configure_quantile_handler(profile)(df_with_features)
+    return df_with_bins, profile
 
 
 def quantile_bins(x, n_bins=10):
@@ -418,7 +452,7 @@ def test_binscatter_controls_collapsed_bins_error():
             "z": np.linspace(-1.0, 1.0, num=50),
         }
     )
-    with pytest.raises(ValueError, match="Quantiles are not unique"):
+    with pytest.raises(ValueError, match="Quantiles are not unique|Bin edges must be unique"):
         binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
 
 
@@ -448,12 +482,8 @@ def test_partial_out_controls_matches_statsmodels():
         }
     )
     num_bins = 12
-    df_prepped, profile = prep(
-        df,
-        "x0",
-        "y0",
-        controls=["z_num", "region", "campaign"],
-        num_bins=num_bins,
+    df_prepped, profile = _prepare_dataframe(
+        df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
     )
     df_with_bins = _collect_lazyframe_to_pandas(df_prepped)
     df_result, coeffs = partial_out_controls(df_prepped, profile)
