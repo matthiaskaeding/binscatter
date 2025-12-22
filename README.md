@@ -42,12 +42,12 @@ binscatter(
         "statenum",
         "year",
     ],
+    # num_bins="rule-of-thumb",  # optional: let the selector choose the bin count
+    # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
 )
 ```
 
 ![Binscatter](/images/readme/binscatter_controls.png)
-
-Set `nbins` to manually control the number of bins, or leave it out to use the default rule-of-thumb selector. Set return_type to "native" to get the binned dataframe back instead of the plot.
 
 This package implements binscatter plots following:
 
