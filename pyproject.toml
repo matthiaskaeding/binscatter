@@ -54,6 +54,7 @@ ci = [
   "sqlframe>=3.39.2",
   "dask>=2025.7.0",
   "statsmodels>=0.14.6",
+  "binsreg==2.1.7",
 ]
 
 
