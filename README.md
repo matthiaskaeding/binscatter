@@ -10,6 +10,7 @@ This package implements binscatter plots following:
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
   - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
 - Lightweight - little dependencies
+- Efficiently avoids materializing large intermediate datasets
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
@@ -49,7 +50,7 @@ binscatter(
 
 ![Binscatter](/images/readme/binscatter_controls.png)
 
-By default ``binscatter``picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). The current implementation follows the paper's baseline (piecewise constants with evenly spaced knots) and runs entirely through backend-agnostic summary statistics, so large datasets do not need to be materialized.
+By default ``binscatter``picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). 
 
 The data originates from:
 
