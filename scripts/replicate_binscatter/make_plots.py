@@ -92,7 +92,7 @@ p_binscatter_controls = binscatter(
         "statenum",
         "year",
     ],
-    num_bins=25,
+    num_bins="rule-of-thumb",
 )
 p_binscatter_controls.show()
 

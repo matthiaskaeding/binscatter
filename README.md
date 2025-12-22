@@ -50,6 +50,8 @@ binscatter(
 
 ![Binscatter with controls (35 bins)](https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png)
 
+Set `num_bins="rule-of-thumb"` to let the library pick the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024). The current implementation follows the paper's baseline (piecewise constants with evenly spaced knots) and runs entirely through backend-agnostic summary statistics, so large datasets do not need to be materialized.
+
 The data originates from:
 
 Akcigit, Ufuk; Grigsby, John; Nicholas, Tom; Stantcheva, Stefanie, 2021, "Replication Data for: 'Taxation and Innovation in the 20th Century'", https://doi.org/10.7910/DVN/SR410I, Harvard Dataverse, V1
