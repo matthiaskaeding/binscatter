@@ -1,4 +1,5 @@
 import logging
+import math
 import operator
 import uuid
 import warnings
@@ -24,6 +25,7 @@ from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
 logger = logging.getLogger(__name__)
+RULE_OF_THUMB = "rule-of-thumb"
 
 
 @overload
@@ -32,7 +34,7 @@ def binscatter(
     x: str,
     y: str,
     controls: Iterable[str] | str | None = None,
-    num_bins=20,
+    num_bins: int | Literal["rule-of-thumb"] = 20,
     return_type: Literal["plotly"] = "plotly",
     plot_args=None,
     **kwargs,
@@ -45,7 +47,7 @@ def binscatter(
     x: str,
     y: str,
     controls: Iterable[str] | str | None = None,
-    num_bins=20,
+    num_bins: int | Literal["rule-of-thumb"] = 20,
     return_type: Literal["native"] = "native",
     **kwargs,
 ) -> object: ...
@@ -57,7 +59,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int = 20,
+    num_bins: int | Literal["rule-of-thumb"] = 20,
     return_type: Literal["plotly", "native"] = "plotly",
     **kwargs_binscatter,
 ) -> object:
@@ -68,7 +70,7 @@ def binscatter(
         x: Name of the x column.
         y: Name of the y column.
         controls: Optional control columns to partial out (either a string or iterable of strings).
-        num_bins: Number of quantile bins to form.
+        num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         kwargs_binscatter: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
@@ -78,8 +80,15 @@ def binscatter(
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
-    if num_bins <= 1:
-        raise ValueError("num_bins must be greater than 1")
+    if isinstance(num_bins, str):
+        auto_bins = num_bins == RULE_OF_THUMB
+        if not auto_bins:
+            msg = f"Unknown num_bins string option: {num_bins}"
+            raise ValueError(msg)
+    else:
+        if num_bins <= 1:
+            raise ValueError("num_bins must be greater than 1")
+        auto_bins = False
     if not isinstance(x, str):
         raise TypeError("x_name must be a string")
     if not isinstance(y, str):
@@ -106,8 +115,15 @@ def binscatter(
         "-", "_"
     )  # "-" in col names can cause issues
     bin_name = f"bins____{distinct_suffix}"
+    if auto_bins:
+        computed_num_bins = _select_rule_of_thumb_bins(
+            df_with_regression_features, x, y, regression_features
+        )
+    else:
+        computed_num_bins = int(num_bins)
+
     profile = Profile(
-        num_bins=num_bins,
+        num_bins=computed_num_bins,
         x_name=x,
         y_name=y,
         bin_name=bin_name,
@@ -681,6 +697,133 @@ def add_bins(df, profile):
         raise
 
     return df_with_bins
+
+
+def _select_rule_of_thumb_bins(
+    df: nw.LazyFrame, x: str, y: str, regression_features: Tuple[str, ...]
+) -> int:
+    """Implement the SA-4.1 rule-of-thumb selector (currently for p=0, v=0)."""
+    data_cols: Tuple[str, ...] = (x, *regression_features)
+    stats = _collect_rule_of_thumb_stats(df, data_cols, y)
+    n_obs = stats.item(0, "__n")
+    if n_obs is None or n_obs <= 1:
+        raise ValueError(
+            "Rule-of-thumb selector needs at least two observations in the design."
+        )
+    n_obs_f = float(n_obs)
+    design_size = len(data_cols) + 1  # add intercept
+    xtx = np.zeros((design_size, design_size), dtype=float)
+    xty = np.zeros(design_size, dtype=float)
+    xty_sq = np.zeros(design_size, dtype=float)
+    column_sums = np.zeros(design_size, dtype=float)
+
+    xtx[0, 0] = n_obs_f
+    column_sums[0] = n_obs_f
+    xty[0] = stats.item(0, "__sum_y")
+    xty_sq[0] = stats.item(0, "__sum_y2")
+
+    # Fill entries that involve actual data columns.
+    for idx, col_name in enumerate(data_cols):
+        alias_sum = f"__sum_{idx}"
+        alias_xty = f"__xty_{idx}"
+        alias_xty2 = f"__xty2_{idx}"
+        col_sum = stats.item(0, alias_sum)
+        column_sums[idx + 1] = col_sum
+        xtx[0, idx + 1] = col_sum
+        xtx[idx + 1, 0] = col_sum
+        xty[idx + 1] = stats.item(0, alias_xty)
+        xty_sq[idx + 1] = stats.item(0, alias_xty2)
+        for jdx in range(idx, len(data_cols)):
+            alias_xtx = f"__xtx_{idx}_{jdx}"
+            value = stats.item(0, alias_xtx)
+            xtx[idx + 1, jdx + 1] = value
+            xtx[jdx + 1, idx + 1] = value
+
+    beta_y = _solve_normal_equations(xtx, xty)
+    beta_y_sq = _solve_normal_equations(xtx, xty_sq)
+
+    # Sample moments of x for the Gaussian reference density.
+    x_sum = column_sums[1]
+    x_sq_sum = xtx[1, 1]
+    mean_x = x_sum / n_obs_f
+    var_x = (x_sq_sum / n_obs_f) - mean_x**2
+    if var_x <= 0:
+        raise ValueError(
+            "Rule-of-thumb selector requires the x column to have positive variance."
+        )
+    std_x = math.sqrt(var_x)
+
+    sum_inv_density = _gaussian_inverse_density_sum(df, x, mean_x, std_x)
+
+    slope = beta_y[1]
+    shifted_legendre_weight = 1.0 / 3.0  # ∫_0^1 B_1(z)^2 dz
+    bias_constant = (slope**2 / n_obs_f) * sum_inv_density * shifted_legendre_weight
+    if bias_constant <= 0 or not math.isfinite(bias_constant):
+        raise ValueError(
+            "Rule-of-thumb selector estimated a non-positive bias constant; "
+            "consider specifying num_bins explicitly."
+        )
+
+    sum_pred_y_sq = float(column_sums @ beta_y_sq)
+    quad_form = float(beta_y.T @ xtx @ beta_y)
+    avg_sigma_sq = (sum_pred_y_sq - quad_form) / n_obs_f
+    avg_sigma_sq = max(avg_sigma_sq, 0.0)
+    if avg_sigma_sq <= 0 or not math.isfinite(avg_sigma_sq):
+        raise ValueError(
+            "Rule-of-thumb selector estimated a non-positive variance constant; "
+            "consider specifying num_bins explicitly."
+        )
+
+    prefactor = (2.0 * bias_constant) / avg_sigma_sq
+    j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
+    max_bins = max(2, int(n_obs) - 1)
+    computed_bins = max(2, int(round(j_float)))
+    return min(max_bins, computed_bins)
+
+
+def _collect_rule_of_thumb_stats(
+    df: nw.LazyFrame, data_cols: Tuple[str, ...], y: str
+) -> nw.DataFrame:
+    """Gather the global cross-moments needed by the rule-of-thumb selector."""
+    y_expr = nw.col(y)
+    y_sq_expr = y_expr * y_expr
+    exprs: list[nw.Expr] = [
+        nw.len().alias("__n"),
+        y_expr.sum().alias("__sum_y"),
+        y_sq_expr.sum().alias("__sum_y2"),
+    ]
+    for idx, col in enumerate(data_cols):
+        col_expr = nw.col(col)
+        exprs.append(col_expr.sum().alias(f"__sum_{idx}"))
+        exprs.append((col_expr * y_expr).sum().alias(f"__xty_{idx}"))
+        exprs.append((col_expr * y_sq_expr).sum().alias(f"__xty2_{idx}"))
+        for jdx in range(idx, len(data_cols)):
+            exprs.append(
+                (col_expr * nw.col(data_cols[jdx])).sum().alias(f"__xtx_{idx}_{jdx}")
+            )
+    return df.select(*exprs).collect()
+
+
+def _solve_normal_equations(xtx: np.ndarray, rhs: np.ndarray) -> np.ndarray:
+    """Solve the normal equations, falling back to a pseudo-inverse when needed."""
+    try:
+        return np.linalg.solve(xtx, rhs)
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(xtx) @ rhs
+
+
+def _gaussian_inverse_density_sum(
+    df: nw.LazyFrame, x: str, mean_x: float, std_x: float
+) -> float:
+    """Compute sum_i 1 / f_G(x_i) for the Gaussian reference f_G."""
+    if std_x <= 0:
+        raise ValueError("Standard deviation must be positive.")
+    z_sq = ((nw.col(x) - mean_x) / std_x) ** 2
+    exp_expr = (0.5 * z_sq).exp()
+    sum_exp = (
+        df.select(exp_expr.sum().alias("__sum_exp")).collect().item(0, "__sum_exp")
+    )
+    return float(sum_exp) * math.sqrt(2.0 * math.pi) * std_x
 
 
 def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
