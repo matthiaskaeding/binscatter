@@ -168,9 +168,7 @@ def _get_rot_bins(
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
-    return _select_rule_of_thumb_bins(
-        df_with_features, x, y, regression_features
-    )
+    return _select_rule_of_thumb_bins(df_with_features, x, y, regression_features)
 
 
 @pytest.mark.parametrize(
