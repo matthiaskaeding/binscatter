@@ -153,9 +153,7 @@ def binscatter(
 
     match return_type:
         case "plotly":
-            return make_plot_plotly(
-                df_plotting, profile, kwargs_binscatter=kwargs_binscatter
-            )
+            return make_plot_plotly(df_plotting, profile, kwargs_binscatter=kwargs)
         case "native":
             return make_native_dataframe(df_plotting, profile)
 

@@ -46,6 +46,7 @@ dependencies = [
 
 [package.dev-dependencies]
 ci = [
+    { name = "binsreg" },
     { name = "dask" },
     { name = "duckdb" },
     { name = "ibis" },
@@ -83,6 +84,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 ci = [
+    { name = "binsreg", specifier = "==2.1.7" },
     { name = "dask", specifier = ">=2025.7.0" },
     { name = "duckdb", specifier = ">=1.3.2" },
     { name = "ibis", specifier = ">=3.3.0" },
