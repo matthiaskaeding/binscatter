@@ -10,6 +10,10 @@
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
+## What are binscatter plots? 
+
+Binscatter plots group the x-axis into bins and plot average outcomes for each bin, giving a cleaner, less noisy view of the relationship between two variables. They’re useful for spotting overall patterns and shapes, they do not show all the underlying data like a full scatter plot.
+
 
 ## Installation
 
@@ -22,9 +26,6 @@ pip install binscatter
 ## Example
 
 A binscatter plot showing patenting activity against the 3-year lagged top marginal tax rate controlling for several state-level covariates.
-
-New to the idea? A binscatter simply slices the x-axis into quantile bins, averages y (after optionally removing control effects) within each bin, and plots those averages—giving you a quick, noise-reduced view of the conditional mean that scales across dataframe backends.
-
 
 <img src="images/readme/binscatter_controls.png" alt="Scatter and binscatter" width="640" />
 
