@@ -125,7 +125,6 @@ combined.update_yaxes(title_text="lnpat", row=1, col=2)
 combined.update_layout(
     template="simple_white",
     showlegend=False,
-    font=dict(family="Helvetica", size=14),
 )
 for annotation in combined.layout.annotations:
     annotation.update(font=dict(family="Georgia", size=16))

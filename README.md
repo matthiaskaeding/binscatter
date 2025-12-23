@@ -21,11 +21,11 @@ pip install binscatter
 
 ## Example
 
-Here's the raw scatter (left) alongside the binscatter with controls (right):
+On the left is a standard scatter plot of patenting activity (`lnpat`) against the 3-year lagged top marginal tax rate (`mtr90_lag3`) for US states between 1981 and 2007. On the right is a covariate-adjusted binscatter plot controlling for several state-level covariates (see code below).
 
 <img src="images/readme/scatter_vs_binscatter.png" alt="Scatter and binscatter" width="640" />
 
-This is how we make a nice binscatter plot instead, controlling for a set of features:
+This is how we make the covariate-adjusted binscatter:
 
 ```python
 from binscatter import binscatter
@@ -46,8 +46,6 @@ binscatter(
     # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
 )
 ```
-
-<img src="images/readme/binscatter_controls.png" alt="Binscatter" width="640" />
 
 This package implements binscatter plots following:
 

@@ -12,6 +12,7 @@ binscatter_ref.pdf
 *.png
 !images/readme/binscatter_controls.png
 !images/readme/scatter.png
+!images/readme/scatter_vs_binscatter.png
 .DS_Store
 .vscode/settings.json
 *.zip
