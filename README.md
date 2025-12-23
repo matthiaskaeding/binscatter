@@ -23,7 +23,7 @@ pip install binscatter
 
 Lets say we made this noisy scatterplot:
 
-![Noisy scatterplot](/images/readme/scatter.png)
+<img src="/images/readme/scatter.png" alt="Noisy scatterplot" width="480" />
 
 This is how we make a nice binscatter plot instead, controlling for a set of features:
 
@@ -47,7 +47,7 @@ binscatter(
 )
 ```
 
-![Binscatter](/images/readme/binscatter_controls.png)
+<img src="/images/readme/binscatter_controls.png" alt="Binscatter" width="480" />
 
 This package implements binscatter plots following:
 
