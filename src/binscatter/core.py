@@ -317,11 +317,12 @@ def make_plot_plotly(
         "x": x,
         "y": y,
         "range_x": padded_range_x,
-        "title": "Binscatter",
         "labels": {
             "x": profile.x_name,
             "y": profile.y_name,
         },
+        "template": "simple_white",
+        "color_discrete_sequence": ["black"],
     }
     for k in kwargs_binscatter:
         if k in ("x", "y", "range_x"):
