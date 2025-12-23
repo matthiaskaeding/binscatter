@@ -322,6 +322,7 @@ def make_plot_plotly(
             "x": profile.x_name,
             "y": profile.y_name,
         },
+        "template": "simple_white",
     }
     for k in kwargs_binscatter:
         if k in ("x", "y", "range_x"):
