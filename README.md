@@ -21,13 +21,15 @@ pip install binscatter
 
 ## Example
 
-A binscatter plot showing patenting activity (`lnpat`) against the 3-year lagged top marginal tax rate (`mtr90_lag3`) controlling for several state-level covariates.
+A binscatter plot showing patenting activity against the 3-year lagged top marginal tax rate controlling for several state-level covariates.
+
+New to the idea? A binscatter simply slices the x-axis into quantile bins, averages y (after optionally removing control effects) within each bin, and plots those averages—giving you a quick, noise-reduced view of the conditional mean that scales across dataframe backends.
 
 
 <img src="images/readme/binscatter_controls.png" alt="Scatter and binscatter" width="640" />
 
 See code below:
- 
+
 ```python
 from binscatter import binscatter
 
@@ -45,9 +47,12 @@ binscatter(
     ],
     # num_bins="rule-of-thumb",  # optional: let the selector choose the bin count
     # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
+).update_layout(  # binscatter returns a Plotly figure, so you can tweak labels, colors, etc.
+    xaxis_title="Top marginal tax rate (lagged 3 years)",
+    yaxis_title="Log number of patents",
 )
 ```
-This is how the raw data looks like, clearly showing a lot of noise:
+This is how a classical scatter of the same data looks like, clearly showing a lot of noise:
 
 <img src="images/readme/scatter.png" alt="Scatter" width="640" />
 
