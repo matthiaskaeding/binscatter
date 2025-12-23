@@ -69,7 +69,7 @@ p_scatter = px.scatter(
     labels={"x": "mtr90_lag3", "y": "lnpat"},
 )
 p_scatter.update_layout(showlegend=False)
-p_scatter.write_image(assets_dir / "scatter.png", width=800, height=600)
+p_scatter.write_image(assets_dir / "scatter.png", width=640, height=480)
 # %%
 p_binscatter = binscatter(
     df,
@@ -77,7 +77,7 @@ p_binscatter = binscatter(
     "lnpat",
     num_bins=20,
 )
-p_binscatter.write_image(assets_dir / "binscatter_bare.png", width=800, height=600)
+p_binscatter.write_image(assets_dir / "binscatter_bare.png", width=640, height=480)
 # %%
 df = df.with_columns(pl.col("statenum", "year").cast(pl.String))
 # Capture all binscatter logs into artifacts/binscatter.log
@@ -103,6 +103,6 @@ p_binscatter_controls.show()
 logging.shutdown()
 
 p_binscatter_controls.write_image(
-    assets_dir / "binscatter_controls.png", width=800, height=600
+    assets_dir / "binscatter_controls.png", width=640, height=480
 )
 # %%
