@@ -21,9 +21,9 @@ pip install binscatter
 
 ## Example
 
-Lets say we made this noisy scatterplot:
+Here's the raw scatter (left) alongside the binscatter with controls (right):
 
-<img src="images/readme/scatter.png" alt="Noisy scatterplot" width="640" />
+<img src="images/readme/scatter_vs_binscatter.png" alt="Scatter and binscatter" width="640" />
 
 This is how we make a nice binscatter plot instead, controlling for a set of features:
 

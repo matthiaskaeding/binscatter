@@ -27,6 +27,8 @@ import logging  # noqa: E402
 
 import plotly.express as px  # noqa: E402
 import polars as pl  # noqa: E402
+from plotly.subplots import make_subplots  # noqa: E402
+
 from src.binscatter.core import binscatter  # noqa: E402
 
 proj_dir = ROOT
@@ -99,11 +101,33 @@ p_binscatter_controls = binscatter(
     ],
     num_bins="rule-of-thumb",
 )
-p_binscatter_controls.show()
-
 logging.shutdown()
 
 p_binscatter_controls.write_image(
     assets_dir / "binscatter_controls.png", width=640, height=480
 )
 # %%
+combined = make_subplots(
+    rows=1,
+    cols=2,
+    subplot_titles=("(a) Scatter", " (b) Binscatter with controls"),
+    horizontal_spacing=0.08,
+    specs=[[{"type": "scatter"}, {"type": "scatter"}]],
+)
+for trace in p_scatter.data:
+    combined.add_trace(trace, row=1, col=1)
+for trace in p_binscatter_controls.data:
+    combined.add_trace(trace, row=1, col=2)
+combined.update_xaxes(title_text="mtr90_lag3", row=1, col=1)
+combined.update_yaxes(title_text="lnpat", row=1, col=1)
+combined.update_xaxes(title_text="mtr90_lag3", row=1, col=2)
+combined.update_yaxes(title_text="lnpat", row=1, col=2)
+combined.update_layout(
+    template="simple_white",
+    showlegend=False,
+    font=dict(family="Helvetica", size=14),
+)
+for annotation in combined.layout.annotations:
+    annotation.update(font=dict(family="Georgia", size=16))
+combined.write_image(assets_dir / "scatter_vs_binscatter.png", width=960, height=480)
+combined.show()
