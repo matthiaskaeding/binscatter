@@ -331,13 +331,7 @@ def make_plot_plotly(
             continue
         scatter_args[k] = kwargs_binscatter[k]
 
-    fig = px.scatter(**scatter_args)
-    fig.update_layout(
-        xaxis=dict(showgrid=True, gridcolor="#ededed"),
-        yaxis=dict(showgrid=True, gridcolor="#ededed"),
-    )
-
-    return fig
+    return px.scatter(**scatter_args)
 
 
 def _remove_bad_values(
