@@ -1,4 +1,5 @@
 import uuid
+from statistics import NormalDist
 from typing import Iterable
 
 import polars as pl
@@ -55,6 +56,9 @@ def _prepare_dataframe(df, x, y, controls, num_bins):
         is_lazy_input=is_lazy,
         implementation=df_clean.implementation,
         regression_features=regression_features,
+        ci_option="none",
+        ci_level=0.95,
+        bin_edges=None,
     )
     df_with_bins = configure_quantile_handler(profile)(df_with_features)
     return df_with_bins, profile
@@ -543,7 +547,9 @@ def test_partial_out_controls_matches_statsmodels():
         df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
     )
     df_with_bins = _collect_lazyframe_to_pandas(df_prepped)
-    df_result, coeffs = partial_out_controls(df_prepped, profile)
+    df_result, regression_result = partial_out_controls(
+        df_prepped, profile, collect_inference=True
+    )
     result = (
         _collect_lazyframe_to_pandas(df_result)
         .sort_values(profile.bin_name)
@@ -591,5 +597,69 @@ def test_partial_out_controls_matches_statsmodels():
     )
 
     beta_ref = beta - beta[0]
-    beta_actual = coeffs["beta"] - coeffs["beta"][0]
+    assert regression_result is not None
+    beta_actual = regression_result.beta - regression_result.beta[0]
     np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
+
+
+def test_pointwise_ci_matches_ols_bse():
+    rng = np.random.default_rng(7)
+    n = 400
+    x = rng.normal(size=n)
+    y = 1.5 * x + rng.normal(scale=0.8, size=n)
+    df = pd.DataFrame({"x": x, "y": y})
+    num_bins = 6
+    native = binscatter(
+        df,
+        "x",
+        "y",
+        num_bins=num_bins,
+        ci="pointwise",
+        ci_level=0.95,
+        return_type="native",
+    )
+    pdf = to_pandas_native(native).sort_values("bin").reset_index(drop=True)
+
+    bins, _ = quantile_bins(x, num_bins)
+    design = pd.get_dummies(bins, drop_first=False).to_numpy()
+    model = sm.OLS(y, design).fit()
+    z = NormalDist().inv_cdf(1 - 0.05 / 2)
+    np.testing.assert_allclose(
+        pdf["ci_std_error"].to_numpy(),
+        model.bse,
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        pdf["ci_lower"].to_numpy(),
+        model.params - z * model.bse,
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        pdf["ci_upper"].to_numpy(),
+        model.params + z * model.bse,
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_rbc_ci_outputs_bounds():
+    rng = np.random.default_rng(21)
+    n = 600
+    x = np.linspace(-2.0, 2.0, num=n)
+    y = 0.1 * x**3 - 0.4 * x + rng.normal(scale=0.3, size=n)
+    df = pd.DataFrame({"x": x, "y": y})
+    native = binscatter(
+        df,
+        "x",
+        "y",
+        num_bins=10,
+        ci="rbc",
+        return_type="native",
+    )
+    pdf = to_pandas_native(native).sort_values("bin").reset_index(drop=True)
+    assert {"ci_lower", "ci_upper", "ci_std_error"}.issubset(pdf.columns)
+    assert np.all(np.isfinite(pdf["ci_std_error"]))
+    assert np.all(pdf["ci_upper"] > pdf["ci_lower"])
+    assert np.all((pdf["y"].to_numpy() >= pdf["ci_lower"].to_numpy()) & (pdf["y"].to_numpy() <= pdf["ci_upper"].to_numpy()))
