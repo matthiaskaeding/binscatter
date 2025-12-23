@@ -12,8 +12,7 @@
 
 ## What are binscatter plots? 
 
-Binscatter plots group the x-axis into bins and plot average outcomes for each bin, giving a cleaner, less noisy view of the relationship between two variables. They’re useful for spotting overall patterns and shapes, but they do not show all the underlying data like a full scatter plot.
-
+Binscatter plots group the x-axis into bins and plot average outcomes for each bin, giving a cleaner view of the relationship between two variables—possibly controlling for confounders. They show an estimate of the conditional mean, rather than all the underlying data as in a classical scatter plot.
 
 ## Installation
 
