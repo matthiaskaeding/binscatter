@@ -68,7 +68,11 @@ p_scatter = px.scatter(
     color_discrete_sequence=["black"],
     labels={"x": "mtr90_lag3", "y": "lnpat"},
 )
-p_scatter.update_layout(showlegend=False)
+p_scatter.update_layout(
+    showlegend=False,
+    xaxis=dict(showgrid=True, gridcolor="#ededed"),
+    yaxis=dict(showgrid=True, gridcolor="#ededed"),
+)
 p_scatter.write_image(assets_dir / "scatter.png", width=640, height=480)
 # %%
 p_binscatter = binscatter(
