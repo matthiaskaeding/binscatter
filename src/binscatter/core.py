@@ -317,12 +317,12 @@ def make_plot_plotly(
         "x": x,
         "y": y,
         "range_x": padded_range_x,
-        "title": "Binscatter",
         "labels": {
             "x": profile.x_name,
             "y": profile.y_name,
         },
         "template": "simple_white",
+        "color_discrete_sequence": ["black"],
     }
     for k in kwargs_binscatter:
         if k in ("x", "y", "range_x"):
@@ -331,7 +331,9 @@ def make_plot_plotly(
             continue
         scatter_args[k] = kwargs_binscatter[k]
 
-    return px.scatter(**scatter_args)
+    fig = px.scatter(**scatter_args)
+
+    return fig
 
 
 def _remove_bad_values(
@@ -891,3 +893,58 @@ def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDa
         return df_out_nw.to_native()
     else:
         return df_out_nw.collect().to_native()
+
+
+def make_clean_template(
+    *,
+    mode="light",  # "light" or "dark"
+    grid="y",  # "none", "x", "y", "both"
+    font_family="Inter, Arial",
+    font_size=14,
+    accent_colors=None,
+    background=None,
+):
+    """
+    Create a clean, reusable Plotly template.
+    """
+
+    if mode == "dark":
+        paper_bg = background or "#1e1e1e"
+        plot_bg = paper_bg
+        font_color = "#eaeaea"
+        grid_color = "#333"
+        axis_line = "#444"
+    else:
+        paper_bg = background or "white"
+        plot_bg = paper_bg
+        font_color = "#222"
+        grid_color = "#eee"
+        axis_line = "#ddd"
+
+    show_xgrid = grid in ("x", "both")
+    show_ygrid = grid in ("y", "both")
+
+    return dict(
+        layout=dict(
+            font=dict(family=font_family, size=font_size, color=font_color),
+            paper_bgcolor=paper_bg,
+            plot_bgcolor=plot_bg,
+            colorway=accent_colors
+            or ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"],
+            xaxis=dict(
+                showgrid=show_xgrid,
+                gridcolor=grid_color,
+                zeroline=False,
+                showline=True,
+                linecolor=axis_line,
+            ),
+            yaxis=dict(
+                showgrid=show_ygrid,
+                gridcolor=grid_color,
+                zeroline=False,
+                showline=False,
+            ),
+            margin=dict(l=60, r=30, t=40, b=50),
+            title=dict(x=0),
+        )
+    )
