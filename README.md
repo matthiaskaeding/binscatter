@@ -10,6 +10,9 @@
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
+## What are binscatter plots? 
+
+Binscatter plots group the x-axis into bins and plot average outcomes for each bin, giving a cleaner view of the relationship between two variables—possibly controlling for confounders. They show an estimate of the conditional mean, rather than all the underlying data as in a classical scatter plot.
 
 ## Installation
 
@@ -21,11 +24,11 @@ pip install binscatter
 
 ## Example
 
-Lets say we made this noisy scatterplot:
+A binscatter plot showing patenting activity against the 3-year lagged top marginal tax rate controlling for several state-level covariates.
 
-<img src="images/readme/scatter.png" alt="Noisy scatterplot" width="640" />
+<img src="images/readme/binscatter_controls.png" alt="Scatter and binscatter" width="640" />
 
-This is how we make a nice binscatter plot instead, controlling for a set of features:
+See code below:
 
 ```python
 from binscatter import binscatter
@@ -44,10 +47,15 @@ binscatter(
     ],
     # num_bins="rule-of-thumb",  # optional: let the selector choose the bin count
     # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
+).update_layout(  # binscatter returns a Plotly figure, so you can tweak labels, colors, etc.
+    xaxis_title="Top marginal tax rate (lagged 3 years)",
+    yaxis_title="Log number of patents",
 )
 ```
+This is how a classical scatter of the same data looks like, clearly showing a lot of noise:
 
-<img src="images/readme/binscatter_controls.png" alt="Binscatter" width="640" />
+<img src="images/readme/scatter.png" alt="Scatter" width="640" />
+
 
 This package implements binscatter plots following:
 

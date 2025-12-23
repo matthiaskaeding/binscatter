@@ -27,6 +27,8 @@ import logging  # noqa: E402
 
 import plotly.express as px  # noqa: E402
 import polars as pl  # noqa: E402
+from plotly.subplots import make_subplots  # noqa: E402
+
 from src.binscatter.core import binscatter  # noqa: E402
 
 proj_dir = ROOT
@@ -60,6 +62,10 @@ if not parquet_path.exists():
 df = pl.read_parquet(parquet_path)
 df.describe()
 # %%
+axis_labels = {
+    "x": "Top marginal tax rate (lagged 3 years)",
+    "y": "Log number of patents",
+}
 p_scatter = px.scatter(
     df.select("mtr90_lag3", "lnpat"),
     x="mtr90_lag3",
@@ -69,7 +75,11 @@ p_scatter = px.scatter(
     labels={"x": "mtr90_lag3", "y": "lnpat"},
 )
 # Hide the single-trace legend for cleaner screenshots.
-p_scatter.update_layout(showlegend=False)
+p_scatter.update_layout(
+    showlegend=False,
+    xaxis_title=axis_labels["x"],
+    yaxis_title=axis_labels["y"],
+)
 p_scatter.write_image(assets_dir / "scatter.png", width=640, height=480)
 # %%
 p_binscatter = binscatter(
@@ -77,6 +87,10 @@ p_binscatter = binscatter(
     "mtr90_lag3",
     "lnpat",
     num_bins=20,
+)
+p_binscatter.update_layout(
+    xaxis_title=axis_labels["x"],
+    yaxis_title=axis_labels["y"],
 )
 p_binscatter.write_image(assets_dir / "binscatter_bare.png", width=640, height=480)
 # %%
@@ -99,11 +113,36 @@ p_binscatter_controls = binscatter(
     ],
     num_bins="rule-of-thumb",
 )
-p_binscatter_controls.show()
-
 logging.shutdown()
 
+p_binscatter_controls.update_layout(
+    xaxis_title=axis_labels["x"],
+    yaxis_title=axis_labels["y"],
+)
 p_binscatter_controls.write_image(
     assets_dir / "binscatter_controls.png", width=640, height=480
 )
 # %%
+combined = make_subplots(
+    rows=1,
+    cols=2,
+    subplot_titles=("(a) Scatter", " (b) Binscatter with controls"),
+    horizontal_spacing=0.08,
+    specs=[[{"type": "scatter"}, {"type": "scatter"}]],
+)
+for trace in p_scatter.data:
+    combined.add_trace(trace, row=1, col=1)
+for trace in p_binscatter_controls.data:
+    combined.add_trace(trace, row=1, col=2)
+combined.update_xaxes(title_text=axis_labels["x"], row=1, col=1)
+combined.update_yaxes(title_text=axis_labels["y"], row=1, col=1)
+combined.update_xaxes(title_text=axis_labels["x"], row=1, col=2)
+combined.update_yaxes(title_text=axis_labels["y"], row=1, col=2)
+combined.update_layout(
+    template="simple_white",
+    showlegend=False,
+)
+for annotation in combined.layout.annotations:
+    annotation.update(font=dict(family="Georgia", size=16))
+combined.write_image(assets_dir / "scatter_vs_binscatter.png", width=960, height=480)
+combined.show()
