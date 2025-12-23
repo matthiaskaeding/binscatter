@@ -63,7 +63,7 @@ df = pl.read_parquet(parquet_path)
 df.describe()
 # %%
 axis_labels = {
-    "x": "Top marginal tax rate (lagged 3 years)",
+    "x": "Log net of tax rate := log(1 - tax rate)",
     "y": "Log number of patents",
 }
 p_scatter = px.scatter(

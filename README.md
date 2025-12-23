@@ -24,7 +24,7 @@ pip install binscatter
 
 ## Example
 
-A binscatter plot showing patenting activity against the 3-year lagged top marginal tax rate controlling for several state-level covariates.
+A binscatter plot showing patenting activity against the 3-year net of tax rate controlling for several state-level covariates.
 
 <img src="images/readme/binscatter_controls.png" alt="Scatter and binscatter" width="640" />
 
@@ -48,7 +48,7 @@ binscatter(
     # num_bins="rule-of-thumb",  # optional: let the selector choose the bin count
     # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
 ).update_layout(  # binscatter returns a Plotly figure, so you can tweak labels, colors, etc.
-    xaxis_title="Top marginal tax rate (lagged 3 years)",
+    xaxis_title="Log net of tax rate := log(1 - tax rate)",
     yaxis_title="Log number of patents",
 )
 ```
