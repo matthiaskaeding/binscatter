@@ -134,7 +134,7 @@ for i in range(1, 4):
         "lnpat",
         controls=controls,
         num_bins="rule-of-thumb",
-        add_polynomial=i,
+        poly_line=i,
     )
     p_poly.write_image(
         assets_dir / f"binscatter_controls_poly{i}.png", width=640, height=480

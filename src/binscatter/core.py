@@ -36,7 +36,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly"] = "plotly",
-    add_polynomial: int | None = None,
+    poly_line: int | None = None,
     **kwargs,
 ) -> go.Figure: ...
 
@@ -50,7 +50,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["native"] = "native",
-    add_polynomial: int | None = None,
+    poly_line: int | None = None,
     **kwargs,
 ) -> object: ...
 
@@ -63,7 +63,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
-    add_polynomial: int | None = None,
+    poly_line: int | None = None,
     **kwargs,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
@@ -75,7 +75,7 @@ def binscatter(
         controls: Optional control columns to partial out (either a string or iterable of strings).
         num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
-        add_polynomial: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
+        poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
@@ -104,11 +104,11 @@ def binscatter(
         raise TypeError("x_name must be a string")
     if not isinstance(y, str):
         raise TypeError("y_name must be a string")
-    if add_polynomial is not None:
-        if not isinstance(add_polynomial, int):
-            raise TypeError("add_polynomial must be an integer in {1, 2, 3}")
-        if add_polynomial not in (1, 2, 3):
-            raise ValueError("add_polynomial must be one of {1, 2, 3}")
+    if poly_line is not None:
+        if not isinstance(poly_line, int):
+            raise TypeError("poly_line must be an integer in {1, 2, 3}")
+        if poly_line not in (1, 2, 3):
+            raise ValueError("poly_line must be one of {1, 2, 3}")
 
     controls = _clean_controls(controls)
     if x in controls:
@@ -137,7 +137,7 @@ def binscatter(
     ) = maybe_add_polynomial_features(
         df_with_regression_features,
         x_name=x,
-        degree=add_polynomial,
+        degree=poly_line,
         distinct_suffix=distinct_suffix,
     )
 
@@ -166,7 +166,7 @@ def binscatter(
     df_prepped = add_bins(df_with_regression_features)
 
     moment_cache: dict[str, float] | None = None
-    if controls or add_polynomial is not None:
+    if controls or poly_line is not None:
         moment_cache = {}
 
     if not controls:
@@ -177,10 +177,10 @@ def binscatter(
         )
 
     polynomial_line: PolynomialFit | None = None
-    if add_polynomial is not None and return_type == "plotly":
+    if poly_line is not None and return_type == "plotly":
         cache = moment_cache or {}
         polynomial_line = _fit_polynomial_line(
-            df_prepped, profile, add_polynomial, cache
+            df_prepped, profile, poly_line, cache
         )
 
     match return_type:
@@ -390,7 +390,7 @@ def _fit_polynomial_line(
 ) -> PolynomialFit:
     if not profile.polynomial_features or len(profile.polynomial_features) < degree:
         raise ValueError(
-            "Polynomial features not initialized; ensure add_polynomial was set."
+            "Polynomial features not initialized; ensure poly_line was set."
         )
     poly_cols = profile.polynomial_features[:degree]
     feature_names = poly_cols + profile.regression_features
