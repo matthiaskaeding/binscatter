@@ -369,9 +369,7 @@ def partial_out_controls(
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
     mean_controls = total_ctrl_sums / total_count if k else np.array([])
-    control_shift = float(mean_controls @ gamma) if k else 0.0
-    moment_cache[_moment_alias("control_shift")] = control_shift
-    fitted = beta + control_shift
+    fitted = beta + (mean_controls @ gamma if k else 0.0)
 
     y_vals = nw.new_series(
         name=profile.y_name, values=fitted, backend=per_bin.implementation
@@ -428,11 +426,18 @@ def _fit_polynomial_line(
     else:
         x_min, x_max = _compute_x_bounds(df_prepped, profile.x_name)
     x_grid = _build_prediction_grid(x_min, x_max)
+    if profile.regression_features:
+        control_means = np.array(
+            [
+                cache[_moment_alias("sum", ctrl)] / total_count
+                for ctrl in profile.regression_features
+            ],
+            dtype=float,
+        )
+    else:
+        control_means = np.array([], dtype=float)
     y_pred = _evaluate_polynomial_predictions(
-        coefficients,
-        degree,
-        cache.get(_moment_alias("control_shift"), 0.0),
-        x_grid,
+        coefficients, degree, control_means, x_grid
     )
     return PolynomialFit(
         degree=degree,
@@ -455,11 +460,14 @@ def _build_prediction_grid(
 
 
 def _evaluate_polynomial_predictions(
-    coefficients: np.ndarray, degree: int, control_shift: float, x_grid: np.ndarray
+    coefficients: np.ndarray, degree: int, control_means: np.ndarray, x_grid: np.ndarray
 ) -> np.ndarray:
     intercept = float(coefficients[0])
     poly_coeffs = coefficients[1 : degree + 1]
-    baseline = intercept + control_shift
+    control_coeffs = coefficients[degree + 1 :]
+    baseline = intercept
+    if control_coeffs.size and control_means.size:
+        baseline += float(control_coeffs @ control_means)
     if not x_grid.size:
         return np.array([], dtype=float)
     poly_terms = np.vstack([x_grid**power for power in range(1, degree + 1)])
