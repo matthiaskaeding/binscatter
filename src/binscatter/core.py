@@ -179,9 +179,7 @@ def binscatter(
     polynomial_line: PolynomialFit | None = None
     if poly_line is not None and return_type == "plotly":
         cache = moment_cache or {}
-        polynomial_line = _fit_polynomial_line(
-            df_prepped, profile, poly_line, cache
-        )
+        polynomial_line = _fit_polynomial_line(df_prepped, profile, poly_line, cache)
 
     match return_type:
         case "plotly":
@@ -231,7 +229,9 @@ def _ensure_moments(
     missing = {alias: expr for alias, expr in expr_map.items() if alias not in cache}
     if not missing:
         return
-    collected = df.select(*(expr.alias(alias) for alias, expr in missing.items())).collect()
+    collected = df.select(
+        *(expr.alias(alias) for alias, expr in missing.items())
+    ).collect()
     for alias in missing:
         value = collected.item(0, alias)
         if value is None:
@@ -369,7 +369,9 @@ def partial_out_controls(
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
     mean_controls = total_ctrl_sums / total_count if k else np.array([])
-    fitted = beta + (mean_controls @ gamma if k else 0.0)
+    control_shift = float(mean_controls @ gamma) if k else 0.0
+    moment_cache[_moment_alias("control_shift")] = control_shift
+    fitted = beta + control_shift
 
     y_vals = nw.new_series(
         name=profile.y_name, values=fitted, backend=per_bin.implementation
@@ -404,21 +406,21 @@ def _fit_polynomial_line(
     total_count = cache[_moment_alias("total_count")]
     if total_count <= 0:
         raise ValueError("Polynomial overlay requires at least one observation.")
-    sum_y_total = cache[_moment_alias("sum_y_total")]
+    feature_xtx, feature_xty = _build_feature_normal_equations(feature_names, cache)
     size = len(feature_names) + 1
     xtx = np.zeros((size, size), dtype=float)
     xty = np.zeros(size, dtype=float)
     xtx[0, 0] = total_count
-    xty[0] = sum_y_total
-
-    feature_xtx, feature_xty = _build_feature_normal_equations(feature_names, cache)
-    for idx, col in enumerate(feature_names):
-        sum_col = cache[_moment_alias("sum", col)]
-        xtx[0, idx + 1] = sum_col
-        xtx[idx + 1, 0] = sum_col
-        xty[idx + 1] = feature_xty[idx]
-        xtx[idx + 1, idx + 1 :] = feature_xtx[idx, idx:]
-        xtx[idx + 1 :, idx + 1] = feature_xtx[idx:, idx]
+    xty[0] = cache[_moment_alias("sum_y_total")]
+    xtx[1:, 1:] = feature_xtx
+    xty[1:] = feature_xty
+    if feature_names:
+        column_sums = np.array(
+            [cache[_moment_alias("sum", col)] for col in feature_names],
+            dtype=float,
+        )
+        xtx[0, 1:] = column_sums
+        xtx[1:, 0] = column_sums
 
     coefficients = _solve_normal_equations(xtx, xty)
     if profile.x_bounds:
@@ -426,19 +428,11 @@ def _fit_polynomial_line(
     else:
         x_min, x_max = _compute_x_bounds(df_prepped, profile.x_name)
     x_grid = _build_prediction_grid(x_min, x_max)
-    control_means = (
-        np.array(
-            [
-                cache[_moment_alias("sum", ctrl)] / total_count
-                for ctrl in profile.regression_features
-            ],
-            dtype=float,
-        )
-        if profile.regression_features
-        else np.array([], dtype=float)
-    )
     y_pred = _evaluate_polynomial_predictions(
-        coefficients, degree, control_means, x_grid
+        coefficients,
+        degree,
+        cache.get(_moment_alias("control_shift"), 0.0),
+        x_grid,
     )
     return PolynomialFit(
         degree=degree,
@@ -461,17 +455,14 @@ def _build_prediction_grid(
 
 
 def _evaluate_polynomial_predictions(
-    coefficients: np.ndarray, degree: int, control_means: np.ndarray, x_grid: np.ndarray
+    coefficients: np.ndarray, degree: int, control_shift: float, x_grid: np.ndarray
 ) -> np.ndarray:
     intercept = float(coefficients[0])
     poly_coeffs = coefficients[1 : degree + 1]
-    control_coeffs = coefficients[degree + 1 :]
-    baseline = intercept
-    if control_coeffs.size and control_means.size:
-        baseline += float(control_coeffs @ control_means)
+    baseline = intercept + control_shift
     if not x_grid.size:
         return np.array([], dtype=float)
-    poly_terms = np.vstack([x_grid ** power for power in range(1, degree + 1)])
+    poly_terms = np.vstack([x_grid**power for power in range(1, degree + 1)])
     y_poly = poly_terms.T @ poly_coeffs
     return baseline + y_poly
 
@@ -489,9 +480,6 @@ def make_plot_plotly(
     data = df_plotting.select(profile.x_name, profile.y_name).collect()
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
-
-    x_min = data.get_column(profile.x_name).min()
-    x_max = data.get_column(profile.x_name).max()
 
     x = data.get_column(profile.x_name).to_list()
     if len(set(x)) < profile.num_bins:
