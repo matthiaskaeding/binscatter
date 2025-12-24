@@ -565,14 +565,6 @@ def split_columns(
     def _safe_columns(selection: Any) -> Tuple[str, ...]:
         if selection is None:
             return tuple()
-        columns: Tuple[str, ...] = tuple()
-        if hasattr(selection, "columns"):
-            try:
-                columns = tuple(selection.columns)  # type: ignore[attr-defined]
-            except Exception:  # pragma: no cover - backend quirk
-                columns = tuple()
-        if columns:
-            return columns
         if hasattr(selection, "collect_schema"):
             try:
                 schema = selection.collect_schema()
@@ -581,13 +573,23 @@ def split_columns(
             else:
                 if schema is not None:
                     if hasattr(schema, "names") and callable(schema.names):
-                        return tuple(schema.names())
+                        names = schema.names()
+                        if names:
+                            return tuple(names)
                     if isinstance(schema, dict):
                         return tuple(schema.keys())
+        columns: Tuple[str, ...] = tuple()
+        if hasattr(selection, "columns"):
+            try:
+                columns = tuple(selection.columns)  # type: ignore[attr-defined]
+            except Exception:  # pragma: no cover - backend quirk
+                columns = tuple()
+        if columns:
+            return columns
         return tuple()
 
     numeric_cols = _safe_columns(frame.select(ncs.numeric()))
-    frame_columns = tuple(frame.columns)
+    frame_columns = _safe_columns(frame)
     categorical_cols = tuple(col for col in frame_columns if col not in numeric_cols)
 
     return numeric_cols, categorical_cols
