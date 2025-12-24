@@ -3,6 +3,7 @@ from typing import Iterable
 
 import polars as pl
 import numpy as np
+import narwhals as nw
 from binsreg import binsregselect
 from binscatter.core import (
     binscatter,
@@ -46,6 +47,14 @@ def _prepare_dataframe(df, x, y, controls, num_bins):
         categorical_controls=categorical_controls,
     )
     suffix = str(uuid.uuid4()).replace("-", "_")
+    x_bounds_frame = (
+        df_with_features.select(
+            nw.col(x).min().alias("__x_min"),
+            nw.col(x).max().alias("__x_max"),
+        )
+        .collect()
+        .to_pandas()
+    )
     profile = Profile(
         x_name=x,
         y_name=y,
@@ -55,6 +64,11 @@ def _prepare_dataframe(df, x, y, controls, num_bins):
         is_lazy_input=is_lazy,
         implementation=df_clean.implementation,
         regression_features=regression_features,
+        polynomial_features=tuple(),
+        x_bounds=(
+            float(x_bounds_frame["__x_min"].iat[0]),
+            float(x_bounds_frame["__x_max"].iat[0]),
+        ),
     )
     df_with_bins = configure_quantile_handler(profile)(df_with_features)
     return df_with_bins, profile

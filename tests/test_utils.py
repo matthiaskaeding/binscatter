@@ -94,6 +94,8 @@ def _sample_profile(bin_count: int, controls: list[str]) -> Profile:
             pd.DataFrame({"x0": [0], "y0": [0]})
         ).implementation,
         regression_features=tuple(controls),
+        polynomial_features=tuple(),
+        x_bounds=(0.0, 1.0),
     )
 
 
