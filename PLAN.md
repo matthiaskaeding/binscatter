@@ -25,9 +25,9 @@
     - Evaluate the polynomial on a dense grid across the observed x-range (not needed if pokynomial is 1) and add the resulting line to the plot when `add_polynomial` is set.
 
 5. **Testing and documentation pass**
-   - Extend `tests/test_binscatter.py` with parametrized cases covering degrees 1–3 with and without controls, checking coefficients against `numpy.linalg.lstsq` or `statsmodels`.
+   - Extend `tests/test_binscatter.py` with parametrized cases covering degrees 1–3 with and without controls, checking coefficients against `statsmodels`.
    - Update README + CHANGELOG to describe the new argument and emphasize that it regresses on the raw data with all specified controls.
-   - Add a demo (e.g., `examples/demo.py`) that toggles `add_polynomial` so reviewers know how to exercise the feature.
+   
 
 ## Future hook: stepwise controls
 - Once the control-spec abstraction exists, a future `stepwise_controls` feature can iterate through predefined subsets (baseline, +1 control, etc.) without re-scanning the dataframe; the cached matrices from Workstreams 1–2 become the shared foundation.
