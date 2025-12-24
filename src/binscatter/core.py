@@ -36,6 +36,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly"] = "plotly",
+    add_polynomial: int | None = None,
     **kwargs,
 ) -> go.Figure: ...
 
@@ -49,6 +50,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["native"] = "native",
+    add_polynomial: int | None = None,
     **kwargs,
 ) -> object: ...
 
@@ -61,6 +63,7 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
+    add_polynomial: int | None = None,
     **kwargs,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
@@ -72,6 +75,7 @@ def binscatter(
         controls: Optional control columns to partial out (either a string or iterable of strings).
         num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
+        add_polynomial: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
@@ -100,6 +104,11 @@ def binscatter(
         raise TypeError("x_name must be a string")
     if not isinstance(y, str):
         raise TypeError("y_name must be a string")
+    if add_polynomial is not None:
+        if not isinstance(add_polynomial, int):
+            raise TypeError("add_polynomial must be an integer in {1, 2, 3}")
+        if add_polynomial not in (1, 2, 3):
+            raise ValueError("add_polynomial must be one of {1, 2, 3}")
 
     controls = _clean_controls(controls)
     if x in controls:
@@ -109,6 +118,11 @@ def binscatter(
     if len(set(controls)) < len(controls):
         raise ValueError("controls contains duplicate entries")
 
+    distinct_suffix = str(uuid.uuid4()).replace(
+        "-", "_"
+    )  # "-" in col names can cause issues
+    bin_name = f"bins____{distinct_suffix}"
+
     df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
         df, controls, x, y
     )
@@ -117,11 +131,16 @@ def binscatter(
         numeric_controls=numeric_columns,
         categorical_controls=categorical_columns,
     )
+    (
+        df_with_regression_features,
+        polynomial_features,
+    ) = maybe_add_polynomial_features(
+        df_with_regression_features,
+        x_name=x,
+        degree=add_polynomial,
+        distinct_suffix=distinct_suffix,
+    )
 
-    distinct_suffix = str(uuid.uuid4()).replace(
-        "-", "_"
-    )  # "-" in col names can cause issues
-    bin_name = f"bins____{distinct_suffix}"
     if auto_bins:
         computed_num_bins = _select_rule_of_thumb_bins(
             df_with_regression_features, x, y, regression_features
@@ -129,31 +148,49 @@ def binscatter(
     else:
         computed_num_bins = manual_bins
 
+    x_bounds = _compute_x_bounds(df_with_regression_features, x)
+
     profile = Profile(
         num_bins=computed_num_bins,
         x_name=x,
         y_name=y,
         bin_name=bin_name,
         regression_features=regression_features,
+        polynomial_features=polynomial_features,
         distinct_suffix=distinct_suffix,
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
+        x_bounds=x_bounds,
     )
     add_bins: Callable = configure_quantile_handler(profile)
     df_prepped = add_bins(df_with_regression_features)
 
+    moment_cache: dict[str, float] | None = None
+    if controls or add_polynomial is not None:
+        moment_cache = {}
+
     if not controls:
-        # The easy one, just compute the means by bin
         df_plotting = compute_bin_means(df_prepped, profile)
     else:
-        # Compute regression coefficients
-        # and partial out the effect of the controls
-        # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
-        df_plotting, _ = partial_out_controls(df_prepped, profile)
+        df_plotting, _ = partial_out_controls(
+            df_prepped, profile, moment_cache=moment_cache
+        )
+
+    polynomial_line: PolynomialFit | None = None
+    if add_polynomial is not None and return_type == "plotly":
+        cache = moment_cache or {}
+        polynomial_line = _fit_polynomial_line(
+            df_prepped, profile, add_polynomial, cache
+        )
 
     match return_type:
         case "plotly":
-            return make_plot_plotly(df_plotting, profile, kwargs_binscatter=kwargs)
+            return make_plot_plotly(
+                df_plotting,
+                profile,
+                kwargs_binscatter=kwargs,
+                polynomial_line=polynomial_line,
+            )
         case "native":
             return make_native_dataframe(df_plotting, profile)
 
@@ -169,6 +206,8 @@ class Profile(NamedTuple):
     is_lazy_input: bool
     implementation: Implementation
     regression_features: Tuple[str, ...]
+    polynomial_features: Tuple[str, ...]
+    x_bounds: Tuple[float, float]
 
     @property
     def x_col(self) -> nw.Expr:
@@ -179,10 +218,84 @@ class Profile(NamedTuple):
         return nw.col(self.y_name)
 
 
+def _moment_alias(kind: str, *parts: str) -> str:
+    if kind == "sumprod" and len(parts) == 2:
+        parts = tuple(sorted(parts))
+    suffix = "__".join(parts)
+    return f"__moment_{kind}" + (f"__{suffix}" if suffix else "")
+
+
+def _ensure_moments(
+    df: nw.LazyFrame, cache: dict[str, float], expr_map: dict[str, nw.Expr]
+) -> None:
+    missing = {alias: expr for alias, expr in expr_map.items() if alias not in cache}
+    if not missing:
+        return
+    collected = df.select(*(expr.alias(alias) for alias, expr in missing.items())).collect()
+    for alias in missing:
+        value = collected.item(0, alias)
+        if value is None:
+            value = 0.0
+        cache[alias] = float(value)
+
+
+def _ensure_feature_moments(
+    df: nw.LazyFrame,
+    feature_names: Tuple[str, ...],
+    y_expr: nw.Expr,
+    cache: dict[str, float],
+) -> None:
+    if not feature_names:
+        return
+    exprs: dict[str, nw.Expr] = {}
+    for col in feature_names:
+        exprs[_moment_alias("sum", col)] = nw.col(col).sum()
+        exprs[_moment_alias("sum_y", col)] = (nw.col(col) * y_expr).sum()
+    for i, col_i in enumerate(feature_names):
+        for j, col_j in enumerate(feature_names[i:], start=i):
+            exprs[_moment_alias("sumprod", col_i, col_j)] = (
+                nw.col(col_i) * nw.col(col_j)
+            ).sum()
+    _ensure_moments(df, cache, exprs)
+
+
+def _build_feature_normal_equations(
+    feature_names: Tuple[str, ...], cache: dict[str, float]
+) -> tuple[np.ndarray, np.ndarray]:
+    if not feature_names:
+        return np.zeros((0, 0), dtype=float), np.zeros(0, dtype=float)
+    size = len(feature_names)
+    xtx = np.zeros((size, size), dtype=float)
+    xty = np.zeros(size, dtype=float)
+    for i, col_i in enumerate(feature_names):
+        xty[i] = cache[_moment_alias("sum_y", col_i)]
+        xtx[i, i] = cache[_moment_alias("sumprod", col_i, col_i)]
+        for j in range(i + 1, size):
+            col_j = feature_names[j]
+            value = cache[_moment_alias("sumprod", col_i, col_j)]
+            xtx[i, j] = value
+            xtx[j, i] = value
+    return xtx, xty
+
+
+class PolynomialFit(NamedTuple):
+    """Container for polynomial overlay metadata."""
+
+    degree: int
+    coefficients: np.ndarray
+    x: np.ndarray
+    y: np.ndarray
+
+
 def partial_out_controls(
-    df_prepped: nw.LazyFrame, profile: Profile
+    df_prepped: nw.LazyFrame,
+    profile: Profile,
+    moment_cache: dict[str, float] | None = None,
 ) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
+
+    if moment_cache is None:
+        moment_cache = {}
 
     agg_exprs = [
         nw.len().alias("__count"),
@@ -207,73 +320,51 @@ def partial_out_controls(
                 for alias in profile.regression_features
             ]
         )
-    else:  # This should never happen
+    else:
         bin_control_sums = np.zeros((profile.num_bins, 0))
 
-    total_exprs = [nw.len().alias("__total_count")]
-    total_exprs.extend(
-        nw.col(alias).sum().alias(f"__total_ctrl_{idx}")
-        for idx, alias in enumerate(profile.regression_features)
+    totals_cache = {_moment_alias("total_count"): nw.len()}
+    _ensure_moments(df_prepped, moment_cache, totals_cache)
+    _ensure_feature_moments(
+        df_prepped,
+        profile.regression_features,
+        profile.y_col,
+        moment_cache,
     )
-    total_exprs.extend(
-        (nw.col(alias) * profile.y_col).sum().alias(f"__wy_{idx}")
-        for idx, alias in enumerate(profile.regression_features)
-    )
-    for i, alias_i in enumerate(profile.regression_features):
-        for j, alias_j in enumerate(profile.regression_features[i:], start=i):
-            total_exprs.append(
-                (nw.col(alias_i) * nw.col(alias_j)).sum().alias(f"__ww_{i}_{j}")
-            )
 
-    totals = df_prepped.select(*total_exprs).collect()
-    total_count = totals.item(0, "__total_count")
+    total_count = moment_cache[_moment_alias("total_count")]
     if profile.regression_features:
         total_ctrl_sums = np.array(
             [
-                totals.item(0, f"__total_ctrl_{idx}")
-                for idx in range(len(profile.regression_features))
-            ]
+                moment_cache[_moment_alias("sum", alias)]
+                for alias in profile.regression_features
+            ],
+            dtype=float,
         )
-        wy = np.array(
-            [
-                totals.item(0, f"__wy_{idx}")
-                for idx in range(len(profile.regression_features))
-            ]
+        ww, wy = _build_feature_normal_equations(
+            profile.regression_features, moment_cache
         )
-        ww = np.zeros(
-            (len(profile.regression_features), len(profile.regression_features))
-        )
-        for i in range(len(profile.regression_features)):
-            for j in range(i, len(profile.regression_features)):
-                alias = f"__ww_{i}_{j}"
-                value = totals.item(0, alias)
-                ww[i, j] = value
-                ww[j, i] = value
     else:
-        total_ctrl_sums = np.array([])
-        wy = np.array([])
-        ww = np.zeros((0, 0))
+        total_ctrl_sums = np.array([], dtype=float)
+        wy = np.array([], dtype=float)
+        ww = np.zeros((0, 0), dtype=float)
 
-    # Assemble normal equations
     num_bins = profile.num_bins
     k = len(profile.regression_features)
     size = num_bins + k
-    XTX = np.zeros((size, size))
-    XTy = np.zeros(size)
+    XTX = np.zeros((size, size), dtype=float)
+    XTy = np.zeros(size, dtype=float)
 
-    XTX[:num_bins, :num_bins] = np.diag(counts)
+    XTX[:num_bins, :num_bins] = np.diag(counts.astype(float, copy=False))
     if k:
         XTX[:num_bins, num_bins:] = bin_control_sums
         XTX[num_bins:, :num_bins] = bin_control_sums.T
         XTX[num_bins:, num_bins:] = ww
         XTy[num_bins:] = wy
 
-    XTy[:num_bins] = sum_y
+    XTy[:num_bins] = sum_y.astype(float, copy=False)
 
-    try:
-        theta = np.linalg.solve(XTX, XTy)
-    except np.linalg.LinAlgError:
-        theta, *_ = np.linalg.lstsq(XTX, XTy, rcond=None)
+    theta = _solve_normal_equations(XTX, XTy)
 
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
@@ -291,8 +382,105 @@ def partial_out_controls(
     return df_plotting, {"beta": beta, "gamma": gamma}
 
 
+def _fit_polynomial_line(
+    df_prepped: nw.LazyFrame,
+    profile: Profile,
+    degree: int,
+    cache: dict[str, float],
+) -> PolynomialFit:
+    if not profile.polynomial_features or len(profile.polynomial_features) < degree:
+        raise ValueError(
+            "Polynomial features not initialized; ensure add_polynomial was set."
+        )
+    poly_cols = profile.polynomial_features[:degree]
+    feature_names = poly_cols + profile.regression_features
+    base_exprs: dict[str, nw.Expr] = {
+        _moment_alias("total_count"): nw.len(),
+        _moment_alias("sum_y_total"): profile.y_col.sum(),
+    }
+    _ensure_moments(df_prepped, cache, base_exprs)
+    _ensure_feature_moments(df_prepped, feature_names, profile.y_col, cache)
+
+    total_count = cache[_moment_alias("total_count")]
+    if total_count <= 0:
+        raise ValueError("Polynomial overlay requires at least one observation.")
+    sum_y_total = cache[_moment_alias("sum_y_total")]
+    size = len(feature_names) + 1
+    xtx = np.zeros((size, size), dtype=float)
+    xty = np.zeros(size, dtype=float)
+    xtx[0, 0] = total_count
+    xty[0] = sum_y_total
+
+    feature_xtx, feature_xty = _build_feature_normal_equations(feature_names, cache)
+    for idx, col in enumerate(feature_names):
+        sum_col = cache[_moment_alias("sum", col)]
+        xtx[0, idx + 1] = sum_col
+        xtx[idx + 1, 0] = sum_col
+        xty[idx + 1] = feature_xty[idx]
+        xtx[idx + 1, idx + 1 :] = feature_xtx[idx, idx:]
+        xtx[idx + 1 :, idx + 1] = feature_xtx[idx:, idx]
+
+    coefficients = _solve_normal_equations(xtx, xty)
+    if profile.x_bounds:
+        x_min, x_max = profile.x_bounds
+    else:
+        x_min, x_max = _compute_x_bounds(df_prepped, profile.x_name)
+    x_grid = _build_prediction_grid(x_min, x_max)
+    control_means = (
+        np.array(
+            [
+                cache[_moment_alias("sum", ctrl)] / total_count
+                for ctrl in profile.regression_features
+            ],
+            dtype=float,
+        )
+        if profile.regression_features
+        else np.array([], dtype=float)
+    )
+    y_pred = _evaluate_polynomial_predictions(
+        coefficients, degree, control_means, x_grid
+    )
+    return PolynomialFit(
+        degree=degree,
+        coefficients=coefficients,
+        x=x_grid,
+        y=y_pred,
+    )
+
+
+def _build_prediction_grid(
+    x_min: float, x_max: float, grid_size: int = 200
+) -> np.ndarray:
+    if not (math.isfinite(x_min) and math.isfinite(x_max)):
+        raise ValueError("Polynomial overlay requires finite x bounds.")
+    if x_max < x_min:
+        x_min, x_max = x_max, x_min
+    if math.isclose(x_min, x_max):
+        return np.array([x_min], dtype=float)
+    return np.linspace(x_min, x_max, num=grid_size)
+
+
+def _evaluate_polynomial_predictions(
+    coefficients: np.ndarray, degree: int, control_means: np.ndarray, x_grid: np.ndarray
+) -> np.ndarray:
+    intercept = float(coefficients[0])
+    poly_coeffs = coefficients[1 : degree + 1]
+    control_coeffs = coefficients[degree + 1 :]
+    baseline = intercept
+    if control_coeffs.size and control_means.size:
+        baseline += float(control_coeffs @ control_means)
+    if not x_grid.size:
+        return np.array([], dtype=float)
+    poly_terms = np.vstack([x_grid ** power for power in range(1, degree + 1)])
+    y_poly = poly_terms.T @ poly_coeffs
+    return baseline + y_poly
+
+
 def make_plot_plotly(
-    df_plotting: nw.LazyFrame, profile: Profile, kwargs_binscatter: dict[str, Any]
+    df_plotting: nw.LazyFrame,
+    profile: Profile,
+    kwargs_binscatter: dict[str, Any],
+    polynomial_line: PolynomialFit | None = None,
 ) -> go.Figure:
     """Make plot from prepared dataframe.
 
@@ -311,8 +499,9 @@ def make_plot_plotly(
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
 
-    pad = (x_max - x_min) * 0.04
-    padded_range_x = (x_min - pad, x_max + pad)
+    raw_x_min, raw_x_max = profile.x_bounds
+    pad = (raw_x_max - raw_x_min) * 0.04
+    padded_range_x = (raw_x_min - pad, raw_x_max + pad)
     scatter_args = {
         "x": x,
         "y": y,
@@ -331,7 +520,20 @@ def make_plot_plotly(
             continue
         scatter_args[k] = kwargs_binscatter[k]
 
-    return px.scatter(**scatter_args)
+    figure = px.scatter(**scatter_args)
+    if polynomial_line is not None:
+        figure.add_trace(
+            go.Scatter(
+                x=polynomial_line.x.tolist(),
+                y=polynomial_line.y.tolist(),
+                mode="lines",
+                name=f"Polynomial fit (deg {polynomial_line.degree})",
+                showlegend=False,
+                line={"color": "#3366cc"},
+            )
+        )
+
+    return figure
 
 
 def _remove_bad_values(
@@ -842,6 +1044,22 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
     return df_plotting
 
 
+def _compute_x_bounds(df: nw.LazyFrame, x: str) -> Tuple[float, float]:
+    bounds = df.select(
+        nw.col(x).min().alias("__x_min"),
+        nw.col(x).max().alias("__x_max"),
+    ).collect()
+    x_min = bounds.item(0, "__x_min")
+    x_max = bounds.item(0, "__x_max")
+    if x_min is None or x_max is None:
+        raise ValueError("x column must have finite min and max values.")
+    x_min_f = float(x_min)
+    x_max_f = float(x_max)
+    if not (math.isfinite(x_min_f) and math.isfinite(x_max_f)):
+        raise ValueError("x column must have finite min and max values.")
+    return (x_min_f, x_max_f)
+
+
 def maybe_add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: Tuple[str, ...],
@@ -872,6 +1090,27 @@ def maybe_add_regression_features(
         return df, tuple(numeric_controls)
 
     return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
+
+
+def maybe_add_polynomial_features(
+    df: nw.LazyFrame,
+    *,
+    x_name: str,
+    degree: int | None,
+    distinct_suffix: str,
+) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+    """Optionally append polynomial columns in x up to the requested degree."""
+    if degree is None:
+        return df, ()
+    exprs: list[nw.Expr] = []
+    names: list[str] = []
+    for power in range(1, degree + 1):
+        alias = f"__poly_{power}_{distinct_suffix}"
+        exprs.append((nw.col(x_name) ** power).alias(alias))
+        names.append(alias)
+    if not exprs:
+        return df, ()
+    return df.with_columns(*exprs), tuple(names)
 
 
 def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDataFrame:

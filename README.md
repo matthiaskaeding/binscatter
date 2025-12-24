@@ -7,6 +7,7 @@
 - Lightweight - little dependencies
 - Just works: by default picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024) - no manual tuning
 - Efficiently avoids materializing large intermediate datasets
+- Optional polynomial regression overlay computed directly from the raw data (and any controls) for quick visual comparison
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
 
@@ -47,6 +48,7 @@ binscatter(
     ],
     # num_bins="rule-of-thumb",  # optional: let the selector choose the bin count
     # return_type="native",  # optional: get the aggregated dataframe instead of a Plotly figure
+    # add_polynomial=2,  # optional: overlay a degree-2 polynomial fit using the raw data plus controls
 ).update_layout(  # binscatter returns a Plotly figure, so you can tweak labels, colors, etc.
     xaxis_title="Log net of tax rate := log(1 - tax rate)",
     yaxis_title="Log number of patents",
