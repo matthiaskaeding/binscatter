@@ -27,7 +27,6 @@ import logging  # noqa: E402
 
 import plotly.express as px  # noqa: E402
 import polars as pl  # noqa: E402
-from plotly.subplots import make_subplots  # noqa: E402
 
 from src.binscatter.core import binscatter  # noqa: E402
 
