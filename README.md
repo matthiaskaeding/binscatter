@@ -6,6 +6,7 @@
   - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
 - Lightweight - little dependencies
 - Just works: by default picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024) - no manual tuning
+- Confidence-ready: ask for pointwise error bars or robust bias-corrected bands with the `ci` parameter
 - Efficiently avoids materializing large intermediate datasets
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Pythonic alternative to the excellent **binsreg** package
@@ -56,6 +57,24 @@ This is how a classical scatter of the same data looks like, clearly showing a l
 
 <img src="images/readme/scatter.png" alt="Scatter" width="640" />
 
+
+### Confidence intervals
+
+Enable per-bin confidence intervals (for the fixed-`J` parameter) or robust bias-corrected intervals that follow the debiased curve from Cattaneo et al. (2024):
+
+```python
+binscatter(
+    df,
+    "mtr90_lag3",
+    "lnpat",
+    controls=["top_corp_lag3", "year"],
+    num_bins="rule-of-thumb",
+    ci="pointwise",   # or "rbc" for the continuous robust bias-corrected band
+    ci_level=0.9,
+)
+```
+
+Both styles are exported in the returned dataframe (`ci_lower`, `ci_upper`, `ci_std_error`), and Plotly figures include matching error bars.
 
 This package implements binscatter plots following:
 

@@ -24,6 +24,14 @@ from narwhals import Implementation
 from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
+from .inference import (
+    BinAggregates,
+    IntervalResult,
+    RegressionResult,
+    compute_pointwise_ci,
+    compute_rbc_ci,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -36,6 +44,8 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly"] = "plotly",
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> go.Figure: ...
 
@@ -49,6 +59,8 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["native"] = "native",
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> object: ...
 
@@ -61,6 +73,8 @@ def binscatter(
     controls: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
@@ -72,6 +86,8 @@ def binscatter(
         controls: Optional control columns to partial out (either a string or iterable of strings).
         num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
+        ci: Optional confidence interval style. ``"pointwise"`` reports bin-level CIs, ``"rbc"`` enables robust bias correction.
+        ci_level: Confidence level used when ``ci`` is not ``"none"``.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
@@ -101,6 +117,12 @@ def binscatter(
     if not isinstance(y, str):
         raise TypeError("y_name must be a string")
 
+    if ci not in ("none", "pointwise", "rbc"):
+        msg = f"Invalid ci option: {ci}"
+        raise ValueError(msg)
+    if ci != "none" and not (0.0 < ci_level < 1.0):
+        raise ValueError("ci_level must lie strictly between 0 and 1.")
+
     controls = _clean_controls(controls)
     if x in controls:
         raise ValueError("x cannot be in controls")
@@ -129,6 +151,13 @@ def binscatter(
     else:
         computed_num_bins = manual_bins
 
+    inference_requested = ci != "none"
+    bin_edges = (
+        _estimate_bin_edges(df_with_regression_features, x, computed_num_bins)
+        if inference_requested
+        else None
+    )
+
     profile = Profile(
         num_bins=computed_num_bins,
         x_name=x,
@@ -138,18 +167,36 @@ def binscatter(
         distinct_suffix=distinct_suffix,
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
+        ci_option=ci,
+        ci_level=ci_level,
+        bin_edges=bin_edges,
     )
     add_bins: Callable = configure_quantile_handler(profile)
     df_prepped = add_bins(df_with_regression_features)
 
-    if not controls:
-        # The easy one, just compute the means by bin
+    regression_result: RegressionResult | None = None
+    if not controls and not inference_requested:
         df_plotting = compute_bin_means(df_prepped, profile)
     else:
-        # Compute regression coefficients
-        # and partial out the effect of the controls
-        # (see section 2.2 in Cattaneo, Crump, Farrell and Feng (2024))
-        df_plotting, _ = partial_out_controls(df_prepped, profile)
+        df_plotting, regression_result = partial_out_controls(
+            df_prepped, profile, collect_inference=inference_requested
+        )
+
+    if inference_requested:
+        if regression_result is None:
+            msg = "Inference requires regression summaries, but none were computed."
+            raise RuntimeError(msg)
+        if ci == "pointwise":
+            ci_result = compute_pointwise_ci(regression_result, ci_level)
+        else:
+            if profile.bin_edges is None:
+                raise RuntimeError("RBC confidence intervals require bin edges.")
+            ci_result = compute_rbc_ci(
+                regression_result, profile.bin_edges, ci_level
+            )
+        df_plotting = _attach_ci_columns(
+            df_plotting, profile, ci_result, replace_y=(ci == "rbc")
+        )
 
     match return_type:
         case "plotly":
@@ -169,6 +216,9 @@ class Profile(NamedTuple):
     is_lazy_input: bool
     implementation: Implementation
     regression_features: Tuple[str, ...]
+    ci_option: Literal["none", "pointwise", "rbc"]
+    ci_level: float
+    bin_edges: np.ndarray | None
 
     @property
     def x_col(self) -> nw.Expr:
@@ -180,16 +230,28 @@ class Profile(NamedTuple):
 
 
 def partial_out_controls(
-    df_prepped: nw.LazyFrame, profile: Profile
-) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
+    df_prepped: nw.LazyFrame, profile: Profile, *, collect_inference: bool = False
+) -> tuple[nw.LazyFrame, RegressionResult | None]:
     """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
 
-    agg_exprs = [
+    x_col = profile.x_col
+    y_col = profile.y_col
+    agg_exprs: list[nw.Expr] = [
         nw.len().alias("__count"),
-        profile.x_col.mean().alias(profile.x_name),
-        profile.y_col.sum().alias("__sum_y"),
-        *[nw.col(c).sum().alias(c) for c in profile.regression_features],
+        x_col.mean().alias(profile.x_name),
+        y_col.sum().alias("__sum_y"),
+        (y_col * y_col).sum().alias("__sum_y2"),
+        x_col.sum().alias("__sum_x"),
+        (x_col * x_col).sum().alias("__sum_x2"),
+        (x_col * y_col).sum().alias("__sum_xy"),
     ]
+    control_x_aliases: list[str] = []
+    for alias in profile.regression_features:
+        col_expr = nw.col(alias)
+        agg_exprs.append(col_expr.sum().alias(alias))
+        x_alias = f"__{alias}__sum_x"
+        control_x_aliases.append(x_alias)
+        agg_exprs.append((col_expr * x_col).sum().alias(x_alias))
 
     per_bin = (
         df_prepped.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
@@ -199,7 +261,13 @@ def partial_out_controls(
     if counts.size < profile.num_bins:
         msg = "Quantiles are not unique. Decrease number of bins."
         raise ValueError(msg)
+
     sum_y = per_bin.get_column("__sum_y").to_numpy()
+    sum_y2 = per_bin.get_column("__sum_y2").to_numpy()
+    sum_x = per_bin.get_column("__sum_x").to_numpy()
+    sum_x2 = per_bin.get_column("__sum_x2").to_numpy()
+    sum_xy = per_bin.get_column("__sum_xy").to_numpy()
+
     if profile.regression_features:
         bin_control_sums = np.column_stack(
             [
@@ -207,16 +275,23 @@ def partial_out_controls(
                 for alias in profile.regression_features
             ]
         )
-    else:  # This should never happen
+        bin_control_x_sums = np.column_stack(
+            [per_bin.get_column(alias).to_numpy() for alias in control_x_aliases]
+        )
+    else:
         bin_control_sums = np.zeros((profile.num_bins, 0))
+        bin_control_x_sums = np.zeros_like(bin_control_sums)
 
-    total_exprs = [nw.len().alias("__total_count")]
+    total_exprs = [
+        nw.len().alias("__total_count"),
+        (y_col * y_col).sum().alias("__total_y2"),
+    ]
     total_exprs.extend(
         nw.col(alias).sum().alias(f"__total_ctrl_{idx}")
         for idx, alias in enumerate(profile.regression_features)
     )
     total_exprs.extend(
-        (nw.col(alias) * profile.y_col).sum().alias(f"__wy_{idx}")
+        (nw.col(alias) * y_col).sum().alias(f"__wy_{idx}")
         for idx, alias in enumerate(profile.regression_features)
     )
     for i, alias_i in enumerate(profile.regression_features):
@@ -226,8 +301,10 @@ def partial_out_controls(
             )
 
     totals = df_prepped.select(*total_exprs).collect()
-    total_count = totals.item(0, "__total_count")
-    if profile.regression_features:
+    total_count = int(totals.item(0, "__total_count"))
+    total_y2 = float(totals.item(0, "__total_y2"))
+    k = len(profile.regression_features)
+    if k:
         total_ctrl_sums = np.array(
             [
                 totals.item(0, f"__total_ctrl_{idx}")
@@ -240,11 +317,9 @@ def partial_out_controls(
                 for idx in range(len(profile.regression_features))
             ]
         )
-        ww = np.zeros(
-            (len(profile.regression_features), len(profile.regression_features))
-        )
-        for i in range(len(profile.regression_features)):
-            for j in range(i, len(profile.regression_features)):
+        ww = np.zeros((k, k))
+        for i in range(k):
+            for j in range(i, k):
                 alias = f"__ww_{i}_{j}"
                 value = totals.item(0, alias)
                 ww[i, j] = value
@@ -254,26 +329,23 @@ def partial_out_controls(
         wy = np.array([])
         ww = np.zeros((0, 0))
 
-    # Assemble normal equations
     num_bins = profile.num_bins
-    k = len(profile.regression_features)
     size = num_bins + k
-    XTX = np.zeros((size, size))
-    XTy = np.zeros(size)
+    xtx = np.zeros((size, size))
+    xty = np.zeros(size)
 
-    XTX[:num_bins, :num_bins] = np.diag(counts)
+    xtx[:num_bins, :num_bins] = np.diag(counts)
+    xty[:num_bins] = sum_y
     if k:
-        XTX[:num_bins, num_bins:] = bin_control_sums
-        XTX[num_bins:, :num_bins] = bin_control_sums.T
-        XTX[num_bins:, num_bins:] = ww
-        XTy[num_bins:] = wy
-
-    XTy[:num_bins] = sum_y
+        xtx[:num_bins, num_bins:] = bin_control_sums
+        xtx[num_bins:, :num_bins] = bin_control_sums.T
+        xtx[num_bins:, num_bins:] = ww
+        xty[num_bins:] = wy
 
     try:
-        theta = np.linalg.solve(XTX, XTy)
+        theta = np.linalg.solve(xtx, xty)
     except np.linalg.LinAlgError:
-        theta, *_ = np.linalg.lstsq(XTX, XTy, rcond=None)
+        theta, *_ = np.linalg.lstsq(xtx, xty, rcond=None)
 
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
@@ -288,7 +360,64 @@ def partial_out_controls(
         per_bin.select(profile.bin_name, profile.x_name).with_columns(y_vals).lazy()
     )
 
-    return df_plotting, {"beta": beta, "gamma": gamma}
+    regression_result: RegressionResult | None = None
+    if collect_inference:
+        rss = max(total_y2 - float(theta @ xty), 0.0)
+        rank_xtx = np.linalg.matrix_rank(xtx)
+        dof = max(total_count - rank_xtx, 1)
+        bin_stats = BinAggregates(
+            counts=counts,
+            mean_x=per_bin.get_column(profile.x_name).to_numpy(),
+            sum_x=sum_x,
+            sum_x2=sum_x2,
+            sum_y=sum_y,
+            sum_y2=sum_y2,
+            sum_xy=sum_xy,
+            control_sums=bin_control_sums,
+            control_x_sums=bin_control_x_sums,
+        )
+        regression_result = RegressionResult(
+            beta=beta,
+            gamma=gamma,
+            mean_controls=mean_controls,
+            xtx=xtx,
+            xty=xty,
+            rss=rss,
+            dof_resid=dof,
+            total_count=total_count,
+            total_y2=total_y2,
+            bin_stats=bin_stats,
+            control_cross=ww,
+            wy=wy,
+        )
+
+    return df_plotting, regression_result
+
+
+def _attach_ci_columns(
+    df_plotting: nw.LazyFrame,
+    profile: Profile,
+    ci_result: IntervalResult,
+    *,
+    replace_y: bool,
+) -> nw.LazyFrame:
+    """Attach confidence interval columns to the plotting frame."""
+    df_materialized = df_plotting.collect()
+    backend = df_materialized.implementation
+    new_columns = [
+        nw.new_series(name="ci_lower", values=ci_result.lower, backend=backend),
+        nw.new_series(name="ci_upper", values=ci_result.upper, backend=backend),
+        nw.new_series(
+            name="ci_std_error", values=ci_result.std_error, backend=backend
+        ),
+    ]
+    if replace_y:
+        new_columns.append(
+            nw.new_series(
+                name=profile.y_name, values=ci_result.center, backend=backend
+            )
+        )
+    return df_materialized.with_columns(*new_columns).lazy()
 
 
 def make_plot_plotly(
@@ -298,7 +427,7 @@ def make_plot_plotly(
 
     Args:
       df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile"""
-    data = df_plotting.select(profile.x_name, profile.y_name).collect()
+    data = df_plotting.collect()
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
 
@@ -324,6 +453,11 @@ def make_plot_plotly(
         "template": "simple_white",
         "color_discrete_sequence": ["black"],
     }
+    ci_lower: list[float] | None = None
+    ci_upper: list[float] | None = None
+    if "ci_lower" in data.columns and "ci_upper" in data.columns:
+        ci_lower = data.get_column("ci_lower").to_list()
+        ci_upper = data.get_column("ci_upper").to_list()
     for k in kwargs_binscatter:
         if k in ("x", "y", "range_x"):
             msg = f"px.scatter will ignore keyword argument '{k}'"
@@ -331,7 +465,25 @@ def make_plot_plotly(
             continue
         scatter_args[k] = kwargs_binscatter[k]
 
-    return px.scatter(**scatter_args)
+    fig = px.scatter(**scatter_args)
+    if ci_lower is not None and ci_upper is not None:
+        upper_err = [max(u - yi, 0.0) for yi, u in zip(y, ci_upper)]
+        lower_err = [max(yi - l, 0.0) for yi, l in zip(y, ci_lower)]
+        fig.update_traces(
+            error_y=dict(
+                type="data",
+                array=upper_err,
+                arrayminus=lower_err,
+                thickness=1.0,
+                width=4,
+            )
+        )
+
+    fig.update_layout(
+        xaxis_title=profile.x_name, yaxis_title=profile.y_name, template="simple_white"
+    )
+
+    return fig
 
 
 def _remove_bad_values(
@@ -437,6 +589,44 @@ def _add_fallback(
 
 def _make_probs(num_bins) -> List[float]:
     return [i / num_bins for i in range(1, num_bins + 1)]
+
+
+def _estimate_bin_edges(df: nw.LazyFrame, x: str, num_bins: int) -> np.ndarray:
+    """Collect sample quantiles (including endpoints) to anchor inference routines."""
+    if num_bins < 1:
+        raise ValueError("num_bins must be at least 1 to estimate bin edges.")
+    x_col = nw.col(x)
+    endpoints = df.select(
+        x_col.min().alias("__min_x"),
+        x_col.max().alias("__max_x"),
+    ).collect()
+    min_x = float(endpoints.item(0, "__min_x"))
+    max_x = float(endpoints.item(0, "__max_x"))
+    if not math.isfinite(min_x) or not math.isfinite(max_x):
+        raise ValueError("Encountered non-finite x-values while estimating bin edges.")
+    if num_bins == 1:
+        return np.array([min_x, max_x], dtype=float)
+    probs = [i / num_bins for i in range(1, num_bins)]
+    try:
+        quantiles_df = df.select(
+            *[
+                x_col.quantile(p, interpolation="linear").alias(f"__q_{i}")
+                for i, p in enumerate(probs, start=1)
+            ]
+        )
+    except TypeError:
+        quantiles_df = df.select(
+            *[
+                cast(Any, x_col).quantile(p).alias(f"__q_{i}")
+                for i, p in enumerate(probs, start=1)
+            ]
+        )
+    quantiles = quantiles_df.collect()
+    q_values = [
+        float(quantiles.item(0, f"__q_{i}")) for i in range(1, len(probs) + 1)
+    ]
+    edges = np.array([min_x, *q_values, max_x], dtype=float)
+    return edges
 
 
 def configure_quantile_handler(profile: Profile) -> Callable:

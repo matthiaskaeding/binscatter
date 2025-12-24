@@ -94,6 +94,9 @@ def _sample_profile(bin_count: int, controls: list[str]) -> Profile:
             pd.DataFrame({"x0": [0], "y0": [0]})
         ).implementation,
         regression_features=tuple(controls),
+        ci_option="none",
+        ci_level=0.95,
+        bin_edges=None,
     )
 
 
