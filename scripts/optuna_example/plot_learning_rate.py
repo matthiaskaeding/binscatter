@@ -82,6 +82,7 @@ def main() -> None:
         scatter_fig.update_layout(showlegend=False)
         scatter_fig.update_xaxes(title_text=parameter)
         scatter_fig.update_yaxes(title_text="RMSE")
+        scatter_fig.update_traces(marker={"size": 7})
         scatter_fig.write_image(
             image_dir / f"{prefix}_scatter.png",
             width=960,
