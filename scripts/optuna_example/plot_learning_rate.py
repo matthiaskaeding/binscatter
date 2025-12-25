@@ -72,7 +72,16 @@ def main() -> None:
 
     for parameter in [col for col in HYPERPARAM_COLUMNS if col in df.columns]:
         prefix = f"{parameter}_rmse"
-        scatter_fig = px.scatter(df, parameter, "rmse")
+        scatter_fig = px.scatter(
+            df,
+            x=parameter,
+            y="rmse",
+            template="simple_white",
+            color_discrete_sequence=["black"],
+        )
+        scatter_fig.update_layout(showlegend=False)
+        scatter_fig.update_xaxes(title_text=parameter)
+        scatter_fig.update_yaxes(title_text="RMSE")
         scatter_fig.write_image(
             image_dir / f"{prefix}_scatter.png",
             width=960,
