@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- No changes yet.
+
+## 0.2.0 - 2025-12-25
+
 ### Added
 - ``poly_line`` argument to overlay degree-1–3 polynomial fits computed from the raw ``x`` and all supplied controls.
 - Ensure the Plotly-based binscatter output always applies the ``simple_white`` template so figures look consistent across environments.
