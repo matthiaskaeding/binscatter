@@ -18,8 +18,6 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
-import plotly.express as px
-import plotly.io as pio
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))

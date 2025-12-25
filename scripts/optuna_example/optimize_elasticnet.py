@@ -79,7 +79,9 @@ def _record_trials(study: optuna.Study) -> None:
         row = {
             "trial": trial.number,
             "rmse": float(trial.value),
-            "duration_seconds": trial.duration.total_seconds() if trial.duration else 0.0,
+            "duration_seconds": trial.duration.total_seconds()
+            if trial.duration
+            else 0.0,
         }
         row.update(trial.params)
         rows.append(row)
