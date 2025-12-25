@@ -522,6 +522,12 @@ def make_plot_plotly(
         scatter_args[k] = kwargs_binscatter[k]
 
     figure = px.scatter(**scatter_args)
+    if "size" not in kwargs_binscatter:
+        figure.update_traces(marker={"size": 8})
+    else:
+        warnings.warn(
+            "binscatter plot respects provided 'size' keyword; default marker size of 8 skipped."
+        )
     if polynomial_line is not None:
         figure.add_trace(
             go.Scatter(
