@@ -618,6 +618,8 @@ def test_partial_out_controls_matches_statsmodels():
     beta_ref = beta - beta[0]
     beta_actual = coeffs["beta"] - coeffs["beta"][0]
     np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
+
+
 def test_fit_polynomial_line_matches_statsmodels():
     rng = np.random.default_rng(1234)
     n = 400
@@ -639,11 +641,18 @@ def test_fit_polynomial_line_matches_statsmodels():
     design = np.column_stack([np.ones(n), x, x**2, z])
     theta, *_ = np.linalg.lstsq(design, y, rcond=None)
     np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=1e-6)
+
+
 def test_poly_line_does_not_change_bins():
-    df = pd.DataFrame({
-        "x0": np.linspace(-3, 3, 200),
-        "y0": np.linspace(-3, 3, 200) + np.random.default_rng(0).normal(scale=0.1, size=200),
-    })
+    df = pd.DataFrame(
+        {
+            "x0": np.linspace(-3, 3, 200),
+            "y0": np.linspace(-3, 3, 200)
+            + np.random.default_rng(0).normal(scale=0.1, size=200),
+        }
+    )
     native = binscatter(df, "x0", "y0", num_bins=15, return_type="native")
-    with_poly = binscatter(df, "x0", "y0", num_bins=15, poly_line=2, return_type="native")
+    with_poly = binscatter(
+        df, "x0", "y0", num_bins=15, poly_line=2, return_type="native"
+    )
     pd.testing.assert_frame_equal(native, with_poly)

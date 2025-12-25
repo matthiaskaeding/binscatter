@@ -535,7 +535,8 @@ def make_plot_plotly(
                 y=polynomial_line.y.tolist(),
                 mode="lines",
                 name=f"Polynomial fit (deg {polynomial_line.degree})",
-                showlegend=False,                line={"color": "rgba(31, 119, 180, 0.95)", "width": 2},
+                showlegend=False,
+                line={"color": "rgba(31, 119, 180, 0.95)", "width": 2},
             )
         )
 
