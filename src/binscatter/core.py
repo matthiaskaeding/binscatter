@@ -131,15 +131,18 @@ def binscatter(
         numeric_controls=numeric_columns,
         categorical_controls=categorical_columns,
     )
-    (
-        df_with_regression_features,
-        polynomial_features,
-    ) = maybe_add_polynomial_features(
-        df_with_regression_features,
-        x_name=x,
-        degree=poly_line,
-        distinct_suffix=distinct_suffix,
-    )
+    if poly_line is not None:
+        (
+            df_with_regression_features,
+            polynomial_features,
+        ) = add_polynomial_features(
+            df_with_regression_features,
+            x_name=x,
+            degree=poly_line,
+            distinct_suffix=distinct_suffix,
+        )
+    else:
+        polynomial_features = ()
 
     if auto_bins:
         computed_num_bins = _select_rule_of_thumb_bins(
@@ -226,6 +229,7 @@ def _moment_alias(kind: str, *parts: str) -> str:
 def _ensure_moments(
     df: nw.LazyFrame, cache: dict[str, float], expr_map: dict[str, nw.Expr]
 ) -> None:
+    """Populate the cache with any missing scalar moments defined in expr_map."""
     missing = {alias: expr for alias, expr in expr_map.items() if alias not in cache}
     if not missing:
         return
@@ -245,6 +249,7 @@ def _ensure_feature_moments(
     y_expr: nw.Expr,
     cache: dict[str, float],
 ) -> None:
+    """Gather feature-level sums, y cross-products, and cross-moments into the cache."""
     if not feature_names:
         return
     exprs: dict[str, nw.Expr] = {}
@@ -1090,16 +1095,14 @@ def maybe_add_regression_features(
     return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
 
 
-def maybe_add_polynomial_features(
+def add_polynomial_features(
     df: nw.LazyFrame,
     *,
     x_name: str,
-    degree: int | None,
+    degree: int,
     distinct_suffix: str,
 ) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
-    """Optionally append polynomial columns in x up to the requested degree."""
-    if degree is None:
-        return df, ()
+    """Append polynomial columns in x up to the requested degree."""
     exprs: list[nw.Expr] = []
     names: list[str] = []
     for power in range(1, degree + 1):
