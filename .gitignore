@@ -26,3 +26,4 @@ artifacts/dataverse_files/
 refs/
 *.log
 *.pdf
+.env
