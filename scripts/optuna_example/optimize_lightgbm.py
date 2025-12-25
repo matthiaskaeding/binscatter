@@ -3,7 +3,9 @@
 # dependencies = [
 #     "lightgbm",
 #     "optuna",
+#     "pandas",
 #     "polars",
+#     "pyarrow",
 #     "scikit-learn",
 # ]
 # ///
@@ -74,6 +76,7 @@ def _run_study(
             "bagging_freq": 0,
             "verbosity": -1,
             "force_col_wise": True,
+            "feature_pre_filter": False,
         }
         booster = lgb.train(
             params,
@@ -83,7 +86,7 @@ def _run_study(
             callbacks=[lgb.early_stopping(20, verbose=False)],
         )
         preds = booster.predict(X_valid, num_iteration=booster.best_iteration)
-        rmse = mean_squared_error(y_valid, preds, squared=False)
+        rmse = mean_squared_error(y_valid, preds) ** 0.5
         trial.set_user_attr("best_iteration", int(booster.best_iteration or 200))
         return rmse
 

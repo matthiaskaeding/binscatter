@@ -1,6 +1,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
+#     "kaleido",
 #     "pandas",
 #     "plotly",
 #     "pyarrow",
@@ -16,13 +17,18 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import plotly.express as px
+import plotly.express as px
+import plotly.io as pio
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "src"))
 
-from src.binscatter.core import binscatter  # noqa: E402
+from binscatter.core import binscatter  # noqa: E402
 
-CONTROL_COLS = [
+HYPERPARAM_COLUMNS = [
+    "learning_rate",
     "num_leaves",
     "min_child_samples",
     "feature_fraction",
@@ -44,7 +50,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "artifacts",
+        default=ROOT / "images" / "lightgbm",
     )
     parser.add_argument("--num-bins", type=int, default=25)
     args = parser.parse_args()
@@ -55,36 +61,59 @@ def main() -> None:
         )
     df = pd.read_parquet(args.results_path)
     df = df.rename(columns={"value": "rmse"}) if "value" in df.columns else df
-    if "learning_rate" not in df.columns:
+    missing = [col for col in HYPERPARAM_COLUMNS if col not in df.columns]
+    if "learning_rate" in missing:
         raise ValueError("Results file must contain a 'learning_rate' column.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    plain_fig = binscatter(
-        df,
-        "learning_rate",
-        "rmse",
-        num_bins=args.num_bins,
-    )
-    plain_path = args.output_dir / "learning_rate_rmse_binscatter.html"
-    plain_fig.write_html(plain_path)
+    image_dir = ROOT / "images" / "lightgbm"
+    image_dir.mkdir(parents=True, exist_ok=True)
 
-    available_controls = [col for col in CONTROL_COLS if col in df.columns]
-    if available_controls:
-        controls_fig = binscatter(
+    for parameter in [col for col in HYPERPARAM_COLUMNS if col in df.columns]:
+        prefix = f"{parameter}_rmse"
+        scatter_fig = px.scatter(df, parameter, "rmse")
+        scatter_fig.write_image(
+            image_dir / f"{prefix}_scatter.png",
+            width=960,
+            height=640,
+        )
+
+        plain_fig = binscatter(
             df,
-            "learning_rate",
+            parameter,
             "rmse",
-            controls=available_controls,
             num_bins=args.num_bins,
         )
-        controls_path = args.output_dir / "learning_rate_rmse_binscatter_controls.html"
-        controls_fig.write_html(controls_path)
-        print(f"Saved binscatter with controls to {controls_path}")
-    else:
-        print("No control columns found; skipped controlled binscatter plot.")
+        plain_fig.write_image(
+            image_dir / f"{prefix}_binscatter.png", width=960, height=640
+        )
 
-    print(f"Saved plain binscatter to {plain_path}")
+        controls = [c for c in HYPERPARAM_COLUMNS if c != parameter and c in df.columns]
+        if controls:
+            controls_fig = binscatter(
+                df,
+                parameter,
+                "rmse",
+                controls=controls,
+                num_bins=args.num_bins,
+            )
+            controls_fig.write_image(
+                image_dir / f"{prefix}_binscatter_controls.png",
+                width=960,
+                height=640,
+            )
+            print(
+                f"Saved {parameter} binscatter with controls to "
+                f"{image_dir / (prefix + '_binscatter_controls.png')}"
+            )
+        else:
+            print(f"No controls available for {parameter}; skipped controlled plot.")
+
+        print(
+            f"Saved {parameter} binscatter to "
+            f"{image_dir / (prefix + '_binscatter.png')}"
+        )
 
 
 if __name__ == "__main__":
