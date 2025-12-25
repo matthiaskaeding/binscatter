@@ -29,7 +29,9 @@ OUT_DIR = ROOT / "images" / "elasticnet"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _binscatter_plot(df: pd.DataFrame, x: str, controls: list[str], num_bins: int) -> None:
+def _binscatter_plot(
+    df: pd.DataFrame, x: str, controls: list[str], num_bins: int
+) -> None:
     base_name = f"{x}_rmse"
     scatter_fig = px.scatter(
         df,
@@ -61,7 +63,9 @@ def _binscatter_plot(df: pd.DataFrame, x: str, controls: list[str], num_bins: in
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Plot ElasticNet Optuna trial results.")
+    parser = argparse.ArgumentParser(
+        description="Plot ElasticNet Optuna trial results."
+    )
     parser.add_argument(
         "--results-path",
         type=Path,
@@ -80,9 +84,7 @@ def main() -> None:
     if "rmse" not in df.columns:
         raise ValueError("Trials parquet must contain an 'rmse' column.")
 
-    available_controls = [
-        col for col in ("alpha", "l1_ratio") if col in df.columns
-    ]
+    available_controls = [col for col in ("alpha", "l1_ratio") if col in df.columns]
     for hyper in ["alpha", "l1_ratio"]:
         if hyper not in df.columns:
             continue

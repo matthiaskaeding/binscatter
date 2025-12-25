@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "binscatter"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cross-backend binscatter plots."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -60,3 +60,17 @@ ci = [
 
 [tool.ty.rules]
 unresolved-import = "ignore"
+
+[tool.uv]
+
+[[tool.uv.index]]
+name = "testpypi"
+url = "https://test.pypi.org/simple/"
+publish-url = "https://test.pypi.org/legacy/"
+explicit = true
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple/"
+publish-url = "https://upload.pypi.org/legacy/"
+explicit = true
