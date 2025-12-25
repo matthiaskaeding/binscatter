@@ -3,14 +3,17 @@ from typing import Iterable
 
 import polars as pl
 import numpy as np
+import narwhals as nw
 from binsreg import binsregselect
 from binscatter.core import (
+    add_polynomial_features,
     binscatter,
     clean_df,
     configure_quantile_handler,
     maybe_add_regression_features,
     partial_out_controls,
     Profile,
+    _fit_polynomial_line,
     _select_rule_of_thumb_bins,
 )
 import plotly.graph_objs as go
@@ -35,7 +38,7 @@ else:  # pragma: no cover - optional dependency
 RNG = np.random.default_rng(42)
 
 
-def _prepare_dataframe(df, x, y, controls, num_bins):
+def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = None):
     controls_tuple = tuple(controls)
     df_clean, is_lazy, numeric_controls, categorical_controls = clean_df(
         df, controls_tuple, x, y
@@ -46,6 +49,23 @@ def _prepare_dataframe(df, x, y, controls, num_bins):
         categorical_controls=categorical_controls,
     )
     suffix = str(uuid.uuid4()).replace("-", "_")
+    if poly_degree is not None:
+        df_with_features, polynomial_features = add_polynomial_features(
+            df_with_features,
+            x_name=x,
+            degree=poly_degree,
+            distinct_suffix=suffix,
+        )
+    else:
+        polynomial_features = ()
+    x_bounds_frame = (
+        df_with_features.select(
+            nw.col(x).min().alias("__x_min"),
+            nw.col(x).max().alias("__x_max"),
+        )
+        .collect()
+        .to_pandas()
+    )
     profile = Profile(
         x_name=x,
         y_name=y,
@@ -55,6 +75,11 @@ def _prepare_dataframe(df, x, y, controls, num_bins):
         is_lazy_input=is_lazy,
         implementation=df_clean.implementation,
         regression_features=regression_features,
+        polynomial_features=polynomial_features,
+        x_bounds=(
+            float(x_bounds_frame["__x_min"].iat[0]),
+            float(x_bounds_frame["__x_max"].iat[0]),
+        ),
     )
     df_with_bins = configure_quantile_handler(profile)(df_with_features)
     return df_with_bins, profile
@@ -593,3 +618,32 @@ def test_partial_out_controls_matches_statsmodels():
     beta_ref = beta - beta[0]
     beta_actual = coeffs["beta"] - coeffs["beta"][0]
     np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
+def test_fit_polynomial_line_matches_statsmodels():
+    rng = np.random.default_rng(1234)
+    n = 400
+    x = rng.normal(loc=0.5, scale=1.5, size=n)
+    z = rng.normal(size=n)
+    y = 1.2 + 0.9 * x - 0.3 * x**2 + 0.5 * z + rng.normal(scale=0.2, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "z": z})
+    df_prepped, profile = _prepare_dataframe(
+        df,
+        x="x0",
+        y="y0",
+        controls=["z"],
+        num_bins=10,
+        poly_degree=3,
+    )
+    cache: dict[str, float] = {}
+    poly_fit = _fit_polynomial_line(df_prepped, profile, degree=2, cache=cache)
+
+    design = np.column_stack([np.ones(n), x, x**2, z])
+    theta, *_ = np.linalg.lstsq(design, y, rcond=None)
+    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=1e-6)
+def test_poly_line_does_not_change_bins():
+    df = pd.DataFrame({
+        "x0": np.linspace(-3, 3, 200),
+        "y0": np.linspace(-3, 3, 200) + np.random.default_rng(0).normal(scale=0.1, size=200),
+    })
+    native = binscatter(df, "x0", "y0", num_bins=15, return_type="native")
+    with_poly = binscatter(df, "x0", "y0", num_bins=15, poly_line=2, return_type="native")
+    pd.testing.assert_frame_equal(native, with_poly)

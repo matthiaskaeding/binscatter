@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- ``poly_line`` argument to overlay degree-1–3 polynomial fits computed from the raw ``x`` and all supplied controls.
 - Ensure the Plotly-based binscatter output always applies the ``simple_white`` template so figures look consistent across environments.
 - Document feature additions and template tweak in CHANGELOG.
 - Automatic rule-of-thumb bin selection for the canonical binscatter implementation.
@@ -12,6 +13,7 @@
 - ``just`` targets for lint, test, and plot replication, and README documentation improvements.
 
 ### Changed
+- Refactored ``partial_out_controls`` internals into reusable helpers so future regression overlays can share the same cached cross-moments.
 - Refactored the control/partialling pipeline into smaller helpers and improved validation.
 - Switched regression data cleaning to use ``drop_nulls``.
 - Updated README metadata and clarified usage examples.

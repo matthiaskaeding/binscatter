@@ -13,7 +13,6 @@ ok:
     @echo ""
     @just ty
 
-
 # Skip pyspark
 ftest:
     uv run pytest tests
@@ -34,7 +33,7 @@ install-pkg:
     uv pip install .
 
 # Download simulation from binsreg reference
-dl-sims:  
+dl-sims:
     mkdir -p data
     curl -L \
     https://raw.githubusercontent.com/nppackages/binsreg/5dcdb6f14b1d07698b6834a3b8590d0013456f0b/Python/binsreg_sim.csv \
@@ -42,9 +41,8 @@ dl-sims:
 
 # prep plots for rpelicateion
 make-data-replication:
-  uv run scripts/replicate_binscatter/prep_data.py
+    uv run scripts/replicate_binscatter/prep_data.py
 
-
-# replicate plots
-replicate-plots:
-  uv run scripts/replicate_binscatter/make_plots.py
+# make plots for readme
+make-plots:
+    uv run scripts/replicate_binscatter/make_plots.py

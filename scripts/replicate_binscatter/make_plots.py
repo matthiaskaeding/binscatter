@@ -27,7 +27,6 @@ import logging  # noqa: E402
 
 import plotly.express as px  # noqa: E402
 import polars as pl  # noqa: E402
-from plotly.subplots import make_subplots  # noqa: E402
 
 from src.binscatter.core import binscatter  # noqa: E402
 
@@ -99,18 +98,21 @@ df = df.with_columns(pl.col("statenum", "year").cast(pl.String))
 log_file = data_dir / "binscatter.log"
 
 print("Generating binscatter with controls...")
+
+
+controls = [
+    "top_corp_lag3",
+    "real_gdp_pc",
+    "population_density",
+    "rd_credit_lag3",
+    "statenum",
+    "year",
+]
 p_binscatter_controls = binscatter(
-    df.to_pandas(),
+    df,
     "mtr90_lag3",
     "lnpat",
-    controls=[
-        "top_corp_lag3",
-        "real_gdp_pc",
-        "population_density",
-        "rd_credit_lag3",
-        "statenum",
-        "year",
-    ],
+    controls=controls,
     num_bins="rule-of-thumb",
 )
 logging.shutdown()
@@ -122,27 +124,17 @@ p_binscatter_controls.update_layout(
 p_binscatter_controls.write_image(
     assets_dir / "binscatter_controls.png", width=640, height=480
 )
-# %%
-combined = make_subplots(
-    rows=1,
-    cols=2,
-    subplot_titles=("(a) Scatter", " (b) Binscatter with controls"),
-    horizontal_spacing=0.08,
-    specs=[[{"type": "scatter"}, {"type": "scatter"}]],
-)
-for trace in p_scatter.data:
-    combined.add_trace(trace, row=1, col=1)
-for trace in p_binscatter_controls.data:
-    combined.add_trace(trace, row=1, col=2)
-combined.update_xaxes(title_text=axis_labels["x"], row=1, col=1)
-combined.update_yaxes(title_text=axis_labels["y"], row=1, col=1)
-combined.update_xaxes(title_text=axis_labels["x"], row=1, col=2)
-combined.update_yaxes(title_text=axis_labels["y"], row=1, col=2)
-combined.update_layout(
-    template="simple_white",
-    showlegend=False,
-)
-for annotation in combined.layout.annotations:
-    annotation.update(font=dict(family="Georgia", size=16))
-combined.write_image(assets_dir / "scatter_vs_binscatter.png", width=960, height=480)
-combined.show()
+
+
+for i in range(1, 4):
+    p_poly = binscatter(
+        df,
+        "mtr90_lag3",
+        "lnpat",
+        controls=controls,
+        num_bins="rule-of-thumb",
+        poly_line=i,
+    )
+    p_poly.write_image(
+        assets_dir / f"binscatter_controls_poly{i}.png", width=640, height=480
+    )
