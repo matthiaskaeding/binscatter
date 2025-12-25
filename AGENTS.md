@@ -4,6 +4,7 @@
 - Core library lives in `binscatter/`, with `core.py` housing the dataframe‑agnostic `binscatter` implementation and helper utilities. Public exports are wired through `binscatter/__init__.py`.
 - Automated checks reside under `tests/`, combining integration coverage (cross‑backend checks in `tests/test_binscatter.py`) and focused unit helpers (see `tests/test_fallback.py` and `tests/test_unit.py`).
 - Usage samples and benchmarking scripts live in `examples/`; `examples/time_pyspark.py` demonstrates large‑scale Spark execution.
+- Store the plan in PLAN.md. Keep a plan of the current active feature on top of the file for easy reference. Archive old plans below a horizontal rule. 
 
 ## Build, Test, and Development Commands
 - Install dependencies for development: `uv pip install -e .[dev]`.

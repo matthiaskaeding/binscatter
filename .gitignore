@@ -25,3 +25,4 @@ artifacts/**/*.pdf
 artifacts/dataverse_files/
 refs/
 *.log
+*.pdf
