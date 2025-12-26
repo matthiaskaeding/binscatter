@@ -3,13 +3,9 @@
 **TL;DR:** Fast binscatter plots for all kinds of dataframes.
 
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
-  - All other Narwhals backends fall back to a generic quantile handler if a native path is unavailable
+- Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Lightweight - little dependencies
 - Just works: by default picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024) - no manual tuning
-- Efficiently avoids materializing large intermediate datasets
-- Optional polynomial regression overlay computed directly from the raw data (and any controls) for quick visual comparison
-- Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
-- Pythonic alternative to the excellent **binsreg** package
 
 ## What are binscatter plots? 
 
@@ -54,9 +50,6 @@ binscatter(
     yaxis_title="Log number of patents",
 )
 ```
-This is how a classical scatter of the same data looks like, clearly showing a lot of noise:
-
-<img src="images/readme/scatter.png" alt="Scatter" width="640" />
 
 
 This package implements binscatter plots following:
