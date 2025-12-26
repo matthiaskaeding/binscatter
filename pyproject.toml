@@ -45,6 +45,7 @@ dev = [
   "binsreg==2.1.7",
   "prek>=0.2.24",
   "nbstripout>=0.8.2",
+  "scikit-learn>=1.8.0",
 ]
 ci = [
   "pytest>=8.3.5",
