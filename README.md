@@ -26,11 +26,10 @@ import plotly.express as px
 from binscatter import binscatter
 
 df = px.data.gapminder()
-binscatter(df, "gdpPercap", "lifeExp")
+binscatter(df, "gdpPercap", "lifeExp", num_bins=40)
 ```
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp.png" alt="Binscatter: GDP per capita vs Life Expectancy" width="640" />
-
 
 This package implements binscatter plots following:
 

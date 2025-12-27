@@ -130,6 +130,7 @@ def build_gapminder_plots() -> None:
         df_pl,
         "gdpPercap",
         "lifeExp",
+        num_bins=40,
     )
     _write_fig(fig, "gapminder_gdp_lifeexp.png")
 
