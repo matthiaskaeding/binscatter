@@ -6,6 +6,7 @@
 - Simplified quantile deduplication logic using `dict.fromkeys` instead of iterative reduction.
 - Capped rule-of-thumb bins at n/10 to ensure ~10 observations per bin, fixing issues with heavy-tailed data (e.g., GDP).
 - Fixed `pd.cut` bin assignment to use `right=False` for correct handling of boundary values.
+- Fixed `PerformanceWarning` when passing Polars LazyFrame by avoiding eager schema resolution.
 
 ### Added
 - Warning when user-specified `num_bins` is reduced due to non-unique quantiles.
