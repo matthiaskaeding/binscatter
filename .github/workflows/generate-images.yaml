@@ -8,6 +8,9 @@ on:
       - 'src/binscatter/**'
       - 'scripts/readme/make_plots_readme.py'
 
+permissions:
+  contents: write
+
 jobs:
   generate-images:
     runs-on: ubuntu-latest
