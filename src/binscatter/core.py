@@ -1,9 +1,10 @@
 import logging
 import math
 import operator
+import time
 import uuid
 import warnings
-from functools import reduce
+from functools import reduce, wraps
 from typing import (
     Any,
     Iterable,
@@ -28,6 +29,21 @@ from binscatter.quantiles import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def timed(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        name = func.__name__
+        logger.info("[%s] start", name)
+        start = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            duration = time.perf_counter() - start
+            logger.info("[%s] done in %.3fs", name, duration)
+
+    return wrapper
 
 
 @overload
@@ -114,6 +130,9 @@ def binscatter(
             raise ValueError("poly_line must be one of {1, 2, 3}")
 
     controls = _clean_controls(controls)
+    logger.debug(
+        "[binscatter] cleaned controls count=%d values=%s", len(controls), controls
+    )
     if x in controls:
         raise ValueError("x cannot be in controls")
     if y in controls:
@@ -129,11 +148,19 @@ def binscatter(
     df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
         df, controls, x, y
     )
+    logger.debug(
+        "[binscatter] clean_df backend=%s lazy=%s numeric_controls=%d categorical_controls=%d",
+        df.implementation,
+        is_lazy_input,
+        len(numeric_columns),
+        len(categorical_columns),
+    )
     df_with_regression_features, regression_features = maybe_add_regression_features(
         df,
         numeric_controls=numeric_columns,
         categorical_controls=categorical_columns,
     )
+    logger.debug("[binscatter] regression features total=%d", len(regression_features))
     if poly_line is not None:
         (
             df_with_regression_features,
@@ -144,8 +171,12 @@ def binscatter(
             degree=poly_line,
             distinct_suffix=distinct_suffix,
         )
+        logger.debug(
+            "[binscatter] polynomial features total=%d", len(polynomial_features)
+        )
     else:
         polynomial_features = ()
+        logger.debug("[binscatter] polynomial features skipped")
 
     if auto_bins:
         computed_num_bins = _select_rule_of_thumb_bins(
@@ -153,6 +184,9 @@ def binscatter(
         )
     else:
         computed_num_bins = manual_bins
+    logger.debug(
+        "[binscatter] computed num_bins=%s auto=%s", computed_num_bins, auto_bins
+    )
 
     # Compute quantiles and deduplicate
     compute_quantiles = configure_compute_quantiles(
@@ -160,10 +194,18 @@ def binscatter(
     )
     quantiles = compute_quantiles(df_with_regression_features, x)
     unique_quantiles = tuple(dict.fromkeys(quantiles))
+    logger.debug(
+        "[binscatter] quantiles total=%d unique=%d",
+        len(quantiles),
+        len(unique_quantiles),
+    )
 
     # Compute feasible number of bins
     n_unique = len(unique_quantiles)
     final_num_bins = 1 if n_unique <= 1 else max(2, n_unique - 1)
+    logger.debug(
+        "[binscatter] final_num_bins=%d unique_quantiles=%d", final_num_bins, n_unique
+    )
 
     if final_num_bins < 2:
         raise ValueError(
@@ -318,6 +360,7 @@ class PolynomialFit(NamedTuple):
     y: np.ndarray
 
 
+@timed
 def partial_out_controls(
     df_prepped: nw.LazyFrame,
     profile: Profile,
@@ -413,6 +456,7 @@ def partial_out_controls(
     return df_plotting, {"beta": beta, "gamma": gamma}
 
 
+@timed
 def _fit_polynomial_line(
     df_prepped: nw.LazyFrame,
     profile: Profile,
@@ -505,6 +549,7 @@ def _evaluate_polynomial_predictions(
     return baseline + y_poly
 
 
+@timed
 def make_plot_plotly(
     df_plotting: nw.LazyFrame,
     profile: Profile,
@@ -645,6 +690,7 @@ def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
     return controls
 
 
+@timed
 def clean_df(
     df_in: IntoDataFrame, controls: Tuple[str, ...], x: str, y: str
 ) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
@@ -707,6 +753,7 @@ def clean_df(
     return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
 
 
+@timed
 def _select_rule_of_thumb_bins(
     df: nw.LazyFrame, x: str, y: str, regression_features: Tuple[str, ...]
 ) -> int:
@@ -862,6 +909,7 @@ def _gaussian_inverse_density_squared_sum(
     return float(sum_exp) * 2.0 * math.pi * std_x * std_x
 
 
+@timed
 def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
     df_plotting: nw.LazyFrame = (
         df.group_by(profile.bin_name)
@@ -872,6 +920,7 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
     return df_plotting
 
 
+@timed
 def maybe_add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: Tuple[str, ...],
@@ -904,6 +953,7 @@ def maybe_add_regression_features(
     return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
 
 
+@timed
 def add_polynomial_features(
     df: nw.LazyFrame,
     *,
@@ -923,6 +973,7 @@ def add_polynomial_features(
     return df.with_columns(*exprs), tuple(names)
 
 
+@timed
 def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDataFrame:
     """Convert the plotting frame into the native backend expected by the caller."""
     df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
