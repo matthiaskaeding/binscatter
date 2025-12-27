@@ -374,7 +374,8 @@ def test_rule_of_thumb_reduces_bins_with_controls(df_type):
 
 
 def test_rule_of_thumb_similar_to_binsreg_no_controls():
-    # Our ROT matches Cattaneo et al. (2024) SA-4.1 for p=0, s=0, v=0
+    # Our ROT is based on Cattaneo et al. (2024) SA-4.1 with a 1.2x uplift
+    # to compensate for Gaussian density underestimating bias on skewed data
     rng = np.random.default_rng(0)
     n = 5000
     x = rng.normal(size=n)
@@ -382,10 +383,12 @@ def test_rule_of_thumb_similar_to_binsreg_no_controls():
     df = pd.DataFrame({"x0": x, "y0": y})
     ours = _get_rot_bins(df, "x0", "y0")
     theirs = binsregselect(y, x).nbinsrot_regul
-    assert abs(ours - int(theirs)) <= 2
+    # We expect ~20% more bins due to the 1.2x uplift
+    assert 1.0 <= ours / int(theirs) <= 1.4
 
 
 def test_rule_of_thumb_similar_to_binsreg_with_controls():
+    # Our ROT is based on Cattaneo et al. (2024) SA-4.1 with a 1.2x uplift
     rng = np.random.default_rng(1)
     n = 3500
     x = rng.normal(size=n)
@@ -395,7 +398,8 @@ def test_rule_of_thumb_similar_to_binsreg_with_controls():
     df = pd.DataFrame({"x0": x, "y0": y, "w1": w1, "w2": w2})
     ours = _get_rot_bins(df, "x0", "y0", controls=["w1", "w2"])
     theirs = binsregselect(y, x, w=df[["w1", "w2"]].to_numpy()).nbinsrot_regul
-    assert abs(ours - int(theirs)) <= 6
+    # We expect ~20% more bins due to the 1.2x uplift
+    assert 1.0 <= ours / int(theirs) <= 1.4
 
 
 def test_binscatter_rejects_unknown_num_bins_string(df_good):
