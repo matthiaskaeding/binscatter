@@ -374,6 +374,7 @@ def test_rule_of_thumb_reduces_bins_with_controls(df_type):
 
 
 def test_rule_of_thumb_similar_to_binsreg_no_controls():
+    # Our ROT matches Cattaneo et al. (2024) SA-4.1 for p=0, s=0, v=0
     rng = np.random.default_rng(0)
     n = 5000
     x = rng.normal(size=n)
@@ -381,7 +382,7 @@ def test_rule_of_thumb_similar_to_binsreg_no_controls():
     df = pd.DataFrame({"x0": x, "y0": y})
     ours = _get_rot_bins(df, "x0", "y0")
     theirs = binsregselect(y, x).nbinsrot_regul
-    assert abs(ours - int(theirs)) <= 5
+    assert abs(ours - int(theirs)) <= 2
 
 
 def test_rule_of_thumb_similar_to_binsreg_with_controls():
@@ -595,9 +596,7 @@ def test_binscatter_controls_collapsed_bins_error():
             "z": np.linspace(-1.0, 1.0, num=50),
         }
     )
-    with pytest.raises(
-        ValueError, match="Could not produce at least 2 bins"
-    ):
+    with pytest.raises(ValueError, match="Could not produce at least 2 bins"):
         binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
 
 
