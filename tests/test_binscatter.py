@@ -9,14 +9,18 @@ from binscatter.core import (
     add_polynomial_features,
     binscatter,
     clean_df,
-    configure_quantile_handler,
     maybe_add_regression_features,
     partial_out_controls,
     Profile,
     _fit_polynomial_line,
     _select_rule_of_thumb_bins,
 )
+from binscatter.quantiles import (
+    configure_add_bins,
+    configure_compute_quantiles,
+)
 import plotly.graph_objs as go
+import plotly.express as px
 import duckdb
 import pytest
 import pandas as pd
@@ -58,14 +62,9 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
         )
     else:
         polynomial_features = ()
-    x_bounds_frame = (
-        df_with_features.select(
-            nw.col(x).min().alias("__x_min"),
-            nw.col(x).max().alias("__x_max"),
-        )
-        .collect()
-        .to_pandas()
-    )
+    # Compute quantiles first to get x_bounds
+    quantile_fn = configure_compute_quantiles(num_bins, df_clean.implementation)
+    quantiles = quantile_fn(df_with_features, x)
     profile = Profile(
         x_name=x,
         y_name=y,
@@ -76,12 +75,9 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
         implementation=df_clean.implementation,
         regression_features=regression_features,
         polynomial_features=polynomial_features,
-        x_bounds=(
-            float(x_bounds_frame["__x_min"].iat[0]),
-            float(x_bounds_frame["__x_max"].iat[0]),
-        ),
+        x_bounds=(quantiles[0], quantiles[-1]),
     )
-    df_with_bins = configure_quantile_handler(profile)(df_with_features)
+    df_with_bins = configure_add_bins(profile)(df_with_features, quantiles)
     return df_with_bins, profile
 
 
@@ -300,6 +296,83 @@ def test_rule_of_thumb_with_controls(df_good):
     assert result_pd.shape[0] == expected_bins
 
 
+def test_rule_of_thumb_handles_gapminder():
+    df = px.data.gapminder()
+    expected_bins = _get_rot_bins(df, "gdpPercap", "lifeExp")
+    native = binscatter(
+        df,
+        "gdpPercap",
+        "lifeExp",
+        num_bins="rule-of-thumb",
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == expected_bins
+    assert result_pd["bin"].nunique() == expected_bins
+
+
+def test_gapminder_script_plots_do_not_fail():
+    df_pl = pl.from_pandas(px.data.gapminder())
+    df_log = df_pl.select(
+        pl.col("continent"),
+        pl.col("year"),
+        pl.col("lifeExp"),
+        pl.col("gdpPercap"),
+        pl.col("gdpPercap").log().alias("log_gdp"),
+        pl.col("lifeExp").log().alias("log_life"),
+    )
+    fig_main = binscatter(df_pl, x="gdpPercap", y="lifeExp")
+    fig_log = binscatter(df_log, x="log_gdp", y="log_life")
+    assert isinstance(fig_main, go.Figure)
+    assert isinstance(fig_log, go.Figure)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_reduces_bins_when_quantiles_collapse(df_type):
+    rng = np.random.default_rng(123)
+    base = pd.DataFrame(
+        {
+            "x0": np.tile([0.0, 1.0], 50),
+            "y0": rng.normal(loc=0.75, scale=0.2, size=100),
+        }
+    )
+    df = conv(base, df_type)
+    native = binscatter(
+        df,
+        "x0",
+        "y0",
+        num_bins="rule-of-thumb",
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == 2
+    assert result_pd["bin"].nunique() == 2
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_reduces_bins_with_controls(df_type):
+    rng = np.random.default_rng(987)
+    base = pd.DataFrame(
+        {
+            "x0": np.tile([0.0, 1.0], 50),
+            "y0": np.linspace(0.0, 1.0, num=100) + rng.normal(scale=0.05, size=100),
+            "z_ctrl": rng.normal(size=100),
+        }
+    )
+    df = conv(base, df_type)
+    native = binscatter(
+        df,
+        "x0",
+        "y0",
+        controls=["z_ctrl"],
+        num_bins="rule-of-thumb",
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == 2
+    assert result_pd["bin"].nunique() == 2
+
+
 def test_rule_of_thumb_similar_to_binsreg_no_controls():
     rng = np.random.default_rng(0)
     n = 5000
@@ -408,12 +481,8 @@ def test_binscatter_controls_matches_reference():
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
-    if df_type in ("dask", "pyspark"):
-        rtol_y, atol_y = 5e-3, 2e-1
-    else:
-        rtol_y = atol_y = 1e-6
     np.testing.assert_allclose(
-        result_pd["y0"].to_numpy(), expected_y, rtol=rtol_y, atol=atol_y
+        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
     )
 
 
@@ -437,17 +506,11 @@ def test_binscatter_controls_lazy_polars():
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
-    if df_type in ("dask", "pyspark"):
-        rtol_x, atol_x = 1e-3, 1e-1
-        rtol_y, atol_y = 5e-3, 2e-1
-    else:
-        rtol_x = atol_x = 1e-6
-        rtol_y = atol_y = 1e-6
     np.testing.assert_allclose(
-        result_pd["x0"].to_numpy(), expected_x, rtol=rtol_x, atol=atol_x
+        result_pd["x0"].to_numpy(), expected_x, rtol=1e-6, atol=1e-6
     )
     np.testing.assert_allclose(
-        result_pd["y0"].to_numpy(), expected_y, rtol=rtol_y, atol=atol_y
+        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
     )
 
 
@@ -533,7 +596,7 @@ def test_binscatter_controls_collapsed_bins_error():
         }
     )
     with pytest.raises(
-        ValueError, match="Quantiles are not unique|Bin edges must be unique"
+        ValueError, match="Could not produce at least 2 bins"
     ):
         binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
 
@@ -656,3 +719,130 @@ def test_poly_line_does_not_change_bins():
         df, "x0", "y0", num_bins=15, poly_line=2, return_type="native"
     )
     pd.testing.assert_frame_equal(native, with_poly)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_configure_compute_quantiles_returns_correct_length(df_type):
+    """Quantiles should have num_bins + 1 elements (including min and max)."""
+    if df_type == "pyspark":
+        pytest.skip("PySpark not enabled")
+    rng = np.random.default_rng(111)
+    df_pd = pd.DataFrame({"x": rng.normal(size=500)})
+    df = convert_to_backend(df_pd, df_type)
+    df_nw = nw.from_native(df).lazy()
+
+    for num_bins in [3, 5, 10, 20]:
+        compute_quantiles = configure_compute_quantiles(num_bins, df_nw.implementation)
+        quantiles = compute_quantiles(df_nw, "x")
+        assert len(quantiles) == num_bins + 1, (
+            f"Expected {num_bins + 1} quantiles, got {len(quantiles)}"
+        )
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_configure_compute_quantiles_min_max(df_type):
+    """First quantile should be min, last should be max."""
+    if df_type == "pyspark":
+        pytest.skip("PySpark not enabled")
+    rng = np.random.default_rng(222)
+    x = rng.normal(size=500)
+    df_pd = pd.DataFrame({"x": x})
+    df = convert_to_backend(df_pd, df_type)
+    df_nw = nw.from_native(df).lazy()
+
+    compute_quantiles = configure_compute_quantiles(5, df_nw.implementation)
+    quantiles = compute_quantiles(df_nw, "x")
+
+    np.testing.assert_allclose(quantiles[0], x.min(), rtol=1e-5)
+    np.testing.assert_allclose(quantiles[-1], x.max(), rtol=1e-5)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_configure_compute_quantiles_monotonic(df_type):
+    """Quantiles should be monotonically non-decreasing."""
+    if df_type == "pyspark":
+        pytest.skip("PySpark not enabled")
+    rng = np.random.default_rng(333)
+    df_pd = pd.DataFrame({"x": rng.normal(size=500)})
+    df = convert_to_backend(df_pd, df_type)
+    df_nw = nw.from_native(df).lazy()
+
+    compute_quantiles = configure_compute_quantiles(10, df_nw.implementation)
+    quantiles = compute_quantiles(df_nw, "x")
+
+    for i in range(len(quantiles) - 1):
+        assert quantiles[i] <= quantiles[i + 1], (
+            f"Quantiles not monotonic: {quantiles[i]} > {quantiles[i + 1]}"
+        )
+
+
+def test_configure_compute_quantiles_single_bin_raises():
+    """Single bin (num_bins=1) should raise ValueError."""
+    rng = np.random.default_rng(444)
+    x = rng.normal(size=100)
+    df_pd = pd.DataFrame({"x": x})
+    df_nw = nw.from_native(df_pd).lazy()
+
+    with pytest.raises(ValueError, match="num_bins must be at least 2"):
+        configure_compute_quantiles(1, df_nw.implementation)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_non_unique_quantiles_produce_unique_bins_binary(df_type):
+    """Binary data should produce 2 unique bins even when quantiles collapse."""
+    if df_type == "pyspark":
+        pytest.skip("PySpark not enabled")
+    base = pd.DataFrame(
+        {
+            "x0": np.tile([0.0, 1.0], 50),
+            "y0": np.random.default_rng(42).normal(size=100),
+        }
+    )
+    df = convert_to_backend(base, df_type)
+    # Use rule-of-thumb to allow automatic bin reduction
+    result = binscatter(df, "x0", "y0", num_bins="rule-of-thumb", return_type="native")
+    result_pd = to_pandas_native(result)
+    # Should have exactly 2 unique bins for binary data
+    assert result_pd["bin"].nunique() == 2
+    assert result_pd["x0"].nunique() == 2
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_non_unique_quantiles_produce_unique_bins_ternary(df_type):
+    """Ternary data should produce at least 2 unique bins."""
+    if df_type == "pyspark":
+        pytest.skip("PySpark not enabled")
+    base = pd.DataFrame(
+        {
+            "x0": np.tile([0.0, 1.0, 2.0], 33),
+            "y0": np.random.default_rng(43).normal(size=99),
+        }
+    )
+    df = convert_to_backend(base, df_type)
+    # Use rule-of-thumb to allow automatic bin reduction
+    result = binscatter(df, "x0", "y0", num_bins="rule-of-thumb", return_type="native")
+    result_pd = to_pandas_native(result)
+    # Should have at least 2 unique bins for ternary data
+    assert result_pd["bin"].nunique() >= 2
+    assert result_pd["x0"].nunique() >= 2
+
+
+def test_non_unique_quantiles_pyspark():
+    """PySpark-specific test for non-unique quantiles."""
+    pytest.importorskip("pyspark")
+    base = pd.DataFrame(
+        {
+            "x0": np.tile([0.0, 1.0], 50),
+            "y0": np.random.default_rng(45).normal(size=100),
+        }
+    )
+    df = convert_to_backend(base, "pyspark")
+    # Use rule-of-thumb to allow automatic bin reduction
+    result = binscatter(df, "x0", "y0", num_bins="rule-of-thumb", return_type="native")
+    result_pd = to_pandas_native(result)
+    # Should have exactly 2 unique bins for binary data
+    assert result_pd["bin"].nunique() == 2
+    assert result_pd["x0"].nunique() == 2
+
+
+# =============================================================================
