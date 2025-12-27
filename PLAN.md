@@ -2,7 +2,11 @@
 
 # PLAN.md
 
-No active plan.
+## Active Plan: Diagnose binscatter performance bottlenecks
+
+1. Summarize the pandas vs. PySpark timing data from `scripts/debug_binscatter.py` to understand which stages dominate each backend (clean_df, regression feature expansion, partial_out_controls, etc.).
+2. Inspect the hotspot routines (`maybe_add_regression_features`, `partial_out_controls`, quantile computation) to identify why PySpark spends ~3 s in control handling and how we can reduce shuffles or duplicated collects.
+3. Propose concrete optimization experiments (e.g., caching dummy columns, avoiding repeated collects, leveraging Spark-native operations) and outline the implementation order for future work.
 
 ---
 
