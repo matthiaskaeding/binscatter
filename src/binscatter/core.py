@@ -794,6 +794,9 @@ def _select_rule_of_thumb_bins(
     # J_IMSE = (2B/V)^(1/3) * n^(1/3)
     prefactor = (2.0 * bias_constant) / variance_constant
     j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
+    # Apply a small uplift to compensate for Gaussian density underestimating
+    # the bias term on skewed data (empirically calibrated against binsreg)
+    j_float *= 1.2
     # Cap at ~10 observations per bin to avoid noisy estimates
     max_bins = max(2, int(n_obs) // 10)
     computed_bins = max(2, int(round(j_float)))
