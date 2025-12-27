@@ -6,6 +6,7 @@
 #     "kaleido>=0.2.1",
 #     "plotly>=6.3",
 #     "numpy>=2.3",
+#     "pandas",
 # ]
 #
 # [tool.uv.sources]
