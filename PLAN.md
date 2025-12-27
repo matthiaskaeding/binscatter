@@ -1,12 +1,17 @@
 # PLAN.md
 
-# PLAN.md
+## Active Plan: PySpark performance optimizations
 
-## Active Plan: Diagnose binscatter performance bottlenecks
+### Completed
+1. **Categorical dummy caching** (optimization #1): Implemented backend-specific dummy builders via `configure_dummy_builder()`:
+   - `_dummy_builder_pyspark`: Batches all categorical discovery into a single `agg(*collect_set(...))` call
+   - `_dummy_builder_pandas_polars`: Uses native `pd.get_dummies()` / `pl.to_dummies()`
+   - `_dummy_builder_fallback`: Generic narwhals implementation for other backends
 
-1. Summarize the pandas vs. PySpark timing data from `scripts/debug_binscatter.py` to understand which stages dominate each backend (clean_df, regression feature expansion, partial_out_controls, etc.).
-2. Inspect the hotspot routines (`maybe_add_regression_features`, `partial_out_controls`, quantile computation) to identify why PySpark spends ~3 s in control handling and how we can reduce shuffles or duplicated collects.
-3. Propose concrete optimization experiments (e.g., caching dummy columns, avoiding repeated collects, leveraging Spark-native operations) and outline the implementation order for future work.
+### Remaining optimizations
+2. **Reuse aggregated moments**: Push `_ensure_feature_moments` to request sums/cross-products in the same grouping job that produces `per_bin`
+3. **Spark-native regression solve**: Use VectorAssembler + Spark ML linear regression instead of shipping moments to driver
+4. **Optional caching**: Add `cache()`/`persist()` option for lazy backends to avoid repeated scans
 
 ---
 
