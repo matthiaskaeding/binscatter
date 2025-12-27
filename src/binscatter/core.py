@@ -6,13 +6,11 @@ import warnings
 from functools import reduce
 from typing import (
     Any,
-    Callable,
     Iterable,
     List,
     Literal,
     NamedTuple,
     Tuple,
-    cast,
     overload,
 )
 
@@ -23,6 +21,11 @@ import plotly.express as px
 from narwhals import Implementation
 from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
+
+from binscatter.quantiles import (
+    configure_add_bins,
+    configure_compute_quantiles,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +154,33 @@ def binscatter(
     else:
         computed_num_bins = manual_bins
 
-    x_bounds = _compute_x_bounds(df_with_regression_features, x)
+    # Compute quantiles and deduplicate
+    compute_quantiles = configure_compute_quantiles(
+        computed_num_bins, df_with_regression_features.implementation
+    )
+    quantiles = compute_quantiles(df_with_regression_features, x)
+    unique_quantiles = tuple(dict.fromkeys(quantiles))
+
+    # Compute feasible number of bins
+    n_unique = len(unique_quantiles)
+    final_num_bins = 1 if n_unique <= 1 else max(2, n_unique - 1)
+
+    if final_num_bins < 2:
+        raise ValueError(
+            "Could not produce at least 2 bins; check the distribution of the x column."
+        )
+
+    if final_num_bins < computed_num_bins and not auto_bins:
+        logger.warning(
+            "Requested %d bins but only %d unique quantile boundaries found. "
+            "Using %d bins instead.",
+            computed_num_bins,
+            len(unique_quantiles),
+            final_num_bins,
+        )
 
     profile = Profile(
-        num_bins=computed_num_bins,
+        num_bins=final_num_bins,
         x_name=x,
         y_name=y,
         bin_name=bin_name,
@@ -163,10 +189,10 @@ def binscatter(
         distinct_suffix=distinct_suffix,
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
-        x_bounds=x_bounds,
+        x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
     )
-    add_bins: Callable = configure_quantile_handler(profile)
-    df_prepped = add_bins(df_with_regression_features)
+    add_bins = configure_add_bins(profile)
+    df_prepped = add_bins(df_with_regression_features, unique_quantiles)
 
     moment_cache: dict[str, float] | None = None
     if controls or poly_line is not None:
@@ -397,6 +423,8 @@ def _fit_polynomial_line(
         raise ValueError(
             "Polynomial features not initialized; ensure poly_line was set."
         )
+    if profile.x_bounds is None:
+        raise ValueError("x_bounds not set in profile.")
     poly_cols = profile.polynomial_features[:degree]
     feature_names = poly_cols + profile.regression_features
     base_exprs: dict[str, nw.Expr] = {
@@ -426,10 +454,7 @@ def _fit_polynomial_line(
         xtx[1:, 0] = column_sums
 
     coefficients = _solve_normal_equations(xtx, xty)
-    if profile.x_bounds:
-        x_min, x_max = profile.x_bounds
-    else:
-        x_min, x_max = _compute_x_bounds(df_prepped, profile.x_name)
+    x_min, x_max = profile.x_bounds
     x_grid = _build_prediction_grid(x_min, x_max)
     if profile.regression_features:
         control_means = np.array(
@@ -602,232 +627,6 @@ def split_columns(
     return numeric_cols, categorical_cols
 
 
-# Quantiles
-
-
-# Defined here for testability
-def _add_fallback(
-    df: nw.LazyFrame, profile: Profile, probs: List[float]
-) -> nw.LazyFrame:
-    try:
-        qs = df.select(
-            [
-                profile.x_col.quantile(p, interpolation="linear").alias(f"q{p}")
-                for p in probs
-            ]
-        ).collect()
-    except TypeError:
-        expr = cast(Any, profile.x_col)
-        qs = df.select([expr.quantile(p).alias(f"q{p}") for p in probs]).collect()
-    except Exception as e:
-        logger.error(
-            "Tried making quantiles with and without interpolation method for df of type: %s",
-            type(df),
-        )
-        raise e
-    qs_long = (
-        qs.unpivot(variable_name="prob", value_name="quantile")
-        .sort("quantile")
-        .with_row_index(profile.bin_name)
-    )
-
-    quantile_bins = qs_long.select("quantile", profile.bin_name).lazy()
-
-    # Sorting is not always necessary - but for safety we sort
-    return (
-        df.sort(profile.x_name)
-        .join_asof(
-            quantile_bins,
-            left_on=profile.x_name,
-            right_on="quantile",
-            strategy="forward",
-        )
-        .drop("quantile")
-    )
-
-
-def _make_probs(num_bins) -> List[float]:
-    return [i / num_bins for i in range(1, num_bins + 1)]
-
-
-def configure_quantile_handler(profile: Profile) -> Callable:
-    """Return a backend-specific function that assigns quantile bins."""
-    probs = _make_probs(profile.num_bins)
-
-    def add_fallback(df: nw.LazyFrame):
-        return _add_fallback(df, profile, probs)
-
-    def add_to_dask(df: nw.DataFrame) -> nw.LazyFrame:
-        try:
-            from pandas import cut
-        except ImportError:
-            raise ImportError("Dask support requires dask and pandas to be installed.")
-
-        df_native = df.to_native()
-        logger.debug("Type of df_native (should be dask): %s", type(df_native))
-        quantiles = df_native[profile.x_name].quantile(probs[:-1]).compute()
-        bins = (float("-inf"), *quantiles, float("inf"))
-        df_native[profile.bin_name] = df_native[profile.x_name].map_partitions(
-            cut,
-            bins=bins,
-            labels=range(len(probs)),
-            include_lowest=False,
-            right=False,
-        )
-
-        return nw.from_native(df_native).lazy()
-
-    def add_to_pandas(df: nw.DataFrame) -> nw.LazyFrame:
-        try:
-            from pandas import cut
-        except ImportError:
-            raise ImportError("Pandas support requires pandas to be installed.")
-        df_native = df.to_native()
-        x = df_native[profile.x_name]
-        quantiles = x.quantile(probs[:-1])
-
-        bins = (float("-Inf"), *quantiles, float("Inf"))
-        logger.debug("bins: %s", bins)
-        logger.debug("quantiles: %s", quantiles)
-
-        buckets = cut(
-            df_native[profile.x_name],
-            bins=bins,
-            labels=range(len(probs)),
-            include_lowest=False,
-            right=False,
-        )
-        df_native[profile.bin_name] = buckets
-
-        return nw.from_native(df_native).lazy()
-
-    def add_to_polars(df: nw.DataFrame) -> nw.LazyFrame:
-        try:
-            import polars as pl
-        except ImportError:
-            raise ImportError("Polars support requires Polars to be installed.")
-        # Because cut and qcut are not stable we use when-then
-        df_native = df.to_native()
-        x_col = pl.col(profile.x_name)
-
-        qs = df_native.select(
-            [x_col.quantile(p, interpolation="linear").alias(f"q{p}") for p in probs]
-        ).collect()
-        expr = pl
-        n = qs.width
-        for i in range(n):
-            thr = qs.item(0, i)
-            cond = x_col.le(thr) if i == n - 1 else x_col.lt(thr)
-            expr = expr.when(cond).then(pl.lit(i))
-        expr = expr.alias(profile.bin_name)
-        df_native_with_bin = df_native.with_columns(expr)
-
-        return nw.from_native(df_native_with_bin).lazy()
-
-    def add_to_duckdb(df: nw.DataFrame) -> nw.LazyFrame:
-        try:
-            import duckdb
-
-            rel = df.to_native()
-            assert isinstance(rel, duckdb.DuckDBPyRelation), f"{type(rel)=}"
-
-        except Exception as e:
-            raise RuntimeError(
-                "Failed to use df.to_native(); DuckDB may not be installed."
-            ) from e
-
-        order_expr = f"{profile.x_name} ASC"
-        rel_with_bins = rel.project(
-            f"*, ntile({len(probs)}) OVER (ORDER BY {order_expr}) - 1 AS {profile.bin_name}"
-        )
-        assert isinstance(rel_with_bins, duckdb.DuckDBPyRelation), (
-            f"{type(rel_with_bins)=}"
-        )
-
-        return nw.from_native(rel_with_bins).lazy()
-
-    def add_to_pyspark(df: nw.DataFrame) -> nw.LazyFrame:
-        try:
-            from pyspark.ml.feature import Bucketizer
-            from pyspark.sql.functions import col
-        except ImportError as e:
-            raise ImportError(
-                f"PySpark support requires pyspark to be installed. Original error: {e}"
-            ) from e
-        sdf = df.to_native()
-        qs = sdf.approxQuantile(profile.x_name, (0.0, *probs), relativeError=0.01)
-        if logger.isEnabledFor(logging.DEBUG):
-            sample = sdf.sample(False, 0.02, seed=1).select(profile.x_name).toPandas()
-            pd_qs = sample[profile.x_name].quantile((0.0, *probs)).to_list()
-            logger.debug(
-                "Pyspark vs pandas (sample) quantiles: %s", list(zip(qs, pd_qs))
-            )
-        if len(set(qs)) < len(qs):
-            raise ValueError("Quantiles not unique. Decrease number of bins.")
-
-        bucketizer = Bucketizer(
-            splits=qs,
-            inputCol=profile.x_name,
-            outputCol=profile.bin_name,
-            handleInvalid="keep",
-        )
-
-        sdf_binned = bucketizer.transform(sdf).withColumn(
-            profile.bin_name, col(profile.bin_name).cast("int")
-        )
-
-        return nw.from_native(sdf_binned).lazy()
-
-    logger.debug("Configuring quantile handler for %s", profile.implementation)
-    if profile.implementation == Implementation.PANDAS:
-        return add_to_pandas
-    elif profile.implementation == Implementation.POLARS:
-        return add_to_polars
-    elif profile.implementation == Implementation.PYSPARK:
-        return add_to_pyspark
-    elif profile.implementation == Implementation.DUCKDB:
-        return add_to_duckdb
-    elif profile.implementation == Implementation.DASK:
-        return add_to_dask
-    else:
-        return add_fallback
-
-
-def _compute_quantiles(
-    df: nw.DataFrame, colname: str, probs: Iterable[float], bin_name: str
-) -> nw.LazyFrame:
-    """Get multiple quantiles in one operation"""
-    col = nw.col(colname)
-    if df.implementation != nw.Implementation.PYSPARK:
-        qs = df.select(
-            [col.quantile(p, interpolation="linear").alias(f"q{p}") for p in probs]
-        )
-    else:
-        # Pyspark - ugly hack
-        try:
-            from pyspark.sql import SparkSession
-        except ImportError:
-            raise ImportError("PySpark support requires pyspark to be installed.")
-        spark = SparkSession.builder.getOrCreate()
-
-        quantiles: list[float] = (
-            df.select(colname).to_native().approxQuantile(colname, probs, 0.03)
-        )
-        q_data = {}
-        for p, q in zip(probs, quantiles):
-            k = f"q{p}"
-            q_data[k] = [q]
-        qs_spark = spark.createDataFrame(q_data)
-        qs = nw.from_native(qs_spark)
-
-    return (
-        qs.unpivot(variable_name="prob", value_name="quantile")
-        .sort("quantile")
-        .with_row_index(bin_name, order_by="quantile")
-        .lazy()
-    )
-
-
 def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
     if not controls:
         return ()
@@ -896,24 +695,6 @@ def clean_df(
     categorical_controls = tuple(c for c in controls if c in cols_cat)
 
     return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
-
-
-def add_bins(df, profile):
-    quantile_handler = configure_quantile_handler(profile)
-    try:
-        df_with_bins = quantile_handler(df)
-    except ValueError as err:
-        err_text = str(err)
-        if (
-            "Quantiles are not unique" in err_text
-            or "Bin edges must be unique" in err_text
-        ):
-            raise ValueError(
-                "Quantiles are not unique. Decrease number of bins."
-            ) from err
-        raise
-
-    return df_with_bins
 
 
 def _select_rule_of_thumb_bins(
@@ -993,7 +774,8 @@ def _select_rule_of_thumb_bins(
 
     prefactor = (2.0 * bias_constant) / avg_sigma_sq
     j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
-    max_bins = max(2, int(n_obs) - 1)
+    # Cap at ~10 observations per bin to avoid noisy estimates
+    max_bins = max(2, int(n_obs) // 10)
     computed_bins = max(2, int(round(j_float)))
     return min(max_bins, computed_bins)
 
@@ -1051,22 +833,6 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
     ).lazy()
 
     return df_plotting
-
-
-def _compute_x_bounds(df: nw.LazyFrame, x: str) -> Tuple[float, float]:
-    bounds = df.select(
-        nw.col(x).min().alias("__x_min"),
-        nw.col(x).max().alias("__x_max"),
-    ).collect()
-    x_min = bounds.item(0, "__x_min")
-    x_max = bounds.item(0, "__x_max")
-    if x_min is None or x_max is None:
-        raise ValueError("x column must have finite min and max values.")
-    x_min_f = float(x_min)
-    x_max_f = float(x_max)
-    if not (math.isfinite(x_min_f) and math.isfinite(x_max_f)):
-        raise ValueError("x column must have finite min and max values.")
-    return (x_min_f, x_max_f)
 
 
 def maybe_add_regression_features(

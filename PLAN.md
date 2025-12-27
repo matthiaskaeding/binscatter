@@ -1,34 +1,62 @@
-## Plan: `poly_line` argument and regression overlay
+# PLAN.md
+
+# PLAN.md
+
+No active plan.
+
+---
+
+## Archived Plan: enforce equidistant uniqueness in compute_max_bins tests
+
+**Status: Complete**
 
 ## Objectives
-- Add an argument `poly_line`. The polynomial is the regression line of the regression y = poly(x) * alpha + controls * gamma + u. The regression line will be poly(x) * alpha.
-- Make the control machinery flexible enough to drop or add subsets of controls without recomputing the whole dataset, anticipating a future stepwise-controls toggle.
-- Allow the regression layer to fit polynomial-in-x specifications (e.g., quadratic) on demand.
-- Write function testable. So in the end we will always get regression coefficients as outputs. So we can always test if those are equal to a benchmark.
+1. Inspect the existing compute_max_bins tests to ensure there are no lingering test classes and understand how the helper is used.
+2. Update the shared helper (and any straggler tests) so that every compute_max_bins test also asserts equidistant quantile uniqueness.
+3. Run the focused pytest subset covering compute_max_bins to confirm the updated assertions pass.
 
-1. **Study and reuse `partial_out_controls` internals**
-   - Trace how `partial_out_controls` computes `X'X`, `X'y`, and the cached aggregates that bins reuse.
-   - Document which intermediates we can expose (e.g., design matrices, control means) so the polynomial regression shares them rather than recomputing from raw frames.
-   - Confirm how raw `x`/`y` and controls are available before partialling so we can build polynomial columns directly off the unmodified data as required.
+---
 
-2.a **Split `partial_out_controls` into reusable helpers**
-   - Introduce focused helpers such as `build_regression_inputs(df, x, y, controls)` and `solve_regression(design, response)` so polynomial regressions just add columns before solving.
-   - Keep a thin orchestrator `partial_out_controls` that wires these helpers together for existing behavior while returning a structured object (dataclass) storing the reusable matrices.
-   - Ensure new helpers return the raw moments (means, sums, xtx, xty) so additional polynomial degrees can be solved without another pass through the dataframe.
+## Archived Plan: refactor quantiles module to pre-compute quantiles and enforce uniqueness before bin assignment
 
-3. **Design the `poly_line` API surface**
-   - Add an optional integer parameter (e.g., `poly_line: int | None = None`) to `binscatter` and propagate it to the plotting layer.
-   - Interpret `poly_line=d` as “fit a degree-`d` polynomial in `x` using the raw data plus any controls”; default `None` keeps current behavior.
-   
-4. **Implement polynomial regression leveraging the refactors**
-   - Use the reusable design-building helper to append `[x, x², …, xᵈ]` columns before solving the regression; include controls unchanged so coefficients align with the regression described in the request.
-   - Evaluate the polynomial on a dense grid across the observed x-range (not needed if polynomial is 1) and add the resulting line to the plot when `poly_line` is set.
+**Status: Complete**
 
-5. **Testing and documentation pass**
-   - Extend `tests/test_binscatter.py` with parametrized cases covering degrees 1–3 with and without controls, checking coefficients against `statsmodels`.
-   - Update README + CHANGELOG to describe the new argument and emphasize that it regresses on the raw data with all specified controls.
-   
+## Objectives
+1. Make a function factory that configures a function that computes quantiles. Should takes as input: num_bins and df.Implementation.
+This can be based on existing configure_add_bins logic, each of these functions has already a way to compute quantiles.
+2. After calling the quantile computation function, check if the quantiles are unique. If not, we can compute the maximum number of bins possible. If num_bins is user_inputm throw error with this info. If num_bins is auto, set to highest possible and continue.
+3. Redesign `configure_add_bins` so that it has as input Collection of quantiles input (instead of computing quantiles internally)
+4. Update `binscatter` (and tests) to use the new quantile workflow: compute quantiles once per iteration, handle auto-bin fallback by retrying with reduced counts, and ensure backend-specific assigners consume the shared quantile data structure.
 
-## Future hook: stepwise controls
-- Once the control-spec abstraction exists, a future `stepwise_controls` feature can iterate through predefined subsets (baseline, +1 control, etc.) without re-scanning the dataframe; the cached matrices from Workstreams 1–2 become the shared foundation.
-- Consider exposing a lightweight cache object (e.g., `DesignCache`) from `partial_out_controls` that stores `xtx`, `xty`, bin sums, and control cross-products. Reusing this cache keeps future stepwise regressions and inference fast.
+---
+
+## Archived Plan: if we set bins automatically, have fallback for case when quantiles are not unique
+
+**Status: Complete**
+
+## Objectives
+1. Inspect existing automatic bin creation flow (`add_bins`, quantile handling, `compute_bin_means`/`partial_out_controls`) to understand where bin uniqueness should be validated and how reruns can be triggered.
+2. Implement a fallback mechanism that detects duplicate `(xname, binname)` combinations after initial binning, recalculates the feasible `num_bins`, and re-executes the binning pipeline with this adjusted value while preserving control handling and caches.
+3. Extend tests (likely in `tests/test_binscatter.py`) with scenarios exhibiting low `x` variation to verify that automatic bin counts adjust downward gracefully across relevant backends.
+
+---
+
+## Archived Plan: separate compute_max_bins tests
+
+**Status: Complete**
+
+## Objectives
+1. Capture all existing `compute_max_bins` helper/tests currently embedded in `tests/test_binscatter.py`.
+2. Move that suite into a new `tests/test_compute_max_bins.py` module that imports only what it needs.
+3. Confirm the relocated tests pass via the focused pytest invocation.
+
+---
+
+## Archived Plan: enforce real quantile uniqueness in compute_max_bins tests
+
+**Status: Complete**
+
+## Objectives
+1. Update the `compute_max_bins` tests to derive equidistant quantile values (not just probabilities) and assert their uniqueness.
+2. Adjust helper(s) and any other affected code to satisfy the stronger assertion while keeping the suite green.
+3. Rerun the focused pytest subset to confirm the relocated tests still pass with the new checks.
