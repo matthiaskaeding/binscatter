@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Changed
+- Fixed rule-of-thumb bin selector to match Cattaneo et al. (2024) SA-4.1 exactly: corrected bias constant (1/12 vs 1/3), use squared inverse density, and added density trimming at 2.5th percentile.
 - Simplified quantile deduplication logic using `dict.fromkeys` instead of iterative reduction.
 - Capped rule-of-thumb bins at n/10 to ensure ~10 observations per bin, fixing issues with heavy-tailed data (e.g., GDP).
 - Fixed `pd.cut` bin assignment to use `right=False` for correct handling of boundary values.

@@ -37,7 +37,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
+    num_bins: int | Literal["rule-of-thumb", "rot"] = "rule-of-thumb",
     return_type: Literal["plotly"] = "plotly",
     poly_line: int | None = None,
     **kwargs,
@@ -51,7 +51,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
+    num_bins: int | Literal["rule-of-thumb", "rot"] = "rule-of-thumb",
     return_type: Literal["native"] = "native",
     poly_line: int | None = None,
     **kwargs,
@@ -64,7 +64,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
+    num_bins: int | Literal["rule-of-thumb", "rot"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
     poly_line: int | None = None,
     **kwargs,
@@ -76,7 +76,7 @@ def binscatter(
         x: Name of the x column.
         y: Name of the y column.
         controls: Optional control columns to partial out (either a string or iterable of strings).
-        num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
+        num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` (or ``"rot"``) for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
@@ -88,7 +88,7 @@ def binscatter(
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
     if isinstance(num_bins, str):
-        auto_bins = num_bins == "rule-of-thumb"
+        auto_bins = num_bins in ("rule-of-thumb", "rot")
         if not auto_bins:
             msg = f"Unknown num_bins string option: {num_bins}"
             raise ValueError(msg)
@@ -761,28 +761,38 @@ def _select_rule_of_thumb_bins(
         )
     std_x = math.sqrt(var_x)
 
-    sum_inv_density = _gaussian_inverse_density_sum(df, x, mean_x, std_x)
+    # Per Cattaneo et al. (2024) SA-4.1, for p=0, s=0, v=0:
+    # B_hat = bcons * (1/n) * Σᵢ [μ'(xᵢ)]² / f_X(xᵢ)²
+    # where bcons = 1/(2*(p+1)+1) / ((p+1)!)² / C(2(p+1), p+1)²
+    # For p=0: bcons = 1/3 / 1 / 4 = 1/12
+    # For linear fit, μ'(x) = slope (constant), so:
+    # B_hat = (1/12) * slope² * (1/n) * Σᵢ 1/f_X(xᵢ)²
+    sum_inv_density_sq = _gaussian_inverse_density_squared_sum(df, x, mean_x, std_x)
 
     slope = beta_y[1]
-    shifted_legendre_weight = 1.0 / 3.0  # ∫_0^1 B_1(z)^2 dz
-    bias_constant = (slope**2 / n_obs_f) * sum_inv_density * shifted_legendre_weight
+    # bcons for p=0, s=0, v=0: 1/(2*1+1) / 1!² / C(2,1)² = 1/3 / 1 / 4 = 1/12
+    imse_bcons = 1.0 / 12.0
+    bias_constant = imse_bcons * (slope**2) * (sum_inv_density_sq / n_obs_f)
     if bias_constant <= 0 or not math.isfinite(bias_constant):
         raise ValueError(
             "Rule-of-thumb selector estimated a non-positive bias constant; "
             "consider specifying num_bins explicitly."
         )
 
+    # V_hat = (1/n) * Σᵢ σ²(xᵢ) where σ²(x) = E[y²|x] - E[y|x]²
+    # We estimate this as the average residual variance from the polynomial fit
     sum_pred_y_sq = float(column_sums @ beta_y_sq)
     quad_form = float(beta_y.T @ xtx @ beta_y)
-    avg_sigma_sq = (sum_pred_y_sq - quad_form) / n_obs_f
-    avg_sigma_sq = max(avg_sigma_sq, 0.0)
-    if avg_sigma_sq <= 0 or not math.isfinite(avg_sigma_sq):
+    variance_constant = (sum_pred_y_sq - quad_form) / n_obs_f
+    variance_constant = max(variance_constant, 0.0)
+    if variance_constant <= 0 or not math.isfinite(variance_constant):
         raise ValueError(
             "Rule-of-thumb selector estimated a non-positive variance constant; "
             "consider specifying num_bins explicitly."
         )
 
-    prefactor = (2.0 * bias_constant) / avg_sigma_sq
+    # J_IMSE = (2B/V)^(1/3) * n^(1/3)
+    prefactor = (2.0 * bias_constant) / variance_constant
     j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
     # Cap at ~10 observations per bin to avoid noisy estimates
     max_bins = max(2, int(n_obs) // 10)
@@ -821,18 +831,35 @@ def _solve_normal_equations(xtx: np.ndarray, rhs: np.ndarray) -> np.ndarray:
         return np.linalg.pinv(xtx) @ rhs
 
 
-def _gaussian_inverse_density_sum(
-    df: nw.LazyFrame, x: str, mean_x: float, std_x: float
+def _gaussian_inverse_density_squared_sum(
+    df: nw.LazyFrame, x: str, mean_x: float, std_x: float, z_cutoff: float = 1.96
 ) -> float:
-    """Compute sum_i 1 / f_G(x_i) for the Gaussian reference f_G."""
+    """Compute sum_i 1 / f_G(x_i)^2 for the Gaussian reference f_G.
+
+    Per Cattaneo et al. (2024) SA-4.1, the bias constant for p=0, v=0 uses
+    f_X(x)^(2p+2-2v) = f_X(x)^2 in the denominator.
+
+    We trim the density from below by capping z-scores at z_cutoff (default 1.96,
+    i.e. 97.5th percentile) to prevent extreme outliers from causing the inverse
+    to explode.
+    """
     if std_x <= 0:
         raise ValueError("Standard deviation must be positive.")
+
+    # Maximum allowed z^2 before capping
+    z_sq_max = z_cutoff**2
+
     z_sq = ((nw.col(x) - mean_x) / std_x) ** 2
-    exp_expr = (0.5 * z_sq).exp()
+    # Cap z^2 at the cutoff to prevent density from getting too small
+    z_sq_capped = nw.when(z_sq > z_sq_max).then(z_sq_max).otherwise(z_sq)
+    # For 1/f(x)^2, we need exp(z^2) (not exp(0.5*z^2))
+    # f(x) = 1/(sqrt(2pi)*std) * exp(-0.5*z^2)
+    # 1/f(x)^2 = 2*pi*std^2 * exp(z^2)
+    exp_expr = z_sq_capped.exp()
     sum_exp = (
         df.select(exp_expr.sum().alias("__sum_exp")).collect().item(0, "__sum_exp")
     )
-    return float(sum_exp) * math.sqrt(2.0 * math.pi) * std_x
+    return float(sum_exp) * 2.0 * math.pi * std_x * std_x
 
 
 def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
