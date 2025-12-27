@@ -21,6 +21,7 @@ artifacts/**/*.dta
 artifacts/**/*.do
 artifacts/**/*.pdf
 artifacts/dataverse_files/
+artifacts/debug_binscatter*.html
 refs/
 *.log
 *.pdf

@@ -1,12 +1,15 @@
 import logging
 import math
 import operator
+import time
 import uuid
 import warnings
+from contextlib import contextmanager
 from functools import reduce
 from typing import (
     Any,
     Iterable,
+    Iterator,
     List,
     Literal,
     NamedTuple,
@@ -28,6 +31,32 @@ from binscatter.quantiles import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _format_stage_details(details: dict[str, Any]) -> str:
+    if not details:
+        return ""
+    parts = []
+    for key in sorted(details):
+        value = details[key]
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+@contextmanager
+def _log_stage(
+    stage: str, *, level: int = logging.INFO, **details: Any
+) -> Iterator[None]:
+    """Log start/done events for a named stage, including elapsed duration."""
+    detail_str = _format_stage_details(details)
+    start_msg = f"[{stage}] start" + (f" {detail_str}" if detail_str else "")
+    logger.log(level, start_msg)
+    start_time = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start_time
+        logger.log(level, "[%s] done in %.3fs", stage, elapsed)
 
 
 @overload
@@ -87,6 +116,7 @@ def binscatter(
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
+    manual_bins: int | None = None
     if isinstance(num_bins, str):
         auto_bins = num_bins in ("rule-of-thumb", "rot")
         if not auto_bins:
@@ -102,6 +132,8 @@ def binscatter(
         if num_bins <= 1:
             raise ValueError("num_bins must be greater than 1")
         auto_bins = False
+    if not auto_bins and manual_bins is None:
+        raise AssertionError("manual_bins must be set when auto_bins is False")
 
     if not isinstance(x, str):
         raise TypeError("x_name must be a string")
@@ -114,6 +146,16 @@ def binscatter(
             raise ValueError("poly_line must be one of {1, 2, 3}")
 
     controls = _clean_controls(controls)
+    logger.info(
+        "[init] input_type=%s x=%s y=%s controls=%d auto_bins=%s return_type=%s poly_line=%s",
+        type(df).__name__,
+        x,
+        y,
+        len(controls),
+        auto_bins,
+        return_type,
+        poly_line if poly_line is not None else 0,
+    )
     if x in controls:
         raise ValueError("x cannot be in controls")
     if y in controls:
@@ -126,40 +168,80 @@ def binscatter(
     )  # "-" in col names can cause issues
     bin_name = f"bins____{distinct_suffix}"
 
-    df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
-        df, controls, x, y
-    )
-    df_with_regression_features, regression_features = maybe_add_regression_features(
-        df,
-        numeric_controls=numeric_columns,
-        categorical_controls=categorical_columns,
-    )
-    if poly_line is not None:
-        (
-            df_with_regression_features,
-            polynomial_features,
-        ) = add_polynomial_features(
-            df_with_regression_features,
-            x_name=x,
-            degree=poly_line,
-            distinct_suffix=distinct_suffix,
+    with _log_stage("clean_df", level=logging.DEBUG, controls=len(controls)):
+        df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
+            df, controls, x, y
         )
+    logger.debug(
+        "[clean_df] backend=%s lazy_input=%s numeric_controls=%d categorical_controls=%d",
+        df.implementation,
+        is_lazy_input,
+        len(numeric_columns),
+        len(categorical_columns),
+    )
+    with _log_stage(
+        "regression_features",
+        level=logging.DEBUG,
+        numeric=len(numeric_columns),
+        categorical=len(categorical_columns),
+    ):
+        df_with_regression_features, regression_features = (
+            maybe_add_regression_features(
+                df,
+                numeric_controls=numeric_columns,
+                categorical_controls=categorical_columns,
+            )
+        )
+    logger.debug("[regression_features] total=%d", len(regression_features))
+    if poly_line is not None:
+        with _log_stage("polynomial_features", level=logging.DEBUG, degree=poly_line):
+            (
+                df_with_regression_features,
+                polynomial_features,
+            ) = add_polynomial_features(
+                df_with_regression_features,
+                x_name=x,
+                degree=poly_line,
+                distinct_suffix=distinct_suffix,
+            )
     else:
         polynomial_features = ()
+        logger.debug("[polynomial_features] skipped")
 
+    selection_method = "rule-of-thumb" if auto_bins else "manual"
     if auto_bins:
-        computed_num_bins = _select_rule_of_thumb_bins(
-            df_with_regression_features, x, y, regression_features
-        )
+        requested_detail: int | str = "rot"
     else:
-        computed_num_bins = manual_bins
+        if manual_bins is None:
+            raise AssertionError("manual_bins must be set when auto_bins is False")
+        requested_detail = manual_bins
+    with _log_stage(
+        "bin_selection",
+        method=selection_method,
+        requested=requested_detail,
+    ):
+        if auto_bins:
+            computed_num_bins = _select_rule_of_thumb_bins(
+                df_with_regression_features, x, y, regression_features
+            )
+        else:
+            # requested_detail is an int when auto_bins is False
+            assert isinstance(requested_detail, int)
+            computed_num_bins = requested_detail
+    logger.info("[bin_selection] selected=%s auto=%s", computed_num_bins, auto_bins)
 
     # Compute quantiles and deduplicate
-    compute_quantiles = configure_compute_quantiles(
-        computed_num_bins, df_with_regression_features.implementation
+    with _log_stage("quantiles", requested=computed_num_bins):
+        compute_quantiles = configure_compute_quantiles(
+            computed_num_bins, df_with_regression_features.implementation
+        )
+        quantiles = compute_quantiles(df_with_regression_features, x)
+        unique_quantiles = tuple(dict.fromkeys(quantiles))
+    logger.info(
+        "[quantiles] requested=%s unique_boundaries=%s",
+        len(quantiles),
+        len(unique_quantiles),
     )
-    quantiles = compute_quantiles(df_with_regression_features, x)
-    unique_quantiles = tuple(dict.fromkeys(quantiles))
 
     # Compute feasible number of bins
     n_unique = len(unique_quantiles)
@@ -178,6 +260,12 @@ def binscatter(
             len(unique_quantiles),
             final_num_bins,
         )
+        logger.info(
+            "[summary] bins_adjusted requested=%s final=%s unique_boundaries=%s",
+            computed_num_bins,
+            final_num_bins,
+            len(unique_quantiles),
+        )
 
     profile = Profile(
         num_bins=final_num_bins,
@@ -191,35 +279,59 @@ def binscatter(
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
     )
-    add_bins = configure_add_bins(profile)
-    df_prepped = add_bins(df_with_regression_features, unique_quantiles)
+    with _log_stage("assign_bins", bins=profile.num_bins):
+        add_bins = configure_add_bins(profile)
+        df_prepped = add_bins(df_with_regression_features, unique_quantiles)
 
     moment_cache: dict[str, float] | None = None
     if controls or poly_line is not None:
         moment_cache = {}
 
     if not controls:
-        df_plotting = compute_bin_means(df_prepped, profile)
+        with _log_stage("bin_means", bins=profile.num_bins):
+            df_plotting = compute_bin_means(df_prepped, profile)
     else:
-        df_plotting, _ = partial_out_controls(
-            df_prepped, profile, moment_cache=moment_cache
-        )
+        with _log_stage(
+            "controls",
+            controls=len(profile.regression_features),
+            bins=profile.num_bins,
+        ):
+            df_plotting, _ = partial_out_controls(
+                df_prepped, profile, moment_cache=moment_cache
+            )
 
     polynomial_line: PolynomialFit | None = None
     if poly_line is not None and return_type == "plotly":
-        cache = moment_cache or {}
-        polynomial_line = _fit_polynomial_line(df_prepped, profile, poly_line, cache)
+        with _log_stage("poly_overlay", level=logging.DEBUG, degree=poly_line):
+            cache = moment_cache or {}
+            polynomial_line = _fit_polynomial_line(
+                df_prepped, profile, poly_line, cache
+            )
 
     match return_type:
         case "plotly":
-            return make_plot_plotly(
-                df_plotting,
-                profile,
-                kwargs_binscatter=kwargs,
-                polynomial_line=polynomial_line,
-            )
+            with _log_stage("render_plotly", bins=profile.num_bins):
+                result = make_plot_plotly(
+                    df_plotting,
+                    profile,
+                    kwargs_binscatter=kwargs,
+                    polynomial_line=polynomial_line,
+                )
         case "native":
-            return make_native_dataframe(df_plotting, profile)
+            with _log_stage("render_native", backend=profile.implementation):
+                result = make_native_dataframe(df_plotting, profile)
+    logger.info(
+        "[summary] backend=%s bins=%s requested_bins=%s unique_boundaries=%s controls=%d poly_features=%d return_type=%s auto_bins=%s",
+        profile.implementation,
+        profile.num_bins,
+        computed_num_bins,
+        len(unique_quantiles),
+        len(profile.regression_features),
+        len(profile.polynomial_features),
+        return_type,
+        auto_bins,
+    )
+    return result
 
 
 class Profile(NamedTuple):
