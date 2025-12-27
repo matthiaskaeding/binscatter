@@ -316,5 +316,3 @@ def _to_float_tuple(values: Any) -> Tuple[float, ...]:
         except TypeError:
             seq = [values]
     return tuple(float(v) for v in seq)
-
-

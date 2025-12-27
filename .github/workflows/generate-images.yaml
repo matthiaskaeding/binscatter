@@ -1,0 +1,51 @@
+name: Generate README Images
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [main]
+    paths:
+      - 'src/binscatter/**'
+      - 'scripts/readme/make_plots_readme.py'
+
+jobs:
+  generate-images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Generate plots
+        run: |
+          # Only generates plots for available datasets (gapminder always available)
+          # Skips state_data, optuna trials etc. if artifacts not present
+          uv run scripts/readme/make_plots_readme.py
+
+      - name: Deploy to images branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Save images to temp location
+          cp -r images /tmp/images
+
+          # Create orphan branch
+          git checkout --orphan images-temp
+          git rm -rf .
+
+          # Copy images back
+          cp -r /tmp/images .
+
+          # Commit and force push
+          git add images/
+          git commit -m "Update README images [skip ci]"
+          git push origin images-temp:images --force
+
+          echo "Images deployed to 'images' branch"
