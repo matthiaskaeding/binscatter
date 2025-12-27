@@ -4,6 +4,7 @@
 #     "binscatter",
 #     "numpy",
 #     "pandas",
+#     "pyarrow",
 #     "pyspark",
 # ]
 #
