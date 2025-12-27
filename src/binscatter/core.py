@@ -33,32 +33,6 @@ from binscatter.quantiles import (
 logger = logging.getLogger(__name__)
 
 
-def _format_stage_details(details: dict[str, Any]) -> str:
-    if not details:
-        return ""
-    parts = []
-    for key in sorted(details):
-        value = details[key]
-        parts.append(f"{key}={value}")
-    return " ".join(parts)
-
-
-@contextmanager
-def _log_stage(
-    stage: str, *, level: int = logging.INFO, **details: Any
-) -> Iterator[None]:
-    """Log start/done events for a named stage, including elapsed duration."""
-    detail_str = _format_stage_details(details)
-    start_msg = f"[{stage}] start" + (f" {detail_str}" if detail_str else "")
-    logger.log(level, start_msg)
-    start_time = time.perf_counter()
-    try:
-        yield
-    finally:
-        elapsed = time.perf_counter() - start_time
-        logger.log(level, "[%s] done in %.3fs", stage, elapsed)
-
-
 @overload
 def binscatter(
     df: IntoDataFrame,
@@ -817,6 +791,32 @@ def clean_df(
     categorical_controls = tuple(c for c in controls if c in cols_cat)
 
     return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
+
+
+def _format_stage_details(details: dict[str, Any]) -> str:
+    if not details:
+        return ""
+    parts = []
+    for key in sorted(details):
+        value = details[key]
+        parts.append(f"{key}={value}")
+    return " ".join(parts)
+
+
+@contextmanager
+def _log_stage(
+    stage: str, *, level: int = logging.INFO, **details: Any
+) -> Iterator[None]:
+    """Log start/done events for a named stage, including elapsed duration."""
+    detail_str = _format_stage_details(details)
+    start_msg = f"[{stage}] start" + (f" {detail_str}" if detail_str else "")
+    logger.log(level, start_msg)
+    start_time = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start_time
+        logger.log(level, "[%s] done in %.3fs", stage, elapsed)
 
 
 def _select_rule_of_thumb_bins(
