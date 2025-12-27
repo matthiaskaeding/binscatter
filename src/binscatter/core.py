@@ -832,23 +832,20 @@ def _solve_normal_equations(xtx: np.ndarray, rhs: np.ndarray) -> np.ndarray:
 
 
 def _gaussian_inverse_density_squared_sum(
-    df: nw.LazyFrame, x: str, mean_x: float, std_x: float, den_alpha: float = 0.975
+    df: nw.LazyFrame, x: str, mean_x: float, std_x: float, z_cutoff: float = 1.96
 ) -> float:
     """Compute sum_i 1 / f_G(x_i)^2 for the Gaussian reference f_G.
 
     Per Cattaneo et al. (2024) SA-4.1, the bias constant for p=0, v=0 uses
     f_X(x)^(2p+2-2v) = f_X(x)^2 in the denominator.
 
-    We trim the density from below at the (1-den_alpha) percentile to prevent
-    extreme outliers from causing the inverse to explode.
+    We trim the density from below by capping z-scores at z_cutoff (default 1.96,
+    i.e. 97.5th percentile) to prevent extreme outliers from causing the inverse
+    to explode.
     """
     if std_x <= 0:
         raise ValueError("Standard deviation must be positive.")
 
-    # Compute z-score cutoff for density trimming (e.g., 1.96 for alpha=0.975)
-    from scipy.stats import norm
-
-    z_cutoff = norm.ppf(den_alpha)  # ~1.96 for default
     # Maximum allowed z^2 before capping
     z_sq_max = z_cutoff**2
 
