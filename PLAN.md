@@ -8,10 +8,14 @@
    - `_dummy_builder_pandas_polars`: Uses native `pd.get_dummies()` / `pl.to_dummies()`
    - `_dummy_builder_fallback`: Generic narwhals implementation for other backends
 
+2. **Automatic PySpark caching** (optimization #4): Added `_maybe_cache_pyspark` context manager:
+   - Caches dataframe after `clean_df` to avoid repeated scans
+   - Automatically unpersists on exit
+   - Results: `maybe_add_regression_features` 2.15s → 0.38s (5.7x faster), `_fit_polynomial_line` 1.14s → 0.71s (1.6x faster)
+
 ### Remaining optimizations
-2. **Reuse aggregated moments**: Push `_ensure_feature_moments` to request sums/cross-products in the same grouping job that produces `per_bin`
-3. **Spark-native regression solve**: Use VectorAssembler + Spark ML linear regression instead of shipping moments to driver
-4. **Optional caching**: Add `cache()`/`persist()` option for lazy backends to avoid repeated scans
+3. **Reuse aggregated moments**: Push `_ensure_feature_moments` to request sums/cross-products in the same grouping job that produces `per_bin`
+4. **Spark-native regression solve**: Use VectorAssembler + Spark ML linear regression instead of shipping moments to driver
 
 ---
 
