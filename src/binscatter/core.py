@@ -37,7 +37,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
+    num_bins: int | Literal["rule-of-thumb", "rot"] = "rule-of-thumb",
     return_type: Literal["plotly"] = "plotly",
     poly_line: int | None = None,
     **kwargs,
@@ -51,7 +51,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
+    num_bins: int | Literal["rule-of-thumb", "rot"] = "rule-of-thumb",
     return_type: Literal["native"] = "native",
     poly_line: int | None = None,
     **kwargs,
@@ -64,7 +64,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
-    num_bins: int | Literal["rule-of-thumb"] = "rule-of-thumb",
+    num_bins: int | Literal["rule-of-thumb", "rot"] = "rule-of-thumb",
     return_type: Literal["plotly", "native"] = "plotly",
     poly_line: int | None = None,
     **kwargs,
@@ -76,7 +76,7 @@ def binscatter(
         x: Name of the x column.
         y: Name of the y column.
         controls: Optional control columns to partial out (either a string or iterable of strings).
-        num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` for the automatic selector.
+        num_bins: Number of quantile bins to form, or ``"rule-of-thumb"`` (or ``"rot"``) for the automatic selector.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
@@ -88,7 +88,7 @@ def binscatter(
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
     if isinstance(num_bins, str):
-        auto_bins = num_bins == "rule-of-thumb"
+        auto_bins = num_bins in ("rule-of-thumb", "rot")
         if not auto_bins:
             msg = f"Unknown num_bins string option: {num_bins}"
             raise ValueError(msg)
