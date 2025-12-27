@@ -10,8 +10,6 @@ wheels/
 .venv
 binscatter_ref.pdf
 *.png
-!images/readme/binscatter_controls.png
-!images/readme/scatter.png
 .DS_Store
 .vscode/settings.json
 *.zip

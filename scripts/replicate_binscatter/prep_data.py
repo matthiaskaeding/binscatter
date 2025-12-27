@@ -36,7 +36,8 @@ def main() -> None:
             (1 - pl.col(x) / 100).log().alias(x)
             for x in ["mtr90_lag3", "top_corp", "top_corp_lag3"]
         ],
-    )
+    ).with_columns(pl.col("statenum", "year").cast(pl.String))
+
     df.write_parquet(parquet_path)
     print(f"Wrote processed data to {parquet_path}")  # noqa: T201
 
