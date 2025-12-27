@@ -4,16 +4,16 @@ import operator
 import time
 import uuid
 import warnings
-from contextlib import contextmanager
-from functools import reduce
+from functools import reduce, wraps
 from typing import (
     Any,
+    Callable,
     Iterable,
-    Iterator,
     List,
     Literal,
     NamedTuple,
     Tuple,
+    TypeVar,
     overload,
 )
 
@@ -142,10 +142,17 @@ def binscatter(
     )  # "-" in col names can cause issues
     bin_name = f"bins____{distinct_suffix}"
 
-    with _log_stage("clean_df", level=logging.DEBUG, controls=len(controls)):
-        df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
-            df, controls, x, y
-        )
+    @log_stage(
+        "clean_df",
+        level=logging.DEBUG,
+        details_fn=lambda *_args, **_kwargs: {"controls": len(controls)},
+    )
+    def _stage_clean_df() -> tuple[
+        nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]
+    ]:
+        return clean_df(df, controls, x, y)
+
+    df, is_lazy_input, numeric_columns, categorical_columns = _stage_clean_df()
     logger.debug(
         "[clean_df] backend=%s lazy_input=%s numeric_controls=%d categorical_controls=%d",
         df.implementation,
@@ -153,31 +160,44 @@ def binscatter(
         len(numeric_columns),
         len(categorical_columns),
     )
-    with _log_stage(
+
+    @log_stage(
         "regression_features",
         level=logging.DEBUG,
-        numeric=len(numeric_columns),
-        categorical=len(categorical_columns),
-    ):
-        df_with_regression_features, regression_features = (
-            maybe_add_regression_features(
-                df,
-                numeric_controls=numeric_columns,
-                categorical_controls=categorical_columns,
-            )
+        details_fn=lambda *_args, **_kwargs: {
+            "numeric": len(numeric_columns),
+            "categorical": len(categorical_columns),
+        },
+    )
+    def _stage_regression_features() -> tuple[nw.LazyFrame, Tuple[str, ...]]:
+        return maybe_add_regression_features(
+            df,
+            numeric_controls=numeric_columns,
+            categorical_controls=categorical_columns,
         )
+
+    df_with_regression_features, regression_features = _stage_regression_features()
     logger.debug("[regression_features] total=%d", len(regression_features))
+
     if poly_line is not None:
-        with _log_stage("polynomial_features", level=logging.DEBUG, degree=poly_line):
-            (
-                df_with_regression_features,
-                polynomial_features,
-            ) = add_polynomial_features(
+
+        @log_stage(
+            "polynomial_features",
+            level=logging.DEBUG,
+            details_fn=lambda *_args, **_kwargs: {"degree": poly_line},
+        )
+        def _stage_polynomial_features() -> tuple[nw.LazyFrame, Tuple[str, ...]]:
+            return add_polynomial_features(
                 df_with_regression_features,
                 x_name=x,
                 degree=poly_line,
                 distinct_suffix=distinct_suffix,
             )
+
+        (
+            df_with_regression_features,
+            polynomial_features,
+        ) = _stage_polynomial_features()
     else:
         polynomial_features = ()
         logger.debug("[polynomial_features] skipped")
@@ -189,28 +209,40 @@ def binscatter(
         if manual_bins is None:
             raise AssertionError("manual_bins must be set when auto_bins is False")
         requested_detail = manual_bins
-    with _log_stage(
+
+    @log_stage(
         "bin_selection",
-        method=selection_method,
-        requested=requested_detail,
-    ):
+        details_fn=lambda *_args, **_kwargs: {
+            "method": selection_method,
+            "requested": requested_detail,
+        },
+    )
+    def _stage_bin_selection() -> int:
         if auto_bins:
-            computed_num_bins = _select_rule_of_thumb_bins(
+            return _select_rule_of_thumb_bins(
                 df_with_regression_features, x, y, regression_features
             )
-        else:
-            # requested_detail is an int when auto_bins is False
-            assert isinstance(requested_detail, int)
-            computed_num_bins = requested_detail
+        if isinstance(requested_detail, int):
+            return requested_detail
+        raise AssertionError("requested_detail must be int when auto_bins is False")
+
+    computed_num_bins = _stage_bin_selection()
     logger.info("[bin_selection] selected=%s auto=%s", computed_num_bins, auto_bins)
 
     # Compute quantiles and deduplicate
-    with _log_stage("quantiles", requested=computed_num_bins):
+    @log_stage(
+        "quantiles",
+        details_fn=lambda *_args, **_kwargs: {"requested": computed_num_bins},
+    )
+    def _stage_quantiles() -> tuple[tuple[float, ...], tuple[float, ...]]:
         compute_quantiles = configure_compute_quantiles(
             computed_num_bins, df_with_regression_features.implementation
         )
         quantiles = compute_quantiles(df_with_regression_features, x)
         unique_quantiles = tuple(dict.fromkeys(quantiles))
+        return quantiles, unique_quantiles
+
+    quantiles, unique_quantiles = _stage_quantiles()
     logger.info(
         "[quantiles] requested=%s unique_boundaries=%s",
         len(quantiles),
@@ -253,47 +285,87 @@ def binscatter(
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
     )
-    with _log_stage("assign_bins", bins=profile.num_bins):
+
+    @log_stage(
+        "assign_bins",
+        details_fn=lambda *_args, **_kwargs: {"bins": profile.num_bins},
+    )
+    def _stage_assign_bins() -> nw.LazyFrame:
         add_bins = configure_add_bins(profile)
-        df_prepped = add_bins(df_with_regression_features, unique_quantiles)
+        return add_bins(df_with_regression_features, unique_quantiles)
+
+    df_prepped = _stage_assign_bins()
 
     moment_cache: dict[str, float] | None = None
     if controls or poly_line is not None:
         moment_cache = {}
 
     if not controls:
-        with _log_stage("bin_means", bins=profile.num_bins):
-            df_plotting = compute_bin_means(df_prepped, profile)
+
+        @log_stage(
+            "bin_means",
+            details_fn=lambda *_args, **_kwargs: {"bins": profile.num_bins},
+        )
+        def _stage_bin_means() -> nw.LazyFrame:
+            return compute_bin_means(df_prepped, profile)
+
+        df_plotting = _stage_bin_means()
     else:
-        with _log_stage(
+
+        @log_stage(
             "controls",
-            controls=len(profile.regression_features),
-            bins=profile.num_bins,
-        ):
-            df_plotting, _ = partial_out_controls(
-                df_prepped, profile, moment_cache=moment_cache
-            )
+            details_fn=lambda *_args, **_kwargs: {
+                "controls": len(profile.regression_features),
+                "bins": profile.num_bins,
+            },
+        )
+        def _stage_controls() -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
+            return partial_out_controls(df_prepped, profile, moment_cache=moment_cache)
+
+        df_plotting, _ = _stage_controls()
 
     polynomial_line: PolynomialFit | None = None
     if poly_line is not None and return_type == "plotly":
-        with _log_stage("poly_overlay", level=logging.DEBUG, degree=poly_line):
+
+        @log_stage(
+            "poly_overlay",
+            level=logging.DEBUG,
+            details_fn=lambda *_args, **_kwargs: {"degree": poly_line},
+        )
+        def _stage_poly_overlay() -> PolynomialFit:
             cache = moment_cache or {}
-            polynomial_line = _fit_polynomial_line(
-                df_prepped, profile, poly_line, cache
-            )
+            return _fit_polynomial_line(df_prepped, profile, poly_line, cache)
+
+        polynomial_line = _stage_poly_overlay()
 
     match return_type:
         case "plotly":
-            with _log_stage("render_plotly", bins=profile.num_bins):
-                result = make_plot_plotly(
+
+            @log_stage(
+                "render_plotly",
+                details_fn=lambda *_args, **_kwargs: {"bins": profile.num_bins},
+            )
+            def _stage_render_plotly() -> go.Figure:
+                return make_plot_plotly(
                     df_plotting,
                     profile,
                     kwargs_binscatter=kwargs,
                     polynomial_line=polynomial_line,
                 )
+
+            result = _stage_render_plotly()
         case "native":
-            with _log_stage("render_native", backend=profile.implementation):
-                result = make_native_dataframe(df_plotting, profile)
+
+            @log_stage(
+                "render_native",
+                details_fn=lambda *_args, **_kwargs: {
+                    "backend": profile.implementation
+                },
+            )
+            def _stage_render_native() -> object:
+                return make_native_dataframe(df_plotting, profile)
+
+            result = _stage_render_native()
     logger.info(
         "[summary] backend=%s bins=%s requested_bins=%s unique_boundaries=%s controls=%d poly_features=%d return_type=%s auto_bins=%s",
         profile.implementation,
@@ -793,30 +865,43 @@ def clean_df(
     return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
 
 
+StageReturn = TypeVar("StageReturn")
+
+
 def _format_stage_details(details: dict[str, Any]) -> str:
     if not details:
         return ""
     parts = []
     for key in sorted(details):
-        value = details[key]
-        parts.append(f"{key}={value}")
+        parts.append(f"{key}={details[key]}")
     return " ".join(parts)
 
 
-@contextmanager
-def _log_stage(
-    stage: str, *, level: int = logging.INFO, **details: Any
-) -> Iterator[None]:
-    """Log start/done events for a named stage, including elapsed duration."""
-    detail_str = _format_stage_details(details)
-    start_msg = f"[{stage}] start" + (f" {detail_str}" if detail_str else "")
-    logger.log(level, start_msg)
-    start_time = time.perf_counter()
-    try:
-        yield
-    finally:
-        elapsed = time.perf_counter() - start_time
-        logger.log(level, "[%s] done in %.3fs", stage, elapsed)
+def log_stage(
+    stage: str,
+    *,
+    level: int = logging.INFO,
+    details_fn: Callable[..., dict[str, Any]] | None = None,
+) -> Callable[[Callable[..., StageReturn]], Callable[..., StageReturn]]:
+    """Decorator to log start/done events (with elapsed time) around a function."""
+
+    def decorator(func: Callable[..., StageReturn]) -> Callable[..., StageReturn]:
+        @wraps(func)
+        def wrapper(*args, **kwargs) -> StageReturn:
+            detail_map = details_fn(*args, **kwargs) if details_fn else {}
+            detail_str = _format_stage_details(detail_map)
+            start_msg = f"[{stage}] start" + (f" {detail_str}" if detail_str else "")
+            logger.log(level, start_msg)
+            start_time = time.perf_counter()
+            try:
+                return func(*args, **kwargs)
+            finally:
+                elapsed = time.perf_counter() - start_time
+                logger.log(level, "[%s] done in %.3fs", stage, elapsed)
+
+        return wrapper
+
+    return decorator
 
 
 def _select_rule_of_thumb_bins(
