@@ -653,24 +653,34 @@ def clean_df(
     Returns a lazy narwhals frame containing only the requested columns, whether
     the original input was lazy, and tuples of numeric / categorical controls.
     """
-    cols = getattr(df_in, "columns", None)
-    if cols is None or len(cols) <= 1:
-        msg = "Input dataframe must have 'columns' attribute and at least 2 cols"
-        raise TypeError(msg)
-    for c in [x, y, *controls]:
-        if c not in cols:
-            msg = f"{c} not in input dataframe"
-            raise ValueError(msg)
+    # Try cheap column access for non-lazy inputs
+    cols: List[str] | None = None
+    if hasattr(df_in, "collect_schema"):
+        pass  # lazy frame, defer to narwhals
+    elif hasattr(df_in, "columns"):
+        cols = list(getattr(df_in, "columns"))
 
     dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
 
     if type(dfn) is nw.DataFrame:
         is_lazy_input = False
+        if cols is None:
+            cols = list(dfn.columns)
     elif type(dfn) is nw.LazyFrame:
         is_lazy_input = True
+        if cols is None:
+            cols = dfn.collect_schema().names()
     else:
         msg = f"Unexpected narwhals type {(type(dfn))}"
         raise ValueError(msg)
+
+    if cols is None or len(cols) <= 1:
+        msg = "Input dataframe must have at least 2 columns"
+        raise TypeError(msg)
+    for c in [x, y, *controls]:
+        if c not in cols:
+            msg = f"{c} not in input dataframe"
+            raise ValueError(msg)
 
     logger.debug("Type after calling to native: %s", type(dfn.to_native()))
     dfl: nw.LazyFrame = dfn.lazy()
