@@ -3,7 +3,7 @@ import pytest
 
 import narwhals as nw
 
-from binscatter.core import _clean_controls, clean_df, maybe_add_regression_features
+from binscatter.core import _clean_controls, clean_df, add_regression_features
 
 
 def test_clean_controls_returns_tuple():
@@ -29,7 +29,7 @@ def test_clean_df_splits_controls(controls, expected):
 
 def test_maybe_add_regression_features_creates_dummies():
     df = nw.from_native(pl.DataFrame({"x": [0, 1, 2], "cat": ["a", "b", "a"]})).lazy()
-    df_augmented, features = maybe_add_regression_features(
+    df_augmented, features = add_regression_features(
         df, numeric_controls=(), categorical_controls=("cat",)
     )
     collected = df_augmented.collect()

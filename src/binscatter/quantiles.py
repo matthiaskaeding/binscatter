@@ -18,12 +18,9 @@ def _make_probs(num_bins: int) -> List[float]:
     return [i / num_bins for i in range(num_bins + 1)]
 
 
-QuantileComputer = Callable[[nw.LazyFrame, str], Tuple[float, ...]]
-
-
 def configure_compute_quantiles(
     num_bins: int, implementation: Implementation
-) -> QuantileComputer:
+) -> Callable[[nw.LazyFrame, str], Tuple[float, ...]]:
     """Return a function that computes quantile edges for the given backend."""
     probs = _make_probs(num_bins)
 

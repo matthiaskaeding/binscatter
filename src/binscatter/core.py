@@ -23,6 +23,7 @@ from narwhals import Implementation
 from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
+from binscatter.dummy_builders import configure_build_dummies
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
@@ -103,6 +104,7 @@ def binscatter(
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
+    manual_bins: int = 0
     if isinstance(num_bins, str):
         auto_bins = num_bins in ("rule-of-thumb", "rot")
         if not auto_bins:
@@ -155,7 +157,8 @@ def binscatter(
         len(numeric_columns),
         len(categorical_columns),
     )
-    df_with_regression_features, regression_features = maybe_add_regression_features(
+
+    df_with_regression_features, regression_features = add_regression_features(
         df,
         numeric_controls=numeric_columns,
         categorical_controls=categorical_columns,
@@ -650,9 +653,9 @@ def split_columns(
             else:
                 if schema is not None:
                     if hasattr(schema, "names") and callable(schema.names):
-                        names = schema.names()
+                        names = schema.names()  # type: ignore[attr-defined]
                         if names:
-                            return tuple(names)
+                            return tuple(names)  # type: ignore[arg-type]
                     if isinstance(schema, dict):
                         return tuple(schema.keys())
         columns: Tuple[str, ...] = tuple()
@@ -921,7 +924,7 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
 
 
 @timed
-def maybe_add_regression_features(
+def add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: Tuple[str, ...],
     categorical_controls: Tuple[str, ...],
@@ -932,25 +935,13 @@ def maybe_add_regression_features(
     if numeric_controls and not categorical_controls:
         return df, numeric_controls
 
-    dummy_exprs: list[nw.Expr] = []
-    dummy_cols: list[str] = []
-    for c in categorical_controls:
-        distinct_values: List[Any] = (
-            df.select(c).unique().collect().get_column(c).sort().to_list()
-        )
-        if len(distinct_values) <= 1:
-            continue
-        for i, v in enumerate(distinct_values[1:]):
-            alias = f"__ctrl_{v}_{i}"
-            expr = (nw.col(c) == v).cast(nw.Float64).alias(alias)
-            dummy_exprs.append(expr)
-            dummy_cols.append(alias)
-
-    if not dummy_exprs:
+    build_dummies = configure_build_dummies(df.implementation)
+    df_with_dummies, dummy_cols = build_dummies(df, categorical_controls)
+    if not dummy_cols:
         logger.debug("No dummy expressions created, all categorical controls constant")
-        return df, tuple(numeric_controls)
+        return df_with_dummies, numeric_controls
 
-    return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
+    return df_with_dummies, numeric_controls + dummy_cols
 
 
 @timed
