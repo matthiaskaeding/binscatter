@@ -115,8 +115,8 @@ def test_pyspark_categorical_dummy_creation_performance(
     df_clean, _, _, _ = clean_df(
         df_spark,
         controls=categorical_controls,
-        x_name="x",
-        y_name="y",
+        x="x",
+        y="y",
     )
 
     # Time the dummy variable creation
@@ -235,8 +235,8 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
     df_clean, _, _, categorical_controls = clean_df(
         df,
         controls=("cat_a", "cat_b"),
-        x_name="x",
-        y_name="y",
+        x="x",
+        y="y",
     )
 
     df_with_dummies, regression_features = add_regression_features(
@@ -286,8 +286,8 @@ def test_pyspark_dummy_names_match_pandas() -> None:
     df_clean_pd, _, _, cat_controls_pd = clean_df(
         df_pandas,
         controls=("category",),
-        x_name="x",
-        y_name="y",
+        x="x",
+        y="y",
     )
     _, features_pd = add_regression_features(
         df_clean_pd,
@@ -300,8 +300,8 @@ def test_pyspark_dummy_names_match_pandas() -> None:
     df_clean_spark, _, _, cat_controls_spark = clean_df(
         df_spark,
         controls=("category",),
-        x_name="x",
-        y_name="y",
+        x="x",
+        y="y",
     )
     _, features_spark = add_regression_features(
         df_clean_spark,
@@ -333,8 +333,8 @@ def test_pyspark_handles_null_categories() -> None:
     df_clean, _, _, cat_controls = clean_df(
         df_spark,
         controls=("category",),
-        x_name="x",
-        y_name="y",
+        x="x",
+        y="y",
     )
 
     df_with_dummies, features = add_regression_features(
@@ -378,8 +378,8 @@ def test_backend_dummy_creation_time(backend: str) -> None:
     df_clean, _, _, _ = clean_df(
         df,
         controls=categorical_controls,
-        x_name="x",
-        y_name="y",
+        x="x",
+        y="y",
     )
 
     with timer() as result:
