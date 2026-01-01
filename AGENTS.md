@@ -24,9 +24,10 @@
 - Name new tests descriptively (`test_<behavior>`) and colocate fixtures alongside their usage.
 
 ## Commit & Pull Request Guidelines
-- Follow the active Git history style: brief, imperative commit subjects (e.g., “Add dask”) with optional detail in the body.
+- Follow the active Git history style: brief, imperative commit subjects (e.g., "Add dask") with optional detail in the body.
 - Before opening a PR, ensure `pytest` passes locally and mention which backends were exercised.
 - Include concise summaries, reference related issues, and add screenshots or HTML links if visual outputs (Plotly renders) changed.
+- Update `CHANGELOG.md` for each feature branch before merging. Add entries under the `## Unreleased` section in the appropriate subsection (`Added`, `Changed`, `Fixed`, etc.).
 
 ## Security & Configuration Tips
 - Keep optional backends isolated by lazy importing; never assume availability of Spark, DuckDB, or Dask in core paths.
