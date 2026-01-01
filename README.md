@@ -5,9 +5,9 @@
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
 - Lightweight - little dependencies
-- Just works: by default picks the number of bins automatically via the rule-of-thumb selector from Cattaneo et al. (2024) - no manual tuning
+- Just works: by default picks the number of bins automatically via the DPI (Direct Plug-In) selector from Cattaneo et al. (2024) - no manual tuning
 
-## What are binscatter plots? 
+## What are binscatter plots?
 
 Binscatter plots group the x-axis into bins and plot average outcomes for each bin, giving a cleaner view of the relationship between two variables—possibly controlling for confounders. They show an estimate of the conditional mean, rather than all the underlying data as in a classical scatter plot.
 
@@ -26,10 +26,18 @@ import plotly.express as px
 from binscatter import binscatter
 
 df = px.data.gapminder()
+binscatter(df, "gdpPercap", "lifeExp")  # Uses DPI bin selector by default
+```
+
+<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI default)" width="640" />
+
+You can also specify a fixed number of bins:
+
+```python
 binscatter(df, "gdpPercap", "lifeExp", num_bins=40)
 ```
 
-<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp.png" alt="Binscatter: GDP per capita vs Life Expectancy" width="640" />
+<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_fixed.png" alt="Binscatter: GDP per capita vs Life Expectancy (40 bins)" width="640" />
 
 This package implements binscatter plots following:
 

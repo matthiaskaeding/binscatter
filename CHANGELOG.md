@@ -10,6 +10,7 @@
 - Cross-backend regression coefficient test (`test_partial_out_controls_coefficients_across_backends`) to ensure consistent results with categorical variables across all backends.
 
 ### Changed
+- Reimplemented the direct plug-in (DPI) selector using the SA-4.2 IMSE formulas, matching `binsreg` within a bin across the tested scenarios.
 - Refactored dummy variable builders: split `build_dummies_pandas_polars` into separate `build_dummies_pandas` and `build_dummies_polars` functions for cleaner backend-specific logic.
 - Optimized Polars dummy builder to preserve lazy evaluation by only collecting categorical columns instead of entire dataframe.
 - Extracted rename mapping logic into `build_rename_map` helper function to reduce code duplication.
