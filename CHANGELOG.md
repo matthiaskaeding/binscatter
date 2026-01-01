@@ -2,7 +2,14 @@
 
 ## Unreleased
 
+### Added
+- Backend-specific dummy variable builders in new `dummy_builders.py` module.
+- Hash-based dummy variable naming to prevent collisions (e.g., "foo/bar" vs "foo_bar").
+- Performance benchmarks in `tests/test_performance.py`.
+
 ### Changed
+- Optimized PySpark categorical handling with batched `collect_set()` aggregation (5.7x speedup).
+- Renamed `maybe_add_regression_features` to `add_regression_features`.
 - Fixed rule-of-thumb bin selector to match Cattaneo et al. (2024) SA-4.1 exactly: corrected bias constant (1/12 vs 1/3), use squared inverse density, and added density trimming at 2.5th percentile.
 - Simplified quantile deduplication logic using `dict.fromkeys` instead of iterative reduction.
 - Capped rule-of-thumb bins at n/10 to ensure ~10 observations per bin, fixing issues with heavy-tailed data (e.g., GDP).
