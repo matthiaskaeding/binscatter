@@ -1057,6 +1057,144 @@ def test_dummy_builder_constant_categorical():
     # Should return the same dataframe
     assert df_with_dummies.collect().shape == df_pd.shape
 
+def test_build_dummies_pandas_with_empty_controls():
+    """Test pandas builder with empty categorical controls."""
+    from binscatter.dummy_builders import build_dummies_pandas
+    import pandas as pd
+    import narwhals as nw
+
+    df_pd = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
+    df_nw = nw.from_native(df_pd).lazy()
+
+    df_result, dummy_cols = build_dummies_pandas(df_nw, ())
+
+    assert len(dummy_cols) == 0
+    assert df_result.collect().shape == (3, 2)
+
+
+def test_build_dummies_polars_preserves_lazy():
+    """Test that polars builder preserves lazy evaluation."""
+    from binscatter.dummy_builders import build_dummies_polars
+    import polars as pl
+    import narwhals as nw
+
+    # Create a lazy polars dataframe
+    df_pl = pl.DataFrame({
+        'x': [1, 2, 3, 4, 5],
+        'y': [10, 20, 30, 40, 50],
+        'cat': ['A', 'B', 'A', 'B', 'A']
+    }).lazy()
+    df_nw = nw.from_native(df_pl)
+
+    # Build dummies
+    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat',))
+
+    # Verify result is still lazy
+    result_native = nw.to_native(df_result)
+    assert isinstance(result_native, pl.LazyFrame), f"Expected LazyFrame, got {type(result_native)}"
+
+    # Should have created 1 dummy (2 levels - 1)
+    assert len(dummy_cols) == 1
+
+    # Collect and verify
+    collected = df_result.collect()
+    assert dummy_cols[0] in collected.columns
+
+
+def test_build_dummies_polars_with_multiple_categoricals():
+    """Test polars builder with multiple categorical columns."""
+    from binscatter.dummy_builders import build_dummies_polars
+    import polars as pl
+    import narwhals as nw
+
+    df_pl = pl.DataFrame({
+        'x': [1, 2, 3, 4],
+        'cat_a': ['A', 'B', 'C', 'A'],
+        'cat_b': ['X', 'Y', 'X', 'Y'],
+        'cat_c': ['P', 'Q', 'R', 'P']
+    }).lazy()
+    df_nw = nw.from_native(df_pl)
+
+    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat_a', 'cat_b', 'cat_c'))
+
+    # cat_a: 3 levels -> 2 dummies
+    # cat_b: 2 levels -> 1 dummy
+    # cat_c: 3 levels -> 2 dummies
+    # Total: 5 dummies
+    assert len(dummy_cols) == 5
+
+    # Verify all dummy columns are present
+    collected = df_result.collect()
+    for col in dummy_cols:
+        assert col in collected.columns
+        assert col.startswith("__ctrl_")
+
+
+def test_build_dummies_fallback_with_multiple_categoricals():
+    """Test fallback builder with multiple categorical columns."""
+    from binscatter.dummy_builders import build_dummies_fallback
+    import pandas as pd
+    import narwhals as nw
+
+    df_pd = pd.DataFrame({
+        'x': [1, 2, 3, 4],
+        'cat_a': ['foo', 'bar', 'baz', 'foo'],
+        'cat_b': ['red', 'blue', 'red', 'blue']
+    })
+    df_nw = nw.from_native(df_pd).lazy()
+
+    df_result, dummy_cols = build_dummies_fallback(df_nw, ('cat_a', 'cat_b'))
+
+    # cat_a: 3 levels -> 2 dummies
+    # cat_b: 2 levels -> 1 dummy
+    # Total: 3 dummies
+    assert len(dummy_cols) == 3
+
+    # Verify all dummy columns exist and have correct values
+    collected = df_result.collect()
+    for col in dummy_cols:
+        assert col in collected.columns
+        # Should be 0.0 or 1.0
+        values = set(collected[col].to_list())
+        assert values <= {0.0, 1.0}
+
+
+def test_build_dummies_pandas_single_categorical():
+    """Test pandas builder with a single categorical column."""
+    from binscatter.dummy_builders import build_dummies_pandas
+    import pandas as pd
+    import narwhals as nw
+
+    df_pd = pd.DataFrame({
+        'x': [1, 2, 3],
+        'cat': ['only_one', 'only_one', 'only_one']
+    })
+    df_nw = nw.from_native(df_pd).lazy()
+
+    df_result, dummy_cols = build_dummies_pandas(df_nw, ('cat',))
+
+    # Single level categorical should create no dummies
+    assert len(dummy_cols) == 0
+
+
+def test_build_dummies_polars_single_categorical():
+    """Test polars builder with a single categorical column."""
+    from binscatter.dummy_builders import build_dummies_polars
+    import polars as pl
+    import narwhals as nw
+
+    df_pl = pl.DataFrame({
+        'x': [1, 2, 3],
+        'cat': ['only_one', 'only_one', 'only_one']
+    }).lazy()
+    df_nw = nw.from_native(df_pl)
+
+    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat',))
+
+    # Single level categorical should create no dummies
+    assert len(dummy_cols) == 0
+
+
 
 def test_configure_build_dummies_dispatch():
     """Test that configure_build_dummies returns the right implementation."""

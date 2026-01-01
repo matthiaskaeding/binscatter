@@ -126,6 +126,7 @@ def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
     """Build dummy variables using native polars implementation.
 
     Uses pl.to_dummies() for efficient dummy creation.
+    Only collects the categorical columns, keeping the main dataframe lazy.
 
     Args:
         df: Input dataframe
@@ -142,19 +143,26 @@ def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
     except ImportError:  # pragma: no cover
         return build_dummies_fallback(df, categorical_controls)
 
-    native = nw.to_native(df)
-    if isinstance(native, pl.LazyFrame):
-        dataset = native.collect()
-    else:
-        dataset = native
+    # Only collect the categorical columns to create dummies
     sep = "__binscatter__"
-    dummies_df = dataset.select(categorical_controls).to_dummies(
-        drop_first=True, separator=sep
-    )
+    categoricals_collected = df.select(categorical_controls).collect()
+
+    # Convert to native polars for to_dummies
+    native_categoricals = nw.to_native(categoricals_collected)
+    dummies_df = native_categoricals.to_dummies(drop_first=True, separator=sep)
+
+    # Rename columns using our helper
     rename_map, dummy_cols = build_rename_map(dummies_df.columns, sep)
     dummies_df = dummies_df.rename(rename_map)
-    dataset = dataset.hstack(dummies_df)
-    return nw.from_native(dataset).lazy(), tuple(dummy_cols)
+
+    # Convert dummies back to polars LazyFrame
+    dummies_lazy = dummies_df.lazy()
+
+    # Horizontally concatenate original lazy frame with dummies
+    native_df = nw.to_native(df)
+    result_native = pl.concat([native_df, dummies_lazy], how='horizontal')
+
+    return nw.from_native(result_native), tuple(dummy_cols)
 
 
 def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
