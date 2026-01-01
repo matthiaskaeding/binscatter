@@ -899,21 +899,53 @@ def test_pyspark_caching_noop_for_other_backends():
 def test_format_dummy_alias():
     """Test the _format_dummy_alias helper function."""
     from binscatter.core import _format_dummy_alias
+    import re
 
-    # Basic case
-    assert _format_dummy_alias("category", "value1") == "__ctrl_category_value1"
+    # All names should start with __ctrl_{column}_
+    result = _format_dummy_alias("category", "value1")
+    assert result.startswith("__ctrl_category_")
+    # Should contain sanitized value and 8-char hash
+    assert re.match(r"__ctrl_category_value1_[a-f0-9]{8}$", result)
 
     # Spaces should be replaced with underscores
-    assert _format_dummy_alias("cat", "foo bar") == "__ctrl_cat_foo_bar"
+    result = _format_dummy_alias("cat", "foo bar")
+    assert result.startswith("__ctrl_cat_foo_bar_")
+    assert re.match(r"__ctrl_cat_foo_bar_[a-f0-9]{8}$", result)
 
     # Slashes should be replaced with underscores
-    assert _format_dummy_alias("cat", "foo/bar") == "__ctrl_cat_foo_bar"
+    result = _format_dummy_alias("cat", "foo/bar")
+    assert result.startswith("__ctrl_cat_foo_bar_")
+    assert re.match(r"__ctrl_cat_foo_bar_[a-f0-9]{8}$", result)
 
     # Multiple special characters
-    assert _format_dummy_alias("cat", "a b/c") == "__ctrl_cat_a_b_c"
+    result = _format_dummy_alias("cat", "a b/c")
+    assert result.startswith("__ctrl_cat_a_b_c_")
 
     # Numeric values
-    assert _format_dummy_alias("cat", 123) == "__ctrl_cat_123"
+    result = _format_dummy_alias("cat", 123)
+    assert result.startswith("__ctrl_cat_123_")
+    assert re.match(r"__ctrl_cat_123_[a-f0-9]{8}$", result)
+
+    # CRITICAL: Different values that sanitize the same should have different hashes
+    # This prevents collisions
+    name1 = _format_dummy_alias("cat", "foo/bar")
+    name2 = _format_dummy_alias("cat", "foo_bar")
+    assert name1 != name2, "Values 'foo/bar' and 'foo_bar' should have different hashes"
+
+    # Hash should be deterministic (same input = same output)
+    assert _format_dummy_alias("cat", "test") == _format_dummy_alias("cat", "test")
+
+    # Special characters should be sanitized
+    result = _format_dummy_alias("cat", "price@discount")
+    assert "@" not in result
+    assert result.startswith("__ctrl_cat_price_discount_")
+
+    # Very long values should be truncated but still unique
+    long_value = "a" * 200
+    result = _format_dummy_alias("cat", long_value)
+    assert len(result) <= 64, f"Column name too long: {len(result)} chars"
+    assert result.startswith("__ctrl_cat_")
+    assert re.search(r"_[a-f0-9]{8}$", result), "Should end with 8-char hash"
 
 
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
@@ -1140,11 +1172,12 @@ def test_dummy_names_consistent_across_backends(backend):
         categorical_controls=categorical_controls,
     )
 
-    # All dummy names should follow pattern: __ctrl_{column}_{value}
+    # All dummy names should follow pattern: __ctrl_{column}_{value}_{hash}
+    import re
     for feat in regression_features:
         assert feat.startswith("__ctrl_"), f"Bad dummy name: {feat}"
-        parts = feat.split("_", 3)
-        assert len(parts) >= 4, f"Dummy name should have format __ctrl_column_value: {feat}"
+        # Should end with 8-character hex hash
+        assert re.search(r"_[a-f0-9]{8}$", feat), f"Dummy name should end with hash: {feat}"
 
 
 def test_pyspark_dummy_names_match_pandas():

@@ -4,6 +4,7 @@
 #     "binscatter",
 #     "numpy",
 #     "pandas",
+#     "pyarrow",
 #     "pyspark",
 # ]
 #
@@ -151,6 +152,7 @@ def main() -> None:
             y="y",
             controls=CONTROL_COLUMNS,
             num_bins=50,
+            poly_line=3,
         )
     finally:
         if spark_session is not None:

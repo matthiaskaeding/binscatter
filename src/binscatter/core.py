@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import math
 import operator
@@ -7,6 +8,7 @@ import warnings
 from functools import reduce, wraps
 from typing import (
     Any,
+    Callable,
     Iterable,
     List,
     Literal,
@@ -30,6 +32,11 @@ from binscatter.quantiles import (
 
 logger = logging.getLogger(__name__)
 
+DummyBuilder = Callable[
+    [nw.LazyFrame, Tuple[str, ...]],
+    Tuple[nw.LazyFrame, Tuple[str, ...]],
+]
+
 
 def timed(func):
     @wraps(func)
@@ -44,6 +51,14 @@ def timed(func):
             logger.info("[%s] done in %.3fs", name, duration)
 
     return wrapper
+
+
+def configure_dummy_builder(implementation: Implementation) -> DummyBuilder:
+    if implementation in (Implementation.PANDAS, Implementation.POLARS):
+        return _dummy_builder_pandas_polars
+    if implementation is Implementation.PYSPARK:
+        return _dummy_builder_pyspark
+    return _dummy_builder_fallback
 
 
 @overload
@@ -155,6 +170,7 @@ def binscatter(
         len(numeric_columns),
         len(categorical_columns),
     )
+
     df_with_regression_features, regression_features = maybe_add_regression_features(
         df,
         numeric_controls=numeric_columns,
@@ -932,25 +948,164 @@ def maybe_add_regression_features(
     if numeric_controls and not categorical_controls:
         return df, numeric_controls
 
+    dummy_builder = configure_dummy_builder(df.implementation)
+    df_with_dummies, dummy_cols = dummy_builder(df, categorical_controls)
+    if not dummy_cols:
+        logger.debug("No dummy expressions created, all categorical controls constant")
+        return df_with_dummies, numeric_controls
+
+    return df_with_dummies, numeric_controls + dummy_cols
+
+
+def _format_dummy_alias(column: str, value: Any) -> str:
+    """Create a safe, unique dummy variable name.
+
+    Uses a hash suffix to guarantee uniqueness even when different values
+    would sanitize to the same string (e.g., "foo/bar" vs "foo_bar").
+
+    Args:
+        column: The source categorical column name
+        value: The category value
+
+    Returns:
+        A safe column name like "__ctrl_category_value_a1b2c3d4"
+    """
+    import re
+
+    # Convert to string and sanitize: keep only alphanumeric and underscores
+    str_value = str(value)
+    safe_value = re.sub(r'[^a-zA-Z0-9_]', '_', str_value)
+
+    # Remove consecutive underscores and trim
+    safe_value = re.sub(r'_+', '_', safe_value).strip('_')
+
+    # Create a short hash of the original value for uniqueness
+    # This prevents collisions like "foo/bar" vs "foo_bar"
+    value_hash = hashlib.md5(str_value.encode('utf-8')).hexdigest()[:8]
+
+    # Truncate if too long (leave room for prefix, column, hash, and underscores)
+    # Typical database column limit is 64 chars
+    # Format: __ctrl_{column}_{safe_value}_{8-char-hash}
+    prefix_len = len(f"__ctrl_{column}_")
+    hash_len = 8  # MD5 hash truncated to 8 chars
+    max_value_len = 64 - prefix_len - hash_len - 1  # -1 for underscore before hash
+
+    if len(safe_value) > max_value_len:
+        safe_value = safe_value[:max_value_len]
+
+    # Always include hash to guarantee uniqueness
+    return f"__ctrl_{column}_{safe_value}_{value_hash}"
+
+
+def _dummy_builder_pandas_polars(
+    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
+) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+    if not categorical_controls:
+        return df, ()
+
+    native = df._compliant_frame.native
+    dummy_cols: list[str] = []
+    if native.__class__.__module__.startswith("pandas"):
+        import pandas as pd
+
+        base = native.copy()
+        sep = "__binscatter__"
+        dummies = pd.get_dummies(
+            base[list(categorical_controls)],
+            prefix={c: c for c in categorical_controls},
+            prefix_sep=sep,
+            drop_first=True,
+        )
+        rename_map = {}
+        for name in dummies.columns:
+            col, value = name.split(sep, 1)
+            alias = _format_dummy_alias(col, value)
+            rename_map[name] = alias
+            dummy_cols.append(alias)
+        dummies = dummies.rename(columns=rename_map)
+        base = base.join(dummies)
+        return nw.from_native(base).lazy(), tuple(dummy_cols)
+
+    try:
+        import polars as pl
+    except ImportError:  # pragma: no cover
+        return _dummy_builder_fallback(df, categorical_controls)
+
+    if isinstance(native, pl.LazyFrame):
+        dataset = native.collect()
+    else:
+        dataset = native
+    sep = "__binscatter__"
+    dummies_df = dataset.select(list(categorical_controls)).to_dummies(
+        drop_first=True, separator=sep
+    )
+    rename_map: dict[str, str] = {}
+    for name in dummies_df.columns:
+        col, value = name.split(sep, 1)
+        alias = _format_dummy_alias(col, value)
+        rename_map[name] = alias
+        dummy_cols.append(alias)
+    dummies_df = dummies_df.rename(rename_map)
+    dataset = dataset.hstack(dummies_df)
+    return nw.from_native(dataset).lazy(), tuple(dummy_cols)
+
+
+def _dummy_builder_pyspark(
+    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
+) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+    if not categorical_controls:
+        return df, ()
+
+    from pyspark.sql import functions as F  # type: ignore[import-not-found]
+
+    native = df._compliant_frame.native
+    agg_exprs = [
+        F.sort_array(F.collect_set(F.col(column))).alias(column)
+        for column in categorical_controls
+    ]
+    distinct_row = native.agg(*agg_exprs).collect()[0]
+    updated = native
+    dummy_cols: list[str] = []
+    for column in categorical_controls:
+        values = distinct_row[column] or []
+        categories = sorted(v for v in values if v is not None)
+        if len(categories) <= 1:
+            continue
+        for value in categories[1:]:
+            alias = _format_dummy_alias(column, value)
+            updated = updated.withColumn(
+                alias,
+                F.when(F.col(column) == value, F.lit(1.0)).otherwise(0.0),
+            )
+            dummy_cols.append(alias)
+
+    return nw.from_native(updated).lazy(), tuple(dummy_cols)
+
+
+def _dummy_builder_fallback(
+    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
+) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+    if not categorical_controls:
+        return df, ()
+
     dummy_exprs: list[nw.Expr] = []
     dummy_cols: list[str] = []
-    for c in categorical_controls:
+    for column in categorical_controls:
         distinct_values: List[Any] = (
-            df.select(c).unique().collect().get_column(c).sort().to_list()
+            df.select(column).unique().collect().get_column(column).sort().to_list()
         )
         if len(distinct_values) <= 1:
             continue
-        for i, v in enumerate(distinct_values[1:]):
-            alias = f"__ctrl_{v}_{i}"
-            expr = (nw.col(c) == v).cast(nw.Float64).alias(alias)
+        for value in distinct_values[1:]:
+            alias = _format_dummy_alias(column, value)
+            expr = (nw.col(column) == value).cast(nw.Float64).alias(alias)
             dummy_exprs.append(expr)
             dummy_cols.append(alias)
 
     if not dummy_exprs:
-        logger.debug("No dummy expressions created, all categorical controls constant")
-        return df, tuple(numeric_controls)
+        return df, ()
 
-    return df.with_columns(*dummy_exprs), numeric_controls + tuple(dummy_cols)
+    return df.with_columns(*dummy_exprs), tuple(dummy_cols)
 
 
 @timed
