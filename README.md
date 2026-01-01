@@ -26,10 +26,10 @@ import plotly.express as px
 from binscatter import binscatter
 
 df = px.data.gapminder()
-binscatter(df, "gdpPercap", "lifeExp")  # Uses DPI bin selector by default
+binscatter(df, "gdpPercap", "lifeExp", num_bins="dpi")  # Explicit DPI selector
 ```
 
-<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI default)" width="640" />
+<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_dpi.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI selector)" width="640" />
 
 You can also specify a fixed number of bins:
 
