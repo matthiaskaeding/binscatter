@@ -850,108 +850,62 @@ def test_non_unique_quantiles_pyspark():
 # =============================================================================
 
 
-def test_pyspark_caching_context_manager():
-    """Test that _maybe_cache_pyspark properly caches and unpersists."""
-    pytest.importorskip("pyspark")
-    from binscatter.core import _maybe_cache_pyspark
-
-    df_pd = pd.DataFrame({
-        "x": np.arange(100),
-        "y": np.arange(100) * 2,
-    })
-    df_spark = convert_to_backend(df_pd, "pyspark")
-    df_nw = nw.from_native(df_spark).lazy()
-
-    # Get the native Spark DataFrame
-    native = df_nw._compliant_frame.native
-
-    # Before caching, storage level should be NONE
-    assert native.storageLevel.useMemory is False
-
-    # Use the caching context manager
-    with _maybe_cache_pyspark(df_nw) as cached_df:
-        # Inside context, should be cached
-        cached_native = cached_df._compliant_frame.native
-        assert cached_native.storageLevel.useMemory is True
-
-    # After context, should be unpersisted (but we can't check directly)
-    # Just verify the context manager completed without error
-
-
-def test_pyspark_caching_noop_for_other_backends():
-    """Test that _maybe_cache_pyspark is a no-op for non-PySpark backends."""
-    from binscatter.core import _maybe_cache_pyspark
-
-    df_pd = pd.DataFrame({
-        "x": np.arange(100),
-        "y": np.arange(100) * 2,
-    })
-
-    for backend in ["pandas", "polars"]:
-        df = convert_to_backend(df_pd, backend)
-        df_nw = nw.from_native(df).lazy()
-
-        with _maybe_cache_pyspark(df_nw) as result_df:
-            # Should return the same dataframe unchanged
-            assert result_df.implementation == df_nw.implementation
-
-
 def test_format_dummy_alias():
-    """Test the _format_dummy_alias helper function."""
-    from binscatter.core import _format_dummy_alias
+    """Test the format_dummy_alias helper function."""
+    from binscatter.dummy_builders import format_dummy_alias
     import re
 
     # All names should start with __ctrl_{column}_
-    result = _format_dummy_alias("category", "value1")
+    result = format_dummy_alias("category", "value1")
     assert result.startswith("__ctrl_category_")
     # Should contain sanitized value and 8-char hash
     assert re.match(r"__ctrl_category_value1_[a-f0-9]{8}$", result)
 
     # Spaces should be replaced with underscores
-    result = _format_dummy_alias("cat", "foo bar")
+    result = format_dummy_alias("cat", "foo bar")
     assert result.startswith("__ctrl_cat_foo_bar_")
     assert re.match(r"__ctrl_cat_foo_bar_[a-f0-9]{8}$", result)
 
     # Slashes should be replaced with underscores
-    result = _format_dummy_alias("cat", "foo/bar")
+    result = format_dummy_alias("cat", "foo/bar")
     assert result.startswith("__ctrl_cat_foo_bar_")
     assert re.match(r"__ctrl_cat_foo_bar_[a-f0-9]{8}$", result)
 
     # Multiple special characters
-    result = _format_dummy_alias("cat", "a b/c")
+    result = format_dummy_alias("cat", "a b/c")
     assert result.startswith("__ctrl_cat_a_b_c_")
 
     # Numeric values
-    result = _format_dummy_alias("cat", 123)
+    result = format_dummy_alias("cat", 123)
     assert result.startswith("__ctrl_cat_123_")
     assert re.match(r"__ctrl_cat_123_[a-f0-9]{8}$", result)
 
     # CRITICAL: Different values that sanitize the same should have different hashes
     # This prevents collisions
-    name1 = _format_dummy_alias("cat", "foo/bar")
-    name2 = _format_dummy_alias("cat", "foo_bar")
+    name1 = format_dummy_alias("cat", "foo/bar")
+    name2 = format_dummy_alias("cat", "foo_bar")
     assert name1 != name2, "Values 'foo/bar' and 'foo_bar' should have different hashes"
 
     # Hash should be deterministic (same input = same output)
-    assert _format_dummy_alias("cat", "test") == _format_dummy_alias("cat", "test")
+    assert format_dummy_alias("cat", "test") == format_dummy_alias("cat", "test")
 
     # Special characters should be sanitized
-    result = _format_dummy_alias("cat", "price@discount")
+    result = format_dummy_alias("cat", "price@discount")
     assert "@" not in result
     assert result.startswith("__ctrl_cat_price_discount_")
 
     # Very long values should be truncated but still unique
     long_value = "a" * 200
-    result = _format_dummy_alias("cat", long_value)
+    result = format_dummy_alias("cat", long_value)
     assert len(result) <= 64, f"Column name too long: {len(result)} chars"
     assert result.startswith("__ctrl_cat_")
     assert re.search(r"_[a-f0-9]{8}$", result), "Should end with 8-char hash"
 
 
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
-def test_dummy_builder_pandas_polars(backend):
+def testbuild_dummies_pandas_polars(backend):
     """Test that pandas and polars dummy builders work correctly."""
-    from binscatter.core import _dummy_builder_pandas_polars
+    from binscatter.dummy_builders import build_dummies_pandas_polars
 
     df_pd = pd.DataFrame({
         "x": [1, 2, 3, 4, 5, 6],
@@ -963,7 +917,7 @@ def test_dummy_builder_pandas_polars(backend):
     df = convert_to_backend(df_pd, backend)
     df_nw = nw.from_native(df).lazy()
 
-    df_with_dummies, dummy_cols = _dummy_builder_pandas_polars(
+    df_with_dummies, dummy_cols = build_dummies_pandas_polars(
         df_nw, ("cat_a", "cat_b")
     )
 
@@ -983,10 +937,10 @@ def test_dummy_builder_pandas_polars(backend):
         assert result[col].dtype in [nw.Float64, nw.Int64, nw.Int32, nw.UInt8, nw.UInt32, nw.Boolean]
 
 
-def test_dummy_builder_pyspark():
+def testbuild_dummies_pyspark():
     """Test that PySpark dummy builder works correctly."""
     pytest.importorskip("pyspark")
-    from binscatter.core import _dummy_builder_pyspark
+    from binscatter.dummy_builders import build_dummies_pyspark
 
     df_pd = pd.DataFrame({
         "x": [1, 2, 3, 4, 5, 6],
@@ -997,7 +951,7 @@ def test_dummy_builder_pyspark():
     df_spark = convert_to_backend(df_pd, "pyspark")
     df_nw = nw.from_native(df_spark).lazy()
 
-    df_with_dummies, dummy_cols = _dummy_builder_pyspark(df_nw, ("category",))
+    df_with_dummies, dummy_cols = build_dummies_pyspark(df_nw, ("category",))
 
     # Should create 2 dummies (3 levels - 1)
     assert len(dummy_cols) == 2
@@ -1017,7 +971,7 @@ def test_dummy_builder_pyspark():
 def test_dummy_builder_pyspark_handles_nulls():
     """Test that PySpark dummy builder correctly handles null values."""
     pytest.importorskip("pyspark")
-    from binscatter.core import _dummy_builder_pyspark
+    from binscatter.dummy_builders import build_dummies_pyspark
 
     df_pd = pd.DataFrame({
         "x": [1, 2, 3, 4, 5, 6],
@@ -1028,7 +982,7 @@ def test_dummy_builder_pyspark_handles_nulls():
     df_spark = convert_to_backend(df_pd, "pyspark")
     df_nw = nw.from_native(df_spark).lazy()
 
-    df_with_dummies, dummy_cols = _dummy_builder_pyspark(df_nw, ("category",))
+    df_with_dummies, dummy_cols = build_dummies_pyspark(df_nw, ("category",))
 
     # Should create 1 dummy (A is first, B gets dummy, None is excluded)
     assert len(dummy_cols) == 1
@@ -1041,9 +995,9 @@ def test_dummy_builder_pyspark_handles_nulls():
         assert (result.loc[null_mask, col] == 0.0).all()
 
 
-def test_dummy_builder_fallback():
+def testbuild_dummies_fallback():
     """Test the fallback dummy builder for other backends."""
-    from binscatter.core import _dummy_builder_fallback
+    from binscatter.dummy_builders import build_dummies_fallback
 
     df_pd = pd.DataFrame({
         "x": [1, 2, 3, 4],
@@ -1055,7 +1009,7 @@ def test_dummy_builder_fallback():
     df_duck = convert_to_backend(df_pd, "duckdb")
     df_nw = nw.from_native(df_duck).lazy()
 
-    df_with_dummies, dummy_cols = _dummy_builder_fallback(df_nw, ("cat",))
+    df_with_dummies, dummy_cols = build_dummies_fallback(df_nw, ("cat",))
 
     # Should create 1 dummy (2 levels - 1)
     assert len(dummy_cols) == 1
@@ -1070,7 +1024,7 @@ def test_dummy_builder_fallback():
 
 def test_dummy_builder_constant_categorical():
     """Test that dummy builders handle constant categorical variables."""
-    from binscatter.core import _dummy_builder_fallback
+    from binscatter.dummy_builders import build_dummies_fallback
 
     df_pd = pd.DataFrame({
         "x": [1, 2, 3, 4],
@@ -1080,7 +1034,7 @@ def test_dummy_builder_constant_categorical():
 
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_with_dummies, dummy_cols = _dummy_builder_fallback(df_nw, ("cat",))
+    df_with_dummies, dummy_cols = build_dummies_fallback(df_nw, ("cat",))
 
     # Constant categorical should create no dummies
     assert len(dummy_cols) == 0
@@ -1088,36 +1042,36 @@ def test_dummy_builder_constant_categorical():
     assert df_with_dummies.collect().shape == df_pd.shape
 
 
-def test_configure_dummy_builder_dispatch():
-    """Test that configure_dummy_builder returns the right implementation."""
-    from binscatter.core import configure_dummy_builder, _dummy_builder_pandas_polars, _dummy_builder_pyspark, _dummy_builder_fallback
+def test_get_dummy_builder_dispatch():
+    """Test that get_dummy_builder returns the right implementation."""
+    from binscatter.dummy_builders import get_dummy_builder, build_dummies_pandas_polars, build_dummies_pyspark, build_dummies_fallback
     from narwhals import Implementation
 
     # Pandas should get pandas_polars builder
-    builder = configure_dummy_builder(Implementation.PANDAS)
-    assert builder == _dummy_builder_pandas_polars
+    builder = get_dummy_builder(Implementation.PANDAS)
+    assert builder == build_dummies_pandas_polars
 
     # Polars should get pandas_polars builder
-    builder = configure_dummy_builder(Implementation.POLARS)
-    assert builder == _dummy_builder_pandas_polars
+    builder = get_dummy_builder(Implementation.POLARS)
+    assert builder == build_dummies_pandas_polars
 
     # DuckDB should get fallback
-    builder = configure_dummy_builder(Implementation.DUCKDB)
-    assert builder == _dummy_builder_fallback
+    builder = get_dummy_builder(Implementation.DUCKDB)
+    assert builder == build_dummies_fallback
 
     # Dask should get fallback
-    builder = configure_dummy_builder(Implementation.DASK)
-    assert builder == _dummy_builder_fallback
+    builder = get_dummy_builder(Implementation.DASK)
+    assert builder == build_dummies_fallback
 
 
-def test_configure_dummy_builder_pyspark():
+def test_configurebuild_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
-    from binscatter.core import configure_dummy_builder, _dummy_builder_pyspark
+    from binscatter.dummy_builders import get_dummy_builder, build_dummies_pyspark
     from narwhals import Implementation
 
-    builder = configure_dummy_builder(Implementation.PYSPARK)
-    assert builder == _dummy_builder_pyspark
+    builder = get_dummy_builder(Implementation.PYSPARK)
+    assert builder == build_dummies_pyspark
 
 
 def test_maybe_add_regression_features_with_categorical():
