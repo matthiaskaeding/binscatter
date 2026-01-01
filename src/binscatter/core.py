@@ -1,4 +1,3 @@
-import hashlib
 import logging
 import math
 import operator
@@ -8,7 +7,6 @@ import warnings
 from functools import reduce, wraps
 from typing import (
     Any,
-    Callable,
     Iterable,
     List,
     Literal,
@@ -106,6 +104,7 @@ def binscatter(
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
         raise ValueError(msg)
+    manual_bins: int = 0
     if isinstance(num_bins, str):
         auto_bins = num_bins in ("rule-of-thumb", "rot")
         if not auto_bins:
@@ -654,9 +653,9 @@ def split_columns(
             else:
                 if schema is not None:
                     if hasattr(schema, "names") and callable(schema.names):
-                        names = schema.names()
+                        names = schema.names()  # type: ignore[attr-defined]
                         if names:
-                            return tuple(names)
+                            return tuple(names)  # type: ignore[arg-type]
                     if isinstance(schema, dict):
                         return tuple(schema.keys())
         columns: Tuple[str, ...] = tuple()

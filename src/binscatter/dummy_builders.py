@@ -50,14 +50,14 @@ def format_dummy_alias(column: str, value: Any) -> str:
 
     # Convert to string and sanitize: keep only alphanumeric and underscores
     str_value = str(value)
-    safe_value = re.sub(r'[^a-zA-Z0-9_]', '_', str_value)
+    safe_value = re.sub(r"[^a-zA-Z0-9_]", "_", str_value)
 
     # Remove consecutive underscores and trim
-    safe_value = re.sub(r'_+', '_', safe_value).strip('_')
+    safe_value = re.sub(r"_+", "_", safe_value).strip("_")
 
     # Create a short hash of the original value for uniqueness
     # This prevents collisions like "foo/bar" vs "foo_bar"
-    value_hash = hashlib.md5(str_value.encode('utf-8')).hexdigest()[:8]
+    value_hash = hashlib.md5(str_value.encode("utf-8")).hexdigest()[:8]
 
     # Truncate if too long (leave room for prefix, column, hash, and underscores)
     # Typical database column limit is 64 chars

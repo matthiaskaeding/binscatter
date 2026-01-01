@@ -907,19 +907,19 @@ def testbuild_dummies_pandas_polars(backend):
     """Test that pandas and polars dummy builders work correctly."""
     from binscatter.dummy_builders import build_dummies_pandas_polars
 
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5, 6],
-        "y": [10, 20, 30, 40, 50, 60],
-        "cat_a": ["foo", "bar", "baz", "foo", "bar", "baz"],
-        "cat_b": ["red", "blue", "red", "blue", "red", "blue"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [10, 20, 30, 40, 50, 60],
+            "cat_a": ["foo", "bar", "baz", "foo", "bar", "baz"],
+            "cat_b": ["red", "blue", "red", "blue", "red", "blue"],
+        }
+    )
 
     df = convert_to_backend(df_pd, backend)
     df_nw = nw.from_native(df).lazy()
 
-    df_with_dummies, dummy_cols = build_dummies_pandas_polars(
-        df_nw, ("cat_a", "cat_b")
-    )
+    df_with_dummies, dummy_cols = build_dummies_pandas_polars(df_nw, ("cat_a", "cat_b"))
 
     # Should create dummies (drop_first=True means n-1 dummies per categorical)
     # cat_a has 3 levels -> 2 dummies, cat_b has 2 levels -> 1 dummy
@@ -934,7 +934,14 @@ def testbuild_dummies_pandas_polars(backend):
     for col in dummy_cols:
         assert col in result.columns
         # Dummy columns should be numeric or boolean
-        assert result[col].dtype in [nw.Float64, nw.Int64, nw.Int32, nw.UInt8, nw.UInt32, nw.Boolean]
+        assert result[col].dtype in [
+            nw.Float64,
+            nw.Int64,
+            nw.Int32,
+            nw.UInt8,
+            nw.UInt32,
+            nw.Boolean,
+        ]
 
 
 def testbuild_dummies_pyspark():
@@ -942,11 +949,13 @@ def testbuild_dummies_pyspark():
     pytest.importorskip("pyspark")
     from binscatter.dummy_builders import build_dummies_pyspark
 
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5, 6],
-        "y": [10, 20, 30, 40, 50, 60],
-        "category": ["A", "B", "C", "A", "B", "C"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [10, 20, 30, 40, 50, 60],
+            "category": ["A", "B", "C", "A", "B", "C"],
+        }
+    )
 
     df_spark = convert_to_backend(df_pd, "pyspark")
     df_nw = nw.from_native(df_spark).lazy()
@@ -973,11 +982,13 @@ def test_dummy_builder_pyspark_handles_nulls():
     pytest.importorskip("pyspark")
     from binscatter.dummy_builders import build_dummies_pyspark
 
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5, 6],
-        "y": [10, 20, 30, 40, 50, 60],
-        "category": ["A", "B", None, "A", "B", None],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [10, 20, 30, 40, 50, 60],
+            "category": ["A", "B", None, "A", "B", None],
+        }
+    )
 
     df_spark = convert_to_backend(df_pd, "pyspark")
     df_nw = nw.from_native(df_spark).lazy()
@@ -999,11 +1010,13 @@ def testbuild_dummies_fallback():
     """Test the fallback dummy builder for other backends."""
     from binscatter.dummy_builders import build_dummies_fallback
 
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4],
-        "y": [10, 20, 30, 40],
-        "cat": ["alpha", "beta", "alpha", "beta"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4],
+            "y": [10, 20, 30, 40],
+            "cat": ["alpha", "beta", "alpha", "beta"],
+        }
+    )
 
     # Use DuckDB as a backend that falls back
     df_duck = convert_to_backend(df_pd, "duckdb")
@@ -1026,11 +1039,13 @@ def test_dummy_builder_constant_categorical():
     """Test that dummy builders handle constant categorical variables."""
     from binscatter.dummy_builders import build_dummies_fallback
 
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4],
-        "y": [10, 20, 30, 40],
-        "cat": ["same", "same", "same", "same"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4],
+            "y": [10, 20, 30, 40],
+            "cat": ["same", "same", "same", "same"],
+        }
+    )
 
     df_nw = nw.from_native(df_pd).lazy()
 
@@ -1044,7 +1059,11 @@ def test_dummy_builder_constant_categorical():
 
 def test_configure_build_dummies_dispatch():
     """Test that configure_build_dummies returns the right implementation."""
-    from binscatter.dummy_builders import configure_build_dummies, build_dummies_pandas_polars, build_dummies_pyspark, build_dummies_fallback
+    from binscatter.dummy_builders import (
+        configure_build_dummies,
+        build_dummies_pandas_polars,
+        build_dummies_fallback,
+    )
     from narwhals import Implementation
 
     # Pandas should get pandas_polars builder
@@ -1076,12 +1095,14 @@ def test_configure_build_dummies_pyspark():
 
 def test_maybe_add_regression_features_with_categorical():
     """Test that maybe_add_regression_features integrates dummy builders correctly."""
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5, 6],
-        "y": [10, 20, 30, 40, 50, 60],
-        "num_ctrl": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
-        "cat_ctrl": ["A", "B", "A", "B", "A", "B"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [10, 20, 30, 40, 50, 60],
+            "num_ctrl": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+            "cat_ctrl": ["A", "B", "A", "B", "A", "B"],
+        }
+    )
 
     df_nw = nw.from_native(df_pd).lazy()
 
@@ -1105,12 +1126,14 @@ def test_maybe_add_regression_features_with_categorical():
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 def test_dummy_names_consistent_across_backends(backend):
     """Test that dummy variable names are consistent across backends."""
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5],
-        "y": [10, 20, 30, 40, 50],
-        "cat_a": ["foo", "bar", "baz", "foo", "bar"],
-        "cat_b": ["red", "blue", "red", "blue", "red"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5],
+            "y": [10, 20, 30, 40, 50],
+            "cat_a": ["foo", "bar", "baz", "foo", "bar"],
+            "cat_b": ["red", "blue", "red", "blue", "red"],
+        }
+    )
 
     df = convert_to_backend(df_pd, backend)
     df_clean, _, _, categorical_controls = clean_df(
@@ -1128,21 +1151,26 @@ def test_dummy_names_consistent_across_backends(backend):
 
     # All dummy names should follow pattern: __ctrl_{column}_{value}_{hash}
     import re
+
     for feat in regression_features:
         assert feat.startswith("__ctrl_"), f"Bad dummy name: {feat}"
         # Should end with 8-character hex hash
-        assert re.search(r"_[a-f0-9]{8}$", feat), f"Dummy name should end with hash: {feat}"
+        assert re.search(r"_[a-f0-9]{8}$", feat), (
+            f"Dummy name should end with hash: {feat}"
+        )
 
 
 def test_pyspark_dummy_names_match_pandas():
     """Test that PySpark dummy names exactly match pandas dummy names."""
     pytest.importorskip("pyspark")
 
-    df_pd = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5],
-        "y": [10, 20, 30, 40, 50],
-        "category": ["A", "B", "C", "A", "B"],
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5],
+            "y": [10, 20, 30, 40, 50],
+            "category": ["A", "B", "C", "A", "B"],
+        }
+    )
 
     # Get pandas dummy names
     df_clean_pd, _, _, cat_controls_pd = clean_df(
@@ -1183,12 +1211,14 @@ def test_binscatter_with_pyspark_caching():
     """Integration test: full binscatter with PySpark should use caching."""
     pytest.importorskip("pyspark")
 
-    df_pd = pd.DataFrame({
-        "x": np.random.default_rng(42).normal(100, 15, 1000),
-        "y": np.random.default_rng(43).normal(50, 10, 1000),
-        "ctrl_num": np.random.default_rng(44).normal(0, 1, 1000),
-        "ctrl_cat": np.random.default_rng(45).choice(["A", "B", "C"], 1000),
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": np.random.default_rng(42).normal(100, 15, 1000),
+            "y": np.random.default_rng(43).normal(50, 10, 1000),
+            "ctrl_num": np.random.default_rng(44).normal(0, 1, 1000),
+            "ctrl_cat": np.random.default_rng(45).choice(["A", "B", "C"], 1000),
+        }
+    )
 
     df_spark = convert_to_backend(df_pd, "pyspark")
 

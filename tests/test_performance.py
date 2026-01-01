@@ -20,7 +20,7 @@ from binscatter.core import (
     clean_df,
     maybe_add_regression_features,
 )
-from tests.conftest import convert_to_backend, to_pandas_native
+from tests.conftest import convert_to_backend
 
 # Skip PySpark tests by default
 pytest.importorskip("pyspark", reason="PySpark benchmarks require --run-pyspark")
@@ -134,7 +134,9 @@ def test_pyspark_categorical_dummy_creation_performance(
     # Expected performance characteristics:
     # - Should complete in reasonable time (< 5 seconds for 250k rows)
     # - Time should scale roughly linearly with n_categorical, not quadratically
-    assert elapsed < 10.0, f"Categorical dummy creation took {elapsed:.2f}s (expected < 10s)"
+    assert elapsed < 10.0, (
+        f"Categorical dummy creation took {elapsed:.2f}s (expected < 10s)"
+    )
 
     # Verify correctness: each categorical with k levels should create k-1 dummies
     expected_dummies = n_categorical * (cardinality - 1)
@@ -142,7 +144,9 @@ def test_pyspark_categorical_dummy_creation_performance(
         f"Expected {expected_dummies} dummy variables, got {len(regression_features)}"
     )
 
-    print(f"\n  {n_rows:,} rows, {n_categorical} categoricals ({cardinality} levels each): {elapsed:.3f}s")
+    print(
+        f"\n  {n_rows:,} rows, {n_categorical} categoricals ({cardinality} levels each): {elapsed:.3f}s"
+    )
 
 
 @pytest.mark.pyspark
@@ -202,7 +206,9 @@ def test_pyspark_polynomial_overlay_performance() -> None:
     elapsed = result["elapsed"]
 
     # Should complete in reasonable time
-    assert elapsed < 20.0, f"Binscatter with poly_line took {elapsed:.2f}s (expected < 20s)"
+    assert elapsed < 20.0, (
+        f"Binscatter with poly_line took {elapsed:.2f}s (expected < 20s)"
+    )
     assert fig is not None
 
     print(f"\n  Binscatter + poly_line=3: {elapsed:.3f}s")
@@ -215,12 +221,14 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
     The _format_dummy_alias function should produce identical names
     regardless of backend.
     """
-    df_pandas = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5],
-        "y": [10, 20, 30, 40, 50],
-        "cat_a": ["foo", "bar", "baz", "foo", "bar"],
-        "cat_b": ["red", "blue", "red", "blue", "red"],
-    })
+    df_pandas = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5],
+            "y": [10, 20, 30, 40, 50],
+            "cat_a": ["foo", "bar", "baz", "foo", "bar"],
+            "cat_b": ["red", "blue", "red", "blue", "red"],
+        }
+    )
 
     df = convert_to_backend(df_pandas, backend)
 
@@ -248,11 +256,15 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
     for col in dummy_cols:
         assert col.startswith("__ctrl_"), f"Bad dummy name: {col}"
         parts = col.split("_", 3)
-        assert len(parts) >= 4, f"Dummy name should have format __ctrl_column_value: {col}"
+        assert len(parts) >= 4, (
+            f"Dummy name should have format __ctrl_column_value: {col}"
+        )
 
     # Verify we get the expected number of dummies (drop_first=True)
     # cat_a has 3 levels -> 2 dummies, cat_b has 2 levels -> 1 dummy
-    assert len(dummy_cols) == 3, f"Expected 3 dummy columns, got {len(dummy_cols)}: {dummy_cols}"
+    assert len(dummy_cols) == 3, (
+        f"Expected 3 dummy columns, got {len(dummy_cols)}: {dummy_cols}"
+    )
 
 
 @pytest.mark.pyspark
@@ -262,11 +274,13 @@ def test_pyspark_dummy_names_match_pandas() -> None:
     This ensures the optimized PySpark path produces identical output
     to the pandas reference implementation.
     """
-    df_pandas = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5],
-        "y": [10, 20, 30, 40, 50],
-        "category": ["A", "B", "C", "A", "B"],
-    })
+    df_pandas = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5],
+            "y": [10, 20, 30, 40, 50],
+            "category": ["A", "B", "C", "A", "B"],
+        }
+    )
 
     # Get pandas dummy names
     df_clean_pd, _, _, cat_controls_pd = clean_df(
@@ -306,11 +320,13 @@ def test_pyspark_dummy_names_match_pandas() -> None:
 @pytest.mark.pyspark
 def test_pyspark_handles_null_categories() -> None:
     """Test that PySpark dummy creation handles null values correctly."""
-    df_pandas = pd.DataFrame({
-        "x": [1, 2, 3, 4, 5, 6],
-        "y": [10, 20, 30, 40, 50, 60],
-        "category": ["A", "B", None, "A", "B", None],
-    })
+    df_pandas = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5, 6],
+            "y": [10, 20, 30, 40, 50, 60],
+            "category": ["A", "B", None, "A", "B", None],
+        }
+    )
 
     df_spark = convert_to_backend(df_pandas, "pyspark")
 
