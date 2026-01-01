@@ -89,6 +89,42 @@ When `implementation == PYSPARK` and `controls` are present:
 - Few controls (< 10)
 - Small number of bins (20-50)
 
+### Benchmarking
+
+Created `scripts/benchmark_pyspark_ml.py` to empirically measure performance differences.
+
+**Benchmark Matrix:**
+- **Dataset size**: 100k, 500k, 1M rows (controls and bins constant)
+- **Number of controls**: 1, 5, 8, 15 total controls (mix of numeric/categorical)
+- **Number of bins**: 20, 50, 100 bins (size and controls constant)
+
+**Metrics:**
+- Time for `partial_out_controls()` (current approach)
+- Time for `_partial_out_controls_pyspark()` (PySpark ML approach)
+- Speedup ratio (current_time / pyspark_ml_time)
+
+**Expected Results:**
+- Current approach likely faster for typical use cases (250k rows, 5-8 controls, 50 bins)
+  - Reason: Works with small aggregates (~50 bins), minimal overhead
+- PySpark ML may be faster for:
+  - Very large datasets (>1M rows) with many controls (10+)
+  - Cases where `_ensure_feature_moments()` becomes expensive (many control cross-products)
+  - High shuffle costs in current aggregation approach
+
+**Usage:**
+```bash
+# Full benchmark (12 configurations)
+uv run scripts/benchmark_pyspark_ml.py
+
+# Quick test (2 configurations)
+uv run scripts/benchmark_pyspark_ml.py --quick
+```
+
+**Decision Criteria:**
+- If PySpark ML shows consistent speedup (>1.2x) for realistic use cases → implement as default
+- If current approach is competitive or faster → implement as opt-in feature flag
+- Document when each approach is recommended
+
 ### Files to Modify
 - `src/binscatter/core.py`: Add `_partial_out_controls_pyspark()` and factory function
 - `tests/test_binscatter.py`: Add PySpark ML-specific tests
