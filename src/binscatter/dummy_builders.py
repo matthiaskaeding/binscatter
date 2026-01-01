@@ -5,19 +5,14 @@ from categorical columns, with optimizations for each supported backend.
 """
 
 import hashlib
-from typing import Any, Callable, Tuple
+from typing import Any, Tuple
 
 import narwhals as nw
 from narwhals import Implementation
 
 
-DummyBuilder = Callable[
-    [nw.LazyFrame, Tuple[str, ...]],
-    Tuple[nw.LazyFrame, Tuple[str, ...]],
-]
-
-
-def configure_build_dummies(implementation: Implementation) -> DummyBuilder:
+def configure_build_dummies(implementation: Implementation):  # ty panics on full type
+    # Returns: Callable[[nw.LazyFrame, Tuple[str, ...]], Tuple[nw.LazyFrame, Tuple[str, ...]]]
     """Configure and return the appropriate dummy variable builder for the given backend.
 
     Args:
@@ -73,9 +68,7 @@ def format_dummy_alias(column: str, value: Any) -> str:
     return f"__ctrl_{column}_{safe_value}_{value_hash}"
 
 
-def build_dummies_pandas_polars(
-    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
-) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+def build_dummies_pandas_polars(df, categorical_controls: Tuple[str, ...]):
     """Build dummy variables using native pandas/polars implementations.
 
     Uses pd.get_dummies() or pl.to_dummies() for efficient dummy creation.
@@ -138,9 +131,7 @@ def build_dummies_pandas_polars(
     return nw.from_native(dataset).lazy(), tuple(dummy_cols)
 
 
-def build_dummies_pyspark(
-    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
-) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
     """Build dummy variables using PySpark with batched aggregation.
 
     Batches all categorical discovery into a single agg(*collect_set(...)) call
@@ -182,9 +173,7 @@ def build_dummies_pyspark(
     return nw.from_native(updated).lazy(), tuple(dummy_cols)
 
 
-def build_dummies_fallback(
-    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
-) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+def build_dummies_fallback(df, categorical_controls: Tuple[str, ...]):
     """Build dummy variables using generic narwhals implementation.
 
     Fallback for backends without specialized implementations.
@@ -201,7 +190,7 @@ def build_dummies_fallback(
 
     from typing import Any, List
 
-    dummy_exprs: list[nw.Expr] = []
+    dummy_exprs = []
     dummy_cols: list[str] = []
     for column in categorical_controls:
         distinct_values: List[Any] = (

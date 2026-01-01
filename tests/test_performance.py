@@ -18,7 +18,7 @@ import pytest
 from binscatter.core import (
     binscatter,
     clean_df,
-    maybe_add_regression_features,
+    add_regression_features,
 )
 from tests.conftest import convert_to_backend
 
@@ -121,7 +121,7 @@ def test_pyspark_categorical_dummy_creation_performance(
 
     # Time the dummy variable creation
     with timer() as result:
-        df_with_dummies, regression_features = maybe_add_regression_features(
+        df_with_dummies, regression_features = add_regression_features(
             df_clean,
             numeric_controls=(),
             categorical_controls=categorical_controls,
@@ -239,7 +239,7 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
         y_name="y",
     )
 
-    df_with_dummies, regression_features = maybe_add_regression_features(
+    df_with_dummies, regression_features = add_regression_features(
         df_clean,
         numeric_controls=(),
         categorical_controls=categorical_controls,
@@ -289,7 +289,7 @@ def test_pyspark_dummy_names_match_pandas() -> None:
         x_name="x",
         y_name="y",
     )
-    _, features_pd = maybe_add_regression_features(
+    _, features_pd = add_regression_features(
         df_clean_pd,
         numeric_controls=(),
         categorical_controls=cat_controls_pd,
@@ -303,7 +303,7 @@ def test_pyspark_dummy_names_match_pandas() -> None:
         x_name="x",
         y_name="y",
     )
-    _, features_spark = maybe_add_regression_features(
+    _, features_spark = add_regression_features(
         df_clean_spark,
         numeric_controls=(),
         categorical_controls=cat_controls_spark,
@@ -337,7 +337,7 @@ def test_pyspark_handles_null_categories() -> None:
         y_name="y",
     )
 
-    df_with_dummies, features = maybe_add_regression_features(
+    df_with_dummies, features = add_regression_features(
         df_clean,
         numeric_controls=(),
         categorical_controls=cat_controls,
@@ -383,7 +383,7 @@ def test_backend_dummy_creation_time(backend: str) -> None:
     )
 
     with timer() as result:
-        df_with_dummies, features = maybe_add_regression_features(
+        df_with_dummies, features = add_regression_features(
             df_clean,
             numeric_controls=(),
             categorical_controls=categorical_controls,

@@ -9,7 +9,7 @@ from binscatter.core import (
     add_polynomial_features,
     binscatter,
     clean_df,
-    maybe_add_regression_features,
+    add_regression_features,
     partial_out_controls,
     Profile,
     _fit_polynomial_line,
@@ -47,7 +47,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
     df_clean, is_lazy, numeric_controls, categorical_controls = clean_df(
         df, controls_tuple, x, y
     )
-    df_with_features, regression_features = maybe_add_regression_features(
+    df_with_features, regression_features = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
@@ -184,7 +184,7 @@ def _get_rot_bins(
         x,
         y,
     )
-    df_with_features, regression_features = maybe_add_regression_features(
+    df_with_features, regression_features = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
@@ -1106,7 +1106,7 @@ def test_maybe_add_regression_features_with_categorical():
 
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_with_features, features = maybe_add_regression_features(
+    df_with_features, features = add_regression_features(
         df_nw,
         numeric_controls=("num_ctrl",),
         categorical_controls=("cat_ctrl",),
@@ -1143,7 +1143,7 @@ def test_dummy_names_consistent_across_backends(backend):
         y="y",
     )
 
-    df_with_dummies, regression_features = maybe_add_regression_features(
+    df_with_dummies, regression_features = add_regression_features(
         df_clean,
         numeric_controls=(),
         categorical_controls=categorical_controls,
@@ -1179,7 +1179,7 @@ def test_pyspark_dummy_names_match_pandas():
         x="x",
         y="y",
     )
-    _, features_pd = maybe_add_regression_features(
+    _, features_pd = add_regression_features(
         df_clean_pd,
         numeric_controls=(),
         categorical_controls=cat_controls_pd,
@@ -1193,7 +1193,7 @@ def test_pyspark_dummy_names_match_pandas():
         x="x",
         y="y",
     )
-    _, features_spark = maybe_add_regression_features(
+    _, features_spark = add_regression_features(
         df_clean_spark,
         numeric_controls=(),
         categorical_controls=cat_controls_spark,

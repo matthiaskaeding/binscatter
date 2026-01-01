@@ -158,7 +158,7 @@ def binscatter(
         len(categorical_columns),
     )
 
-    df_with_regression_features, regression_features = maybe_add_regression_features(
+    df_with_regression_features, regression_features = add_regression_features(
         df,
         numeric_controls=numeric_columns,
         categorical_controls=categorical_columns,
@@ -924,7 +924,7 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
 
 
 @timed
-def maybe_add_regression_features(
+def add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: Tuple[str, ...],
     categorical_controls: Tuple[str, ...],
