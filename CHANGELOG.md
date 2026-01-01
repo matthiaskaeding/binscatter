@@ -6,8 +6,13 @@
 - Backend-specific dummy variable builders in new `dummy_builders.py` module.
 - Hash-based dummy variable naming to prevent collisions (e.g., "foo/bar" vs "foo_bar").
 - Performance benchmarks in `tests/test_performance.py`.
+- Comprehensive tests for individual `build_dummies` functions covering edge cases, lazy evaluation, and multiple categorical columns.
 
 ### Changed
+- Refactored dummy variable builders: split `build_dummies_pandas_polars` into separate `build_dummies_pandas` and `build_dummies_polars` functions for cleaner backend-specific logic.
+- Optimized Polars dummy builder to preserve lazy evaluation by only collecting categorical columns instead of entire dataframe.
+- Extracted rename mapping logic into `build_rename_map` helper function to reduce code duplication.
+- Replaced internal `df._compliant_frame.native` with public narwhals API `nw.to_native(df)` across all dummy builders.
 - Optimized PySpark categorical handling with batched `collect_set()` aggregation (5.7x speedup).
 - Renamed `maybe_add_regression_features` to `add_regression_features`.
 - Fixed rule-of-thumb bin selector to match Cattaneo et al. (2024) SA-4.1 exactly: corrected bias constant (1/12 vs 1/3), use squared inverse density, and added density trimming at 2.5th percentile.
