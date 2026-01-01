@@ -5,12 +5,10 @@ import operator
 import time
 import uuid
 import warnings
-from contextlib import contextmanager
 from functools import reduce, wraps
 from typing import (
     Any,
     Callable,
-    Generator,
     Iterable,
     List,
     Literal,
@@ -38,26 +36,6 @@ DummyBuilder = Callable[
     [nw.LazyFrame, Tuple[str, ...]],
     Tuple[nw.LazyFrame, Tuple[str, ...]],
 ]
-
-
-@contextmanager
-def _maybe_cache_pyspark(
-    df: nw.LazyFrame,
-) -> Generator[nw.LazyFrame, None, None]:
-    """Cache PySpark dataframes to avoid repeated scans. No-op for other backends."""
-    if df.implementation != Implementation.PYSPARK:
-        yield df
-        return
-
-    native = df._compliant_frame.native
-    cached = native.cache()
-    cached.count()  # Materialize
-    logger.debug("[binscatter] cached PySpark dataframe")
-    try:
-        yield nw.from_native(cached).lazy()
-    finally:
-        cached.unpersist()
-        logger.debug("[binscatter] unpersisted PySpark dataframe")
 
 
 def timed(func):
@@ -193,114 +171,113 @@ def binscatter(
         len(categorical_columns),
     )
 
-    with _maybe_cache_pyspark(df) as df:
-        df_with_regression_features, regression_features = maybe_add_regression_features(
-            df,
-            numeric_controls=numeric_columns,
-            categorical_controls=categorical_columns,
-        )
-        logger.debug("[binscatter] regression features total=%d", len(regression_features))
-        if poly_line is not None:
-            (
-                df_with_regression_features,
-                polynomial_features,
-            ) = add_polynomial_features(
-                df_with_regression_features,
-                x_name=x,
-                degree=poly_line,
-                distinct_suffix=distinct_suffix,
-            )
-            logger.debug(
-                "[binscatter] polynomial features total=%d", len(polynomial_features)
-            )
-        else:
-            polynomial_features = ()
-            logger.debug("[binscatter] polynomial features skipped")
-
-        if auto_bins:
-            computed_num_bins = _select_rule_of_thumb_bins(
-                df_with_regression_features, x, y, regression_features
-            )
-        else:
-            computed_num_bins = manual_bins
-        logger.debug(
-            "[binscatter] computed num_bins=%s auto=%s", computed_num_bins, auto_bins
-        )
-
-        # Compute quantiles and deduplicate
-        compute_quantiles = configure_compute_quantiles(
-            computed_num_bins, df_with_regression_features.implementation
-        )
-        quantiles = compute_quantiles(df_with_regression_features, x)
-        unique_quantiles = tuple(dict.fromkeys(quantiles))
-        logger.debug(
-            "[binscatter] quantiles total=%d unique=%d",
-            len(quantiles),
-            len(unique_quantiles),
-        )
-
-        # Compute feasible number of bins
-        n_unique = len(unique_quantiles)
-        final_num_bins = 1 if n_unique <= 1 else max(2, n_unique - 1)
-        logger.debug(
-            "[binscatter] final_num_bins=%d unique_quantiles=%d", final_num_bins, n_unique
-        )
-
-        if final_num_bins < 2:
-            raise ValueError(
-                "Could not produce at least 2 bins; check the distribution of the x column."
-            )
-
-        if final_num_bins < computed_num_bins and not auto_bins:
-            logger.warning(
-                "Requested %d bins but only %d unique quantile boundaries found. "
-                "Using %d bins instead.",
-                computed_num_bins,
-                len(unique_quantiles),
-                final_num_bins,
-            )
-
-        profile = Profile(
-            num_bins=final_num_bins,
+    df_with_regression_features, regression_features = maybe_add_regression_features(
+        df,
+        numeric_controls=numeric_columns,
+        categorical_controls=categorical_columns,
+    )
+    logger.debug("[binscatter] regression features total=%d", len(regression_features))
+    if poly_line is not None:
+        (
+            df_with_regression_features,
+            polynomial_features,
+        ) = add_polynomial_features(
+            df_with_regression_features,
             x_name=x,
-            y_name=y,
-            bin_name=bin_name,
-            regression_features=regression_features,
-            polynomial_features=polynomial_features,
+            degree=poly_line,
             distinct_suffix=distinct_suffix,
-            is_lazy_input=is_lazy_input,
-            implementation=df.implementation,
-            x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
         )
-        add_bins = configure_add_bins(profile)
-        df_prepped = add_bins(df_with_regression_features, unique_quantiles)
+        logger.debug(
+            "[binscatter] polynomial features total=%d", len(polynomial_features)
+        )
+    else:
+        polynomial_features = ()
+        logger.debug("[binscatter] polynomial features skipped")
 
-        moment_cache: dict[str, float] | None = None
-        if controls or poly_line is not None:
-            moment_cache = {}
+    if auto_bins:
+        computed_num_bins = _select_rule_of_thumb_bins(
+            df_with_regression_features, x, y, regression_features
+        )
+    else:
+        computed_num_bins = manual_bins
+    logger.debug(
+        "[binscatter] computed num_bins=%s auto=%s", computed_num_bins, auto_bins
+    )
 
-        if not controls:
-            df_plotting = compute_bin_means(df_prepped, profile)
-        else:
-            df_plotting, _ = partial_out_controls(
-                df_prepped, profile, moment_cache=moment_cache
+    # Compute quantiles and deduplicate
+    compute_quantiles = configure_compute_quantiles(
+        computed_num_bins, df_with_regression_features.implementation
+    )
+    quantiles = compute_quantiles(df_with_regression_features, x)
+    unique_quantiles = tuple(dict.fromkeys(quantiles))
+    logger.debug(
+        "[binscatter] quantiles total=%d unique=%d",
+        len(quantiles),
+        len(unique_quantiles),
+    )
+
+    # Compute feasible number of bins
+    n_unique = len(unique_quantiles)
+    final_num_bins = 1 if n_unique <= 1 else max(2, n_unique - 1)
+    logger.debug(
+        "[binscatter] final_num_bins=%d unique_quantiles=%d", final_num_bins, n_unique
+    )
+
+    if final_num_bins < 2:
+        raise ValueError(
+            "Could not produce at least 2 bins; check the distribution of the x column."
+        )
+
+    if final_num_bins < computed_num_bins and not auto_bins:
+        logger.warning(
+            "Requested %d bins but only %d unique quantile boundaries found. "
+            "Using %d bins instead.",
+            computed_num_bins,
+            len(unique_quantiles),
+            final_num_bins,
+        )
+
+    profile = Profile(
+        num_bins=final_num_bins,
+        x_name=x,
+        y_name=y,
+        bin_name=bin_name,
+        regression_features=regression_features,
+        polynomial_features=polynomial_features,
+        distinct_suffix=distinct_suffix,
+        is_lazy_input=is_lazy_input,
+        implementation=df.implementation,
+        x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
+    )
+    add_bins = configure_add_bins(profile)
+    df_prepped = add_bins(df_with_regression_features, unique_quantiles)
+
+    moment_cache: dict[str, float] | None = None
+    if controls or poly_line is not None:
+        moment_cache = {}
+
+    if not controls:
+        df_plotting = compute_bin_means(df_prepped, profile)
+    else:
+        df_plotting, _ = partial_out_controls(
+            df_prepped, profile, moment_cache=moment_cache
+        )
+
+    polynomial_line: PolynomialFit | None = None
+    if poly_line is not None and return_type == "plotly":
+        cache = moment_cache or {}
+        polynomial_line = _fit_polynomial_line(df_prepped, profile, poly_line, cache)
+
+    match return_type:
+        case "plotly":
+            return make_plot_plotly(
+                df_plotting,
+                profile,
+                kwargs_binscatter=kwargs,
+                polynomial_line=polynomial_line,
             )
-
-        polynomial_line: PolynomialFit | None = None
-        if poly_line is not None and return_type == "plotly":
-            cache = moment_cache or {}
-            polynomial_line = _fit_polynomial_line(df_prepped, profile, poly_line, cache)
-
-        match return_type:
-            case "plotly":
-                return make_plot_plotly(
-                    df_plotting,
-                    profile,
-                    kwargs_binscatter=kwargs,
-                    polynomial_line=polynomial_line,
-                )
-            case "native":
-                return make_native_dataframe(df_plotting, profile)
+        case "native":
+            return make_native_dataframe(df_plotting, profile)
 
 
 class Profile(NamedTuple):
