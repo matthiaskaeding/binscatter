@@ -259,9 +259,14 @@ def binscatter(
     if not controls:
         df_plotting = compute_bin_means(df_prepped, profile)
     else:
-        df_plotting, _ = partial_out_controls(
-            df_prepped, profile, moment_cache=moment_cache
-        )
+        # Use Spark ML optimization for PySpark to avoid driver bottleneck
+        if profile.implementation == Implementation.PYSPARK:
+            logger.debug("[binscatter] using Spark ML optimization for PySpark")
+            df_plotting, _ = _partial_out_controls_spark_ml(df_prepped, profile)
+        else:
+            df_plotting, _ = partial_out_controls(
+                df_prepped, profile, moment_cache=moment_cache
+            )
 
     polynomial_line: PolynomialFit | None = None
     if poly_line is not None and return_type == "plotly":
@@ -470,6 +475,137 @@ def partial_out_controls(
     )
 
     return df_plotting, {"beta": beta, "gamma": gamma}
+
+
+def _partial_out_controls_spark_ml(
+    df_prepped: nw.LazyFrame,
+    profile: Profile,
+) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
+    """PySpark-optimized version using Spark ML for distributed regression.
+
+    Instead of collecting moments to driver, this:
+    1. Uses VectorAssembler to create feature vectors
+    2. Fits LinearRegression distributedly for x ~ controls and y ~ controls
+    3. Computes residuals in distributed manner
+    4. Groups residuals by bin
+
+    This avoids driver bottleneck and scales to billions of rows.
+    """
+    from pyspark.ml.feature import VectorAssembler  # type: ignore
+    from pyspark.ml.regression import LinearRegression  # type: ignore
+
+    if not profile.regression_features:
+        # No controls, just compute bin means
+        agg_exprs = [
+            profile.x_col.mean().alias(profile.x_name),
+            profile.y_col.mean().alias(profile.y_name),
+        ]
+        df_plotting = (
+            df_prepped.group_by(profile.bin_name)
+            .agg(*agg_exprs)
+            .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
+        ).lazy()
+        return df_plotting, {"beta": np.array([]), "gamma": np.array([])}
+
+    # Get native Spark DataFrame
+    spark_df = df_prepped._compliant_frame.native
+
+    # Assemble control features into a vector
+    assembler = VectorAssembler(
+        inputCols=list(profile.regression_features),
+        outputCol="__control_features",
+        handleInvalid="skip"
+    )
+    assembled_df = assembler.transform(spark_df)
+
+    # Fit regression: x ~ controls
+    lr_x = LinearRegression(
+        featuresCol="__control_features",
+        labelCol=profile.x_name,
+        predictionCol="__x_pred",
+        fitIntercept=True,
+        standardization=False  # Match numpy behavior
+    )
+    model_x = lr_x.fit(assembled_df)
+
+    # Fit regression: y ~ controls
+    lr_y = LinearRegression(
+        featuresCol="__control_features",
+        labelCol=profile.y_name,
+        predictionCol="__y_pred",
+        fitIntercept=True,
+        standardization=False
+    )
+    model_y = lr_y.fit(assembled_df)
+
+    # Compute residuals (stays distributed!)
+    with_predictions = model_y.transform(model_x.transform(assembled_df))
+
+    from pyspark.sql import functions as F  # type: ignore
+    residuals_df = with_predictions.withColumn(
+        "__x_resid", F.col(profile.x_name) - F.col("__x_pred")
+    ).withColumn(
+        "__y_resid", F.col(profile.y_name) - F.col("__y_pred")
+    )
+
+    # Compute mean of control features for centering
+    # This is needed to match the numpy implementation's "partialing out" behavior
+    mean_controls_row = residuals_df.agg(
+        *[F.mean(feat).alias(feat) for feat in profile.regression_features]
+    ).collect()[0]
+    mean_controls = np.array([mean_controls_row[feat] for feat in profile.regression_features])
+
+    # Compute mean effect to add back: mean_controls @ coefficients
+    # This centers the residuals at the mean fitted value
+    mean_effect_x = np.dot(mean_controls, model_x.coefficients.toArray()) + model_x.intercept
+    mean_effect_y = np.dot(mean_controls, model_y.coefficients.toArray()) + model_y.intercept
+
+    # Group by bin and compute mean residuals
+    binned_residuals = residuals_df.groupBy(profile.bin_name).agg(
+        F.mean("__x_resid").alias("__x_resid_mean"),
+        F.mean("__y_resid").alias("__y_resid_mean"),
+    ).orderBy(profile.bin_name)
+
+    # Add back mean effect to match numpy implementation
+    # This gives us the "partialed out" means at the average level of controls
+    adjusted_residuals = binned_residuals.withColumn(
+        profile.x_name, F.col("__x_resid_mean") + F.lit(mean_effect_x)
+    ).withColumn(
+        profile.y_name, F.col("__y_resid_mean") + F.lit(mean_effect_y)
+    ).select(profile.bin_name, profile.x_name, profile.y_name)
+
+    # Convert back to narwhals
+    df_plotting = nw.from_native(adjusted_residuals).lazy().with_columns(
+        nw.col(profile.bin_name).cast(nw.Int32)
+    )
+
+    # Extract coefficients for compatibility
+    # Spark ML stores coefficients as DenseVector
+    beta_x = np.array(model_x.coefficients.toArray())
+    gamma_x = model_x.intercept
+
+    beta_y = np.array(model_y.coefficients.toArray())
+    gamma_y = model_y.intercept
+
+    # Return in same format as original function
+    # beta contains control coefficients, gamma contains intercepts
+    logger.debug(
+        "[spark_ml] fitted x ~ controls: beta=%s, gamma=%.4f, mean_effect=%.4f",
+        beta_x[:3] if len(beta_x) > 3 else beta_x,
+        gamma_x,
+        mean_effect_x
+    )
+    logger.debug(
+        "[spark_ml] fitted y ~ controls: beta=%s, gamma=%.4f, mean_effect=%.4f",
+        beta_y[:3] if len(beta_y) > 3 else beta_y,
+        gamma_y,
+        mean_effect_y
+    )
+
+    return df_plotting, {
+        "beta": beta_y,  # y ~ controls coefficients
+        "gamma": np.array([gamma_x, gamma_y])  # [x_intercept, y_intercept]
+    }
 
 
 @timed

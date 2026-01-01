@@ -1226,7 +1226,7 @@ def test_pyspark_dummy_names_match_pandas():
 
 
 def test_binscatter_with_pyspark_caching():
-    """Integration test: full binscatter with PySpark should use caching."""
+    """Integration test: full binscatter with PySpark should use Spark ML."""
     pytest.importorskip("pyspark")
 
     df_pd = pd.DataFrame({
@@ -1238,7 +1238,7 @@ def test_binscatter_with_pyspark_caching():
 
     df_spark = convert_to_backend(df_pd, "pyspark")
 
-    # This should use caching internally
+    # This should use Spark ML optimization internally
     fig = binscatter(
         df_spark,
         x="x",
@@ -1250,6 +1250,61 @@ def test_binscatter_with_pyspark_caching():
     # Just verify it completes without error
     assert fig is not None
     assert isinstance(fig, go.Figure)
+
+
+def test_spark_ml_vs_numpy_consistency():
+    """Test that Spark ML optimization produces similar results to numpy version."""
+    pytest.importorskip("pyspark")
+
+    # Create test data
+    rng = np.random.default_rng(123)
+    n = 500
+    df_pd = pd.DataFrame({
+        "x": rng.normal(100, 15, n),
+        "y": rng.normal(50, 10, n),
+        "ctrl": rng.normal(0, 1, n),
+    })
+
+    # Add correlated y for better testing
+    df_pd["y"] = df_pd["y"] + 0.5 * df_pd["ctrl"]
+
+    # Get result with PySpark (uses Spark ML)
+    df_spark = convert_to_backend(df_pd, "pyspark")
+    result_spark = binscatter(
+        df_spark,
+        x="x",
+        y="y",
+        controls=["ctrl"],
+        num_bins=10,
+        return_type="native"
+    ).toPandas()
+
+    # Get result with pandas (uses numpy)
+    result_pandas = binscatter(
+        df_pd,
+        x="x",
+        y="y",
+        controls=["ctrl"],
+        num_bins=10,
+        return_type="native"
+    )
+
+    # Results should be very close (allowing for numerical differences between
+    # Spark ML and numpy linear regression implementations)
+    np.testing.assert_allclose(
+        result_spark["x"].values,
+        result_pandas["x"].values,
+        rtol=0.01,  # 1% relative tolerance
+        atol=1.0,   # 1.0 absolute tolerance (reasonable for bin means)
+        err_msg="X values differ between Spark ML and numpy implementations"
+    )
+    np.testing.assert_allclose(
+        result_spark["y"].values,
+        result_pandas["y"].values,
+        rtol=0.01,
+        atol=1.0,
+        err_msg="Y values differ between Spark ML and numpy implementations"
+    )
 
 
 # =============================================================================
