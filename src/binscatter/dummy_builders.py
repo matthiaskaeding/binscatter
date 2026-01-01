@@ -21,8 +21,10 @@ def configure_build_dummies(implementation: Implementation):  # ty panics on ful
     Returns:
         A function that builds dummy variables for the backend
     """
-    if implementation in (Implementation.PANDAS, Implementation.POLARS):
-        return build_dummies_pandas_polars
+    if implementation is Implementation.PANDAS:
+        return build_dummies_pandas
+    if implementation is Implementation.POLARS:
+        return build_dummies_polars
     if implementation is Implementation.PYSPARK:
         return build_dummies_pyspark
     return build_dummies_fallback
@@ -68,10 +70,30 @@ def format_dummy_alias(column: str, value: Any) -> str:
     return f"__ctrl_{column}_{safe_value}_{value_hash}"
 
 
-def build_dummies_pandas_polars(df, categorical_controls: Tuple[str, ...]):
-    """Build dummy variables using native pandas/polars implementations.
+def build_rename_map(columns, separator: str) -> Tuple[dict[str, str], list[str]]:
+    """Build rename mapping and list of dummy column names.
 
-    Uses pd.get_dummies() or pl.to_dummies() for efficient dummy creation.
+    Args:
+        columns: Column names from dummies dataframe
+        separator: Separator used in column names (e.g., "__binscatter__")
+
+    Returns:
+        Tuple of (rename_map dict, list of new dummy column names)
+    """
+    rename_map: dict[str, str] = {}
+    dummy_cols: list[str] = []
+    for name in columns:
+        col, value = name.split(separator, 1)
+        alias = format_dummy_alias(col, value)
+        rename_map[name] = alias
+        dummy_cols.append(alias)
+    return rename_map, dummy_cols
+
+
+def build_dummies_pandas(df, categorical_controls: Tuple[str, ...]):
+    """Build dummy variables using native pandas implementation.
+
+    Uses pd.get_dummies() for efficient dummy creation.
 
     Args:
         df: Input dataframe
@@ -83,49 +105,53 @@ def build_dummies_pandas_polars(df, categorical_controls: Tuple[str, ...]):
     if not categorical_controls:
         return df, ()
 
-    native = df._compliant_frame.native
-    dummy_cols: list[str] = []
+    import pandas as pd
 
-    if native.__class__.__module__.startswith("pandas"):
-        import pandas as pd
+    native = nw.to_native(df)
+    base = native.copy()
+    sep = "__binscatter__"
+    dummies = pd.get_dummies(
+        base[list(categorical_controls)],
+        prefix={c: c for c in categorical_controls},
+        prefix_sep=sep,
+        drop_first=True,
+    )
+    rename_map, dummy_cols = build_rename_map(dummies.columns, sep)
+    dummies = dummies.rename(columns=rename_map)
+    base = base.join(dummies)
+    return nw.from_native(base).lazy(), tuple(dummy_cols)
 
-        base = native.copy()
-        sep = "__binscatter__"
-        dummies = pd.get_dummies(
-            base[list(categorical_controls)],
-            prefix={c: c for c in categorical_controls},
-            prefix_sep=sep,
-            drop_first=True,
-        )
-        rename_map = {}
-        for name in dummies.columns:
-            col, value = name.split(sep, 1)
-            alias = format_dummy_alias(col, value)
-            rename_map[name] = alias
-            dummy_cols.append(alias)
-        dummies = dummies.rename(columns=rename_map)
-        base = base.join(dummies)
-        return nw.from_native(base).lazy(), tuple(dummy_cols)
+
+def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
+    """Build dummy variables using native polars implementation.
+
+    Uses pl.to_dummies() for efficient dummy creation.
+
+    Args:
+        df: Input dataframe
+        categorical_controls: Tuple of categorical column names
+
+    Returns:
+        Tuple of (dataframe with dummies, tuple of dummy column names)
+    """
+    if not categorical_controls:
+        return df, ()
 
     try:
         import polars as pl
     except ImportError:  # pragma: no cover
         return build_dummies_fallback(df, categorical_controls)
 
+    native = nw.to_native(df)
     if isinstance(native, pl.LazyFrame):
         dataset = native.collect()
     else:
         dataset = native
     sep = "__binscatter__"
-    dummies_df = dataset.select(list(categorical_controls)).to_dummies(
+    dummies_df = dataset.select(categorical_controls).to_dummies(
         drop_first=True, separator=sep
     )
-    rename_map: dict[str, str] = {}
-    for name in dummies_df.columns:
-        col, value = name.split(sep, 1)
-        alias = format_dummy_alias(col, value)
-        rename_map[name] = alias
-        dummy_cols.append(alias)
+    rename_map, dummy_cols = build_rename_map(dummies_df.columns, sep)
     dummies_df = dummies_df.rename(rename_map)
     dataset = dataset.hstack(dummies_df)
     return nw.from_native(dataset).lazy(), tuple(dummy_cols)
@@ -149,7 +175,7 @@ def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
 
     from pyspark.sql import functions as F  # type: ignore[import-not-found]
 
-    native = df._compliant_frame.native
+    native = nw.to_native(df)
     agg_exprs = [
         F.sort_array(F.collect_set(F.col(column))).alias(column)
         for column in categorical_controls

@@ -905,7 +905,7 @@ def test_format_dummy_alias():
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 def testbuild_dummies_pandas_polars(backend):
     """Test that pandas and polars dummy builders work correctly."""
-    from binscatter.dummy_builders import build_dummies_pandas_polars
+    from binscatter.dummy_builders import build_dummies_pandas, build_dummies_polars
 
     df_pd = pd.DataFrame(
         {
@@ -919,7 +919,8 @@ def testbuild_dummies_pandas_polars(backend):
     df = convert_to_backend(df_pd, backend)
     df_nw = nw.from_native(df).lazy()
 
-    df_with_dummies, dummy_cols = build_dummies_pandas_polars(df_nw, ("cat_a", "cat_b"))
+    build_dummies = build_dummies_pandas if backend == "pandas" else build_dummies_polars
+    df_with_dummies, dummy_cols = build_dummies(df_nw, ("cat_a", "cat_b"))
 
     # Should create dummies (drop_first=True means n-1 dummies per categorical)
     # cat_a has 3 levels -> 2 dummies, cat_b has 2 levels -> 1 dummy
@@ -1061,18 +1062,19 @@ def test_configure_build_dummies_dispatch():
     """Test that configure_build_dummies returns the right implementation."""
     from binscatter.dummy_builders import (
         configure_build_dummies,
-        build_dummies_pandas_polars,
+        build_dummies_pandas,
+        build_dummies_polars,
         build_dummies_fallback,
     )
     from narwhals import Implementation
 
-    # Pandas should get pandas_polars builder
+    # Pandas should get pandas builder
     builder = configure_build_dummies(Implementation.PANDAS)
-    assert builder == build_dummies_pandas_polars
+    assert builder == build_dummies_pandas
 
-    # Polars should get pandas_polars builder
+    # Polars should get polars builder
     builder = configure_build_dummies(Implementation.POLARS)
-    assert builder == build_dummies_pandas_polars
+    assert builder == build_dummies_polars
 
     # DuckDB should get fallback
     builder = configure_build_dummies(Implementation.DUCKDB)
