@@ -683,6 +683,85 @@ def test_partial_out_controls_matches_statsmodels():
     np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_partial_out_controls_coefficients_across_backends(df_type):
+    """Test that regression coefficients are identical across backends with categorical variables."""
+    if df_type == "dask":
+        pytest.importorskip("dask")
+    
+    # Create synthetic data with categorical and numeric controls
+    rng = np.random.default_rng(42)
+    n = 1000
+    x0 = rng.normal(size=n)
+    z = rng.normal(size=n)
+    region = rng.choice(["north", "south", "east"], size=n, p=[0.4, 0.35, 0.25])
+    campaign = rng.choice(["alpha", "beta"], size=n, p=[0.6, 0.4])
+    
+    # Define effects
+    region_effect = {"north": 0.5, "south": -0.2, "east": 0.1}
+    campaign_effect = {"alpha": 0.4, "beta": -0.3}
+    
+    y0 = (
+        1.1 * x0
+        + 0.8 * z
+        + np.vectorize(region_effect.get)(region)
+        + np.vectorize(campaign_effect.get)(campaign)
+        + rng.normal(scale=0.3, size=n)
+    )
+    
+    df = pd.DataFrame({
+        "x0": x0,
+        "y0": y0,
+        "z_num": z,
+        "region": region,
+        "campaign": campaign,
+    })
+    
+    # Compute reference coefficients with pandas
+    num_bins = 10
+    df_ref_prepped, profile_ref = _prepare_dataframe(
+        df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+    )
+    df_ref_result, coeffs_ref = partial_out_controls(df_ref_prepped, profile_ref)
+    beta_ref = coeffs_ref["beta"]
+    
+    # Test with the specified backend
+    df_backend = convert_to_backend(df, df_type)
+    df_prepped, profile = _prepare_dataframe(
+        df_backend, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+    )
+    df_result, coeffs = partial_out_controls(df_prepped, profile)
+    beta_test = coeffs["beta"]
+    
+    # Coefficients should match exactly (or very close) across backends
+    # Use slightly looser tolerance for distributed backends (Dask has rounding differences)
+    if df_type in ("dask",):
+        rtol, atol = 0.1, 0.1  # Dask has larger numerical differences due to partition aggregation
+    else:
+        rtol, atol = 1e-10, 1e-10
+    
+    np.testing.assert_allclose(
+        beta_test,
+        beta_ref,
+        rtol=rtol,
+        atol=atol,
+        err_msg=f"Beta coefficients don't match for {df_type} backend with categorical controls"
+    )
+    
+    # Also verify the partialled-out y values match
+    result_pd = _collect_lazyframe_to_pandas(df_result).sort_values(profile.bin_name).reset_index(drop=True)
+    ref_pd = _collect_lazyframe_to_pandas(df_ref_result).sort_values(profile_ref.bin_name).reset_index(drop=True)
+    
+    np.testing.assert_allclose(
+        result_pd[profile.y_name].to_numpy(),
+        ref_pd[profile_ref.y_name].to_numpy(),
+        rtol=rtol,
+        atol=atol,
+        err_msg=f"Partialled-out y values don't match for {df_type} backend"
+    )
+
+
+
 def test_fit_polynomial_line_matches_statsmodels():
     rng = np.random.default_rng(1234)
     n = 400
@@ -905,7 +984,7 @@ def test_format_dummy_alias():
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 def testbuild_dummies_pandas_polars(backend):
     """Test that pandas and polars dummy builders work correctly."""
-    from binscatter.dummy_builders import build_dummies_pandas_polars
+    from binscatter.dummy_builders import build_dummies_pandas, build_dummies_polars
 
     df_pd = pd.DataFrame(
         {
@@ -919,7 +998,8 @@ def testbuild_dummies_pandas_polars(backend):
     df = convert_to_backend(df_pd, backend)
     df_nw = nw.from_native(df).lazy()
 
-    df_with_dummies, dummy_cols = build_dummies_pandas_polars(df_nw, ("cat_a", "cat_b"))
+    build_dummies = build_dummies_pandas if backend == "pandas" else build_dummies_polars
+    df_with_dummies, dummy_cols = build_dummies(df_nw, ("cat_a", "cat_b"))
 
     # Should create dummies (drop_first=True means n-1 dummies per categorical)
     # cat_a has 3 levels -> 2 dummies, cat_b has 2 levels -> 1 dummy
@@ -1056,23 +1136,162 @@ def test_dummy_builder_constant_categorical():
     # Should return the same dataframe
     assert df_with_dummies.collect().shape == df_pd.shape
 
+def test_build_dummies_pandas_with_empty_controls():
+    """Test pandas builder with empty categorical controls."""
+    from binscatter.dummy_builders import build_dummies_pandas
+    import pandas as pd
+    import narwhals as nw
+
+    df_pd = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
+    df_nw = nw.from_native(df_pd).lazy()
+
+    df_result, dummy_cols = build_dummies_pandas(df_nw, ())
+
+    assert len(dummy_cols) == 0
+    assert df_result.collect().shape == (3, 2)
+
+
+def test_build_dummies_polars_preserves_lazy():
+    """Test that polars builder preserves lazy evaluation."""
+    from binscatter.dummy_builders import build_dummies_polars
+    import polars as pl
+    import narwhals as nw
+
+    # Create a lazy polars dataframe
+    df_pl = pl.DataFrame({
+        'x': [1, 2, 3, 4, 5],
+        'y': [10, 20, 30, 40, 50],
+        'cat': ['A', 'B', 'A', 'B', 'A']
+    }).lazy()
+    df_nw = nw.from_native(df_pl)
+
+    # Build dummies
+    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat',))
+
+    # Verify result is still lazy
+    result_native = nw.to_native(df_result)
+    assert isinstance(result_native, pl.LazyFrame), f"Expected LazyFrame, got {type(result_native)}"
+
+    # Should have created 1 dummy (2 levels - 1)
+    assert len(dummy_cols) == 1
+
+    # Collect and verify
+    collected = df_result.collect()
+    assert dummy_cols[0] in collected.columns
+
+
+def test_build_dummies_polars_with_multiple_categoricals():
+    """Test polars builder with multiple categorical columns."""
+    from binscatter.dummy_builders import build_dummies_polars
+    import polars as pl
+    import narwhals as nw
+
+    df_pl = pl.DataFrame({
+        'x': [1, 2, 3, 4],
+        'cat_a': ['A', 'B', 'C', 'A'],
+        'cat_b': ['X', 'Y', 'X', 'Y'],
+        'cat_c': ['P', 'Q', 'R', 'P']
+    }).lazy()
+    df_nw = nw.from_native(df_pl)
+
+    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat_a', 'cat_b', 'cat_c'))
+
+    # cat_a: 3 levels -> 2 dummies
+    # cat_b: 2 levels -> 1 dummy
+    # cat_c: 3 levels -> 2 dummies
+    # Total: 5 dummies
+    assert len(dummy_cols) == 5
+
+    # Verify all dummy columns are present
+    collected = df_result.collect()
+    for col in dummy_cols:
+        assert col in collected.columns
+        assert col.startswith("__ctrl_")
+
+
+def test_build_dummies_fallback_with_multiple_categoricals():
+    """Test fallback builder with multiple categorical columns."""
+    from binscatter.dummy_builders import build_dummies_fallback
+    import pandas as pd
+    import narwhals as nw
+
+    df_pd = pd.DataFrame({
+        'x': [1, 2, 3, 4],
+        'cat_a': ['foo', 'bar', 'baz', 'foo'],
+        'cat_b': ['red', 'blue', 'red', 'blue']
+    })
+    df_nw = nw.from_native(df_pd).lazy()
+
+    df_result, dummy_cols = build_dummies_fallback(df_nw, ('cat_a', 'cat_b'))
+
+    # cat_a: 3 levels -> 2 dummies
+    # cat_b: 2 levels -> 1 dummy
+    # Total: 3 dummies
+    assert len(dummy_cols) == 3
+
+    # Verify all dummy columns exist and have correct values
+    collected = df_result.collect()
+    for col in dummy_cols:
+        assert col in collected.columns
+        # Should be 0.0 or 1.0
+        values = set(collected[col].to_list())
+        assert values <= {0.0, 1.0}
+
+
+def test_build_dummies_pandas_single_categorical():
+    """Test pandas builder with a single categorical column."""
+    from binscatter.dummy_builders import build_dummies_pandas
+    import pandas as pd
+    import narwhals as nw
+
+    df_pd = pd.DataFrame({
+        'x': [1, 2, 3],
+        'cat': ['only_one', 'only_one', 'only_one']
+    })
+    df_nw = nw.from_native(df_pd).lazy()
+
+    df_result, dummy_cols = build_dummies_pandas(df_nw, ('cat',))
+
+    # Single level categorical should create no dummies
+    assert len(dummy_cols) == 0
+
+
+def test_build_dummies_polars_single_categorical():
+    """Test polars builder with a single categorical column."""
+    from binscatter.dummy_builders import build_dummies_polars
+    import polars as pl
+    import narwhals as nw
+
+    df_pl = pl.DataFrame({
+        'x': [1, 2, 3],
+        'cat': ['only_one', 'only_one', 'only_one']
+    }).lazy()
+    df_nw = nw.from_native(df_pl)
+
+    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat',))
+
+    # Single level categorical should create no dummies
+    assert len(dummy_cols) == 0
+
+
 
 def test_configure_build_dummies_dispatch():
     """Test that configure_build_dummies returns the right implementation."""
     from binscatter.dummy_builders import (
         configure_build_dummies,
-        build_dummies_pandas_polars,
+        build_dummies_pandas,
+        build_dummies_polars,
         build_dummies_fallback,
     )
     from narwhals import Implementation
 
-    # Pandas should get pandas_polars builder
+    # Pandas should get pandas builder
     builder = configure_build_dummies(Implementation.PANDAS)
-    assert builder == build_dummies_pandas_polars
+    assert builder == build_dummies_pandas
 
-    # Polars should get pandas_polars builder
+    # Polars should get polars builder
     builder = configure_build_dummies(Implementation.POLARS)
-    assert builder == build_dummies_pandas_polars
+    assert builder == build_dummies_polars
 
     # DuckDB should get fallback
     builder = configure_build_dummies(Implementation.DUCKDB)

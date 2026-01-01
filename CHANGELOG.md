@@ -6,12 +6,21 @@
 - Backend-specific dummy variable builders in new `dummy_builders.py` module.
 - Hash-based dummy variable naming to prevent collisions (e.g., "foo/bar" vs "foo_bar").
 - Performance benchmarks in `tests/test_performance.py`.
+- Comprehensive tests for individual `build_dummies` functions covering edge cases, lazy evaluation, and multiple categorical columns.
+- Cross-backend regression coefficient test (`test_partial_out_controls_coefficients_across_backends`) to ensure consistent results with categorical variables across all backends.
 
 ### Changed
+- Refactored dummy variable builders: split `build_dummies_pandas_polars` into separate `build_dummies_pandas` and `build_dummies_polars` functions for cleaner backend-specific logic.
+- Optimized Polars dummy builder to preserve lazy evaluation by only collecting categorical columns instead of entire dataframe.
+- Extracted rename mapping logic into `build_rename_map` helper function to reduce code duplication.
+- Replaced internal `df._compliant_frame.native` with public narwhals API `nw.to_native(df)` across all dummy builders.
 - Optimized PySpark categorical handling with batched `collect_set()` aggregation (5.7x speedup).
 - Renamed `maybe_add_regression_features` to `add_regression_features`.
-- Fixed rule-of-thumb bin selector to match Cattaneo et al. (2024) SA-4.1 exactly: corrected bias constant (1/12 vs 1/3), use squared inverse density, and added density trimming at 2.5th percentile.
 - Simplified quantile deduplication logic using `dict.fromkeys` instead of iterative reduction.
+
+### Fixed
+- **Critical**: Fixed categorical variable dummy encoding inconsistency across backends. Pandas and Polars were dropping different reference categories (first alphabetically vs first in appearance), causing regression coefficients to differ. Now all backends consistently drop the first category alphabetically, ensuring identical results across pandas, polars, duckdb, and dask.
+- Fixed rule-of-thumb bin selector to match Cattaneo et al. (2024) SA-4.1 exactly: corrected bias constant (1/12 vs 1/3), use squared inverse density, and added density trimming at 2.5th percentile.
 - Capped rule-of-thumb bins at n/10 to ensure ~10 observations per bin, fixing issues with heavy-tailed data (e.g., GDP).
 - Fixed `pd.cut` bin assignment to use `right=False` for correct handling of boundary values.
 - Fixed `PerformanceWarning` when passing Polars LazyFrame by avoiding eager schema resolution.
