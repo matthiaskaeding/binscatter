@@ -200,9 +200,10 @@ def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
 
 
 def build_dummies_fallback(df, categorical_controls: Tuple[str, ...]):
-    """Build dummy variables using generic narwhals implementation.
+    """Build dummy variables using narwhals expressions.
 
     Fallback for backends without specialized implementations.
+    Uses narwhals expressions to preserve lazy evaluation.
 
     Args:
         df: Input dataframe
