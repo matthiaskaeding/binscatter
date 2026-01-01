@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import math
 import operator
@@ -980,8 +981,43 @@ def maybe_add_regression_features(
 
 
 def _format_dummy_alias(column: str, value: Any) -> str:
-    safe_value = str(value).replace(" ", "_").replace("/", "_")
-    return f"__ctrl_{column}_{safe_value}"
+    """Create a safe, unique dummy variable name.
+
+    Uses a hash suffix to guarantee uniqueness even when different values
+    would sanitize to the same string (e.g., "foo/bar" vs "foo_bar").
+
+    Args:
+        column: The source categorical column name
+        value: The category value
+
+    Returns:
+        A safe column name like "__ctrl_category_value_a1b2c3d4"
+    """
+    import re
+
+    # Convert to string and sanitize: keep only alphanumeric and underscores
+    str_value = str(value)
+    safe_value = re.sub(r'[^a-zA-Z0-9_]', '_', str_value)
+
+    # Remove consecutive underscores and trim
+    safe_value = re.sub(r'_+', '_', safe_value).strip('_')
+
+    # Create a short hash of the original value for uniqueness
+    # This prevents collisions like "foo/bar" vs "foo_bar"
+    value_hash = hashlib.md5(str_value.encode('utf-8')).hexdigest()[:8]
+
+    # Truncate if too long (leave room for prefix, column, hash, and underscores)
+    # Typical database column limit is 64 chars
+    # Format: __ctrl_{column}_{safe_value}_{8-char-hash}
+    prefix_len = len(f"__ctrl_{column}_")
+    hash_len = 8  # MD5 hash truncated to 8 chars
+    max_value_len = 64 - prefix_len - hash_len - 1  # -1 for underscore before hash
+
+    if len(safe_value) > max_value_len:
+        safe_value = safe_value[:max_value_len]
+
+    # Always include hash to guarantee uniqueness
+    return f"__ctrl_{column}_{safe_value}_{value_hash}"
 
 
 def _dummy_builder_pandas_polars(
