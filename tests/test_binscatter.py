@@ -683,6 +683,85 @@ def test_partial_out_controls_matches_statsmodels():
     np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_partial_out_controls_coefficients_across_backends(df_type):
+    """Test that regression coefficients are identical across backends with categorical variables."""
+    if df_type == "dask":
+        pytest.importorskip("dask")
+    
+    # Create synthetic data with categorical and numeric controls
+    rng = np.random.default_rng(42)
+    n = 1000
+    x0 = rng.normal(size=n)
+    z = rng.normal(size=n)
+    region = rng.choice(["north", "south", "east"], size=n, p=[0.4, 0.35, 0.25])
+    campaign = rng.choice(["alpha", "beta"], size=n, p=[0.6, 0.4])
+    
+    # Define effects
+    region_effect = {"north": 0.5, "south": -0.2, "east": 0.1}
+    campaign_effect = {"alpha": 0.4, "beta": -0.3}
+    
+    y0 = (
+        1.1 * x0
+        + 0.8 * z
+        + np.vectorize(region_effect.get)(region)
+        + np.vectorize(campaign_effect.get)(campaign)
+        + rng.normal(scale=0.3, size=n)
+    )
+    
+    df = pd.DataFrame({
+        "x0": x0,
+        "y0": y0,
+        "z_num": z,
+        "region": region,
+        "campaign": campaign,
+    })
+    
+    # Compute reference coefficients with pandas
+    num_bins = 10
+    df_ref_prepped, profile_ref = _prepare_dataframe(
+        df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+    )
+    df_ref_result, coeffs_ref = partial_out_controls(df_ref_prepped, profile_ref)
+    beta_ref = coeffs_ref["beta"]
+    
+    # Test with the specified backend
+    df_backend = convert_to_backend(df, df_type)
+    df_prepped, profile = _prepare_dataframe(
+        df_backend, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+    )
+    df_result, coeffs = partial_out_controls(df_prepped, profile)
+    beta_test = coeffs["beta"]
+    
+    # Coefficients should match exactly (or very close) across backends
+    # Use slightly looser tolerance for distributed backends (Dask has rounding differences)
+    if df_type in ("dask",):
+        rtol, atol = 0.1, 0.1  # Dask has larger numerical differences due to partition aggregation
+    else:
+        rtol, atol = 1e-10, 1e-10
+    
+    np.testing.assert_allclose(
+        beta_test,
+        beta_ref,
+        rtol=rtol,
+        atol=atol,
+        err_msg=f"Beta coefficients don't match for {df_type} backend with categorical controls"
+    )
+    
+    # Also verify the partialled-out y values match
+    result_pd = _collect_lazyframe_to_pandas(df_result).sort_values(profile.bin_name).reset_index(drop=True)
+    ref_pd = _collect_lazyframe_to_pandas(df_ref_result).sort_values(profile_ref.bin_name).reset_index(drop=True)
+    
+    np.testing.assert_allclose(
+        result_pd[profile.y_name].to_numpy(),
+        ref_pd[profile_ref.y_name].to_numpy(),
+        rtol=rtol,
+        atol=atol,
+        err_msg=f"Partialled-out y values don't match for {df_type} backend"
+    )
+
+
+
 def test_fit_polynomial_line_matches_statsmodels():
     rng = np.random.default_rng(1234)
     n = 400

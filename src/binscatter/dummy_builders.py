@@ -147,9 +147,27 @@ def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
     sep = "__binscatter__"
     categoricals_collected = df.select(categorical_controls).collect()
 
-    # Convert to native polars for to_dummies
+    # Convert to native polars
     native_categoricals = nw.to_native(categoricals_collected)
-    dummies_df = native_categoricals.to_dummies(drop_first=True, separator=sep)
+
+    # Create all dummies (drop_first=False) then manually drop first sorted category
+    # This ensures consistency with pandas which drops first alphabetically
+    dummies_df = native_categoricals.to_dummies(drop_first=False, separator=sep)
+
+    # For each categorical column, drop the first dummy (alphabetically sorted)
+    cols_to_drop = []
+    for col in categorical_controls:
+        # Get dummy column names for this categorical
+        dummy_prefix = f"{col}{sep}"
+        dummy_cols_for_this_cat = [c for c in dummies_df.columns if c.startswith(dummy_prefix)]
+        # Sort and drop the first (matches pandas behavior)
+        if dummy_cols_for_this_cat:
+            sorted_dummies = sorted(dummy_cols_for_this_cat)
+            cols_to_drop.append(sorted_dummies[0])
+
+    # Drop the first category for each categorical variable
+    if cols_to_drop:
+        dummies_df = dummies_df.drop(cols_to_drop)
 
     # Rename columns using our helper
     rename_map, dummy_cols = build_rename_map(dummies_df.columns, sep)
