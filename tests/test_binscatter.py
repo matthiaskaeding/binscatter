@@ -1042,35 +1042,35 @@ def test_dummy_builder_constant_categorical():
     assert df_with_dummies.collect().shape == df_pd.shape
 
 
-def test_get_dummy_builder_dispatch():
-    """Test that get_dummy_builder returns the right implementation."""
-    from binscatter.dummy_builders import get_dummy_builder, build_dummies_pandas_polars, build_dummies_pyspark, build_dummies_fallback
+def test_configure_build_dummies_dispatch():
+    """Test that configure_build_dummies returns the right implementation."""
+    from binscatter.dummy_builders import configure_build_dummies, build_dummies_pandas_polars, build_dummies_pyspark, build_dummies_fallback
     from narwhals import Implementation
 
     # Pandas should get pandas_polars builder
-    builder = get_dummy_builder(Implementation.PANDAS)
+    builder = configure_build_dummies(Implementation.PANDAS)
     assert builder == build_dummies_pandas_polars
 
     # Polars should get pandas_polars builder
-    builder = get_dummy_builder(Implementation.POLARS)
+    builder = configure_build_dummies(Implementation.POLARS)
     assert builder == build_dummies_pandas_polars
 
     # DuckDB should get fallback
-    builder = get_dummy_builder(Implementation.DUCKDB)
+    builder = configure_build_dummies(Implementation.DUCKDB)
     assert builder == build_dummies_fallback
 
     # Dask should get fallback
-    builder = get_dummy_builder(Implementation.DASK)
+    builder = configure_build_dummies(Implementation.DASK)
     assert builder == build_dummies_fallback
 
 
-def test_configurebuild_dummies_pyspark():
+def test_configure_build_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
-    from binscatter.dummy_builders import get_dummy_builder, build_dummies_pyspark
+    from binscatter.dummy_builders import configure_build_dummies, build_dummies_pyspark
     from narwhals import Implementation
 
-    builder = get_dummy_builder(Implementation.PYSPARK)
+    builder = configure_build_dummies(Implementation.PYSPARK)
     assert builder == build_dummies_pyspark
 
 

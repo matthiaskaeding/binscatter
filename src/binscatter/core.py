@@ -25,7 +25,7 @@ from narwhals import Implementation
 from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
-from binscatter.dummy_builders import get_dummy_builder
+from binscatter.dummy_builders import configure_build_dummies
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
@@ -936,7 +936,7 @@ def maybe_add_regression_features(
     if numeric_controls and not categorical_controls:
         return df, numeric_controls
 
-    build_dummies = get_dummy_builder(df.implementation)
+    build_dummies = configure_build_dummies(df.implementation)
     df_with_dummies, dummy_cols = build_dummies(df, categorical_controls)
     if not dummy_cols:
         logger.debug("No dummy expressions created, all categorical controls constant")

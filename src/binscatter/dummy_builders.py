@@ -17,8 +17,8 @@ DummyBuilder = Callable[
 ]
 
 
-def get_dummy_builder(implementation: Implementation) -> DummyBuilder:
-    """Get the appropriate dummy variable builder for the given backend.
+def configure_build_dummies(implementation: Implementation) -> DummyBuilder:
+    """Configure and return the appropriate dummy variable builder for the given backend.
 
     Args:
         implementation: The narwhals Implementation type
