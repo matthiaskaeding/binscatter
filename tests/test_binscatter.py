@@ -144,7 +144,8 @@ def df_duplicates():
 
 @pytest.fixture
 def df_with_edge_cases():
-    # Mix of valid, NaN, inf, -inf, and None values
+    # Mix of valid, NaN, inf, -inf, and None values in numeric columns
+    # Plus categorical columns with None/missing values
     x = pd.Series(
         [1.0, 2.0, np.nan, 4.0, np.inf, 6.0, 7.0, -np.inf, 9.0, 10.0, None, 12.0],
         name="x0",
@@ -153,7 +154,16 @@ def df_with_edge_cases():
         [10.0, np.nan, 30.0, 40.0, 50.0, np.inf, None, 80.0, 90.0, -np.inf, 110.0, 120.0],
         name="y0",
     )
-    return pd.concat([x, y], axis=1)
+    # Categorical columns with missing/None values
+    cat1 = pd.Series(
+        ["a", "b", None, "a", "b", "c", None, "a", "b", "c", "a", None],
+        name="cat1",
+    )
+    cat2 = pd.Series(
+        [None, "x", "y", "x", None, "y", "x", "y", None, "x", "y", "x"],
+        name="cat2",
+    )
+    return pd.concat([x, y, cat1, cat2], axis=1)
 
 
 fixt_dat = [
