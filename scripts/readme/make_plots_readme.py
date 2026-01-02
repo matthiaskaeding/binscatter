@@ -160,8 +160,8 @@ def build_gapminder_plots() -> None:
     fig_dpi = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins="dpi")
     _write_fig(fig_dpi, "gapminder_gdp_lifeexp_dpi.png")
 
-    # Fixed 60 bins - shown second in README
-    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=60)
+    # Fixed 120 bins - shown second in README
+    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=120)
     _write_fig(fig_fixed, "gapminder_gdp_lifeexp_fixed.png")
 
     _write_binscatter_variants(
