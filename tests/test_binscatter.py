@@ -174,6 +174,16 @@ def df_all_invalid():
     return pd.concat([x, y], axis=1)
 
 
+@pytest.fixture
+def df_constant_categorical():
+    # Categorical column with only one value (linear dependence edge case)
+    # This tests handling of constant categorical variables that produce no variance
+    x = pd.Series(np.arange(100), name="x0")
+    y = pd.Series(np.arange(100) + RNG.normal(0, 5, size=100), name="y0")
+    cat = pd.Series(["constant"] * 100, name="cat_const")  # Only one value
+    return pd.concat([x, y, cat], axis=1)
+
+
 fixt_dat = [
     ("df_good", False),
     ("df_x_num", False),
@@ -182,6 +192,7 @@ fixt_dat = [
     ("df_duplicates", True),
     ("df_with_edge_cases", False),  # Should filter out invalid values and work
     ("df_all_invalid", True),  # Should error - no valid rows remain
+    ("df_constant_categorical", False),  # Should handle constant categorical gracefully
 ]
 
 BASE_DF_TYPES = [name for name in DF_BACKENDS if name != "pyspark"]
