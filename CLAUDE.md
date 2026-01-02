@@ -78,6 +78,7 @@ Tests are parametrized across backends using `@pytest.fixture` from `conftest.py
 
 ## Coding Conventions
 
+- **Run `just ok` before committing** to ensure code is formatted and type-checked
 - Use lazy imports (try/except blocks) for optional backend dependencies—never assume Spark, DuckDB, or Dask availability in core paths
 - Commit style: brief, imperative subjects (e.g., "Add dask support")
 - For Spark work, set `SPARK_LOG_LEVEL=ERROR` to reduce log noise
