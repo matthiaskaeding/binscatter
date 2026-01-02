@@ -270,22 +270,26 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         )
 
 
-def test_rule_of_thumb_matches_helper(df_good):
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_matches_helper(df_good, df_type):
     expected_bins = _get_rot_bins(df_good, "x0", "y0")
+    df = conv(df_good, df_type)
     native = binscatter(
-        df_good, "x0", "y0", num_bins="rule-of-thumb", return_type="native"
+        df, "x0", "y0", num_bins="rule-of-thumb", return_type="native"
     )
     result_pd = to_pandas_native(native)
     assert result_pd.shape[0] == expected_bins
 
 
-def test_rule_of_thumb_with_controls(df_good):
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_with_controls(df_good, df_type):
     df = df_good.copy()
     df["z_num"] = df["x0"] * 0.5
     df["z_cat"] = np.where(df["x0"] % 2 == 0, "even", "odd")
     expected_bins = _get_rot_bins(df, "x0", "y0", controls=["z_num", "z_cat"])
+    df_backend = conv(df, df_type)
     native = binscatter(
-        df,
+        df_backend,
         "x0",
         "y0",
         controls=["z_num", "z_cat"],
@@ -296,11 +300,13 @@ def test_rule_of_thumb_with_controls(df_good):
     assert result_pd.shape[0] == expected_bins
 
 
-def test_rule_of_thumb_handles_gapminder():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_handles_gapminder(df_type):
     df = px.data.gapminder()
     expected_bins = _get_rot_bins(df, "gdpPercap", "lifeExp")
+    df_backend = conv(df, df_type)
     native = binscatter(
-        df,
+        df_backend,
         "gdpPercap",
         "lifeExp",
         num_bins="rule-of-thumb",
@@ -399,9 +405,11 @@ def test_rule_of_thumb_similar_to_binsreg_with_controls():
     assert abs(ours - int(theirs)) <= 6
 
 
-def test_binscatter_rejects_unknown_num_bins_string(df_good):
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_rejects_unknown_num_bins_string(df_good, df_type):
+    df = conv(df_good, df_type)
     with pytest.raises(ValueError):
-        binscatter(df_good, "x0", "y0", num_bins="unknown-option")
+        binscatter(df, "x0", "y0", num_bins="unknown-option")
 
 
 def _manual_binscatter_with_controls(
@@ -464,7 +472,8 @@ def _collect_lazyframe_to_pandas(frame):
     return to_pandas_native(frame.collect().to_native())
 
 
-def test_binscatter_controls_matches_reference():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_controls_matches_reference(df_type):
     rng = np.random.default_rng(123)
     n = 2000
     x = rng.normal(size=n)
@@ -474,8 +483,9 @@ def test_binscatter_controls_matches_reference():
     num_bins = 15
 
     expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
+    df_backend = conv(df, df_type)
     result = binscatter(
-        df,
+        df_backend,
         "x0",
         "y0",
         controls=["z"],
@@ -483,8 +493,13 @@ def test_binscatter_controls_matches_reference():
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
+    # Use looser tolerance for distributed backends
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 1e-3, 1e-2
+    else:
+        rtol, atol = 1e-6, 1e-6
     np.testing.assert_allclose(
-        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol, atol=atol
     )
 
 
@@ -556,7 +571,8 @@ def test_binscatter_controls_across_backends(df_type):
     )
 
 
-def test_binscatter_categorical_controls_only():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_categorical_controls_only(df_type):
     rng = np.random.default_rng(321)
     n = 1200
     x = rng.normal(size=n)
@@ -572,8 +588,9 @@ def test_binscatter_categorical_controls_only():
         control_cols=["cat"],
         categorical_controls=["cat"],
     )
+    df_backend = conv(df, df_type)
     result = binscatter(
-        df,
+        df_backend,
         "x0",
         "y0",
         controls=["cat"],
@@ -581,15 +598,21 @@ def test_binscatter_categorical_controls_only():
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
+    # Use looser tolerance for distributed backends
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 1e-3, 1e-2
+    else:
+        rtol, atol = 1e-6, 1e-6
     np.testing.assert_allclose(
-        result_pd["x0"].to_numpy(), expected_x, rtol=1e-6, atol=1e-6
+        result_pd["x0"].to_numpy(), expected_x, rtol=rtol, atol=atol
     )
     np.testing.assert_allclose(
-        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol, atol=atol
     )
 
 
-def test_binscatter_controls_collapsed_bins_error():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_controls_collapsed_bins_error(df_type):
     df = pd.DataFrame(
         {
             "x0": np.ones(50),
@@ -597,11 +620,13 @@ def test_binscatter_controls_collapsed_bins_error():
             "z": np.linspace(-1.0, 1.0, num=50),
         }
     )
+    df_backend = conv(df, df_type)
     with pytest.raises(ValueError, match="Could not produce at least 2 bins"):
-        binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
+        binscatter(df_backend, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
 
 
-def test_partial_out_controls_matches_statsmodels():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_partial_out_controls_matches_statsmodels(df_type):
     rng = np.random.default_rng(2025)
     n = 1500
     x0 = rng.normal(size=n)
@@ -627,8 +652,9 @@ def test_partial_out_controls_matches_statsmodels():
         }
     )
     num_bins = 12
+    df_backend = conv(df, df_type)
     df_prepped, profile = _prepare_dataframe(
-        df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+        df_backend, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
     )
     df_with_bins = _collect_lazyframe_to_pandas(df_prepped)
     df_result, coeffs = partial_out_controls(df_prepped, profile)
@@ -643,11 +669,16 @@ def test_partial_out_controls_matches_statsmodels():
         .mean()
         .sort_index()
     )
+    # Use looser tolerance for distributed backends
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 1e-3, 1e-2
+    else:
+        rtol, atol = 1e-6, 1e-6
     np.testing.assert_allclose(
         result[profile.x_name].to_numpy(),
         bin_means.to_numpy(),
-        rtol=1e-6,
-        atol=1e-6,
+        rtol=rtol,
+        atol=atol,
     )
 
     bin_dummies = pd.get_dummies(
@@ -674,13 +705,13 @@ def test_partial_out_controls_matches_statsmodels():
     np.testing.assert_allclose(
         result[profile.y_name].to_numpy(),
         fitted,
-        rtol=1e-6,
-        atol=1e-6,
+        rtol=rtol,
+        atol=atol,
     )
 
     beta_ref = beta - beta[0]
     beta_actual = coeffs["beta"] - coeffs["beta"][0]
-    np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(beta_actual, beta_ref, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -762,15 +793,17 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
 
 
 
-def test_fit_polynomial_line_matches_statsmodels():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_fit_polynomial_line_matches_statsmodels(df_type):
     rng = np.random.default_rng(1234)
     n = 400
     x = rng.normal(loc=0.5, scale=1.5, size=n)
     z = rng.normal(size=n)
     y = 1.2 + 0.9 * x - 0.3 * x**2 + 0.5 * z + rng.normal(scale=0.2, size=n)
     df = pd.DataFrame({"x0": x, "y0": y, "z": z})
+    df_backend = conv(df, df_type)
     df_prepped, profile = _prepare_dataframe(
-        df,
+        df_backend,
         x="x0",
         y="y0",
         controls=["z"],
@@ -782,10 +815,16 @@ def test_fit_polynomial_line_matches_statsmodels():
 
     design = np.column_stack([np.ones(n), x, x**2, z])
     theta, *_ = np.linalg.lstsq(design, y, rcond=None)
-    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=1e-6)
+    # Use looser tolerance for distributed backends
+    if df_type in ("dask", "pyspark"):
+        rtol = 1e-3
+    else:
+        rtol = 1e-6
+    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=rtol)
 
 
-def test_poly_line_does_not_change_bins():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_poly_line_does_not_change_bins(df_type):
     df = pd.DataFrame(
         {
             "x0": np.linspace(-3, 3, 200),
@@ -793,11 +832,15 @@ def test_poly_line_does_not_change_bins():
             + np.random.default_rng(0).normal(scale=0.1, size=200),
         }
     )
-    native = binscatter(df, "x0", "y0", num_bins=15, return_type="native")
+    df_backend = conv(df, df_type)
+    native = binscatter(df_backend, "x0", "y0", num_bins=15, return_type="native")
     with_poly = binscatter(
-        df, "x0", "y0", num_bins=15, poly_line=2, return_type="native"
+        df_backend, "x0", "y0", num_bins=15, poly_line=2, return_type="native"
     )
-    pd.testing.assert_frame_equal(native, with_poly)
+    # Convert both to pandas for comparison
+    native_pd = to_pandas_native(native).sort_values("bin").reset_index(drop=True)
+    with_poly_pd = to_pandas_native(with_poly).sort_values("bin").reset_index(drop=True)
+    pd.testing.assert_frame_equal(native_pd, with_poly_pd)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -855,12 +898,14 @@ def test_configure_compute_quantiles_monotonic(df_type):
         )
 
 
-def test_configure_compute_quantiles_single_bin_raises():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_configure_compute_quantiles_single_bin_raises(df_type):
     """Single bin (num_bins=1) should raise ValueError."""
     rng = np.random.default_rng(444)
     x = rng.normal(size=100)
     df_pd = pd.DataFrame({"x": x})
-    df_nw = nw.from_native(df_pd).lazy()
+    df = conv(df_pd, df_type)
+    df_nw = nw.from_native(df).lazy()
 
     with pytest.raises(ValueError, match="num_bins must be at least 2"):
         configure_compute_quantiles(1, df_nw.implementation)

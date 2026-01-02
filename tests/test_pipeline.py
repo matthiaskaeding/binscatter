@@ -1,9 +1,15 @@
 import polars as pl
 import pytest
+import pandas as pd
 
 import narwhals as nw
 
 from binscatter.core import _clean_controls, clean_df, add_regression_features
+from tests.conftest import DF_BACKENDS, convert_to_backend
+
+DF_TYPE_PARAMS = [pytest.param(df_type) for df_type in [b for b in DF_BACKENDS if b != "pyspark"]]
+if "pyspark" in DF_BACKENDS:
+    DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
 
 
 def test_clean_controls_returns_tuple():
@@ -16,8 +22,10 @@ def test_clean_controls_returns_tuple():
     "controls,expected",
     [([], ((), ())), (["z"], (("z",), ())), (["cat"], ((), ("cat",)))],
 )
-def test_clean_df_splits_controls(controls, expected):
-    df = pl.DataFrame({"x": [1, 2], "y": [2, 3], "z": [3, 4], "cat": ["a", "b"]})
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_clean_df_splits_controls(controls, expected, df_type):
+    df_pd = pd.DataFrame({"x": [1, 2], "y": [2, 3], "z": [3, 4], "cat": ["a", "b"]})
+    df = convert_to_backend(df_pd, df_type)
     df_lazy, is_lazy, numeric_controls, categorical_controls = clean_df(
         df, tuple(controls), "x", "y"
     )
@@ -27,8 +35,11 @@ def test_clean_df_splits_controls(controls, expected):
     assert not is_lazy
 
 
-def test_maybe_add_regression_features_creates_dummies():
-    df = nw.from_native(pl.DataFrame({"x": [0, 1, 2], "cat": ["a", "b", "a"]})).lazy()
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_maybe_add_regression_features_creates_dummies(df_type):
+    df_pd = pd.DataFrame({"x": [0, 1, 2], "cat": ["a", "b", "a"]})
+    df_native = convert_to_backend(df_pd, df_type)
+    df = nw.from_native(df_native).lazy()
     df_augmented, features = add_regression_features(
         df, numeric_controls=(), categorical_controls=("cat",)
     )
