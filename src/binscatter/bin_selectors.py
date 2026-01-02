@@ -56,7 +56,9 @@ def select_rule_of_thumb_bins(
     mean_x = x_sum / n_obs_f
     var_x = (x_sq_sum / n_obs_f) - mean_x**2
     if var_x <= 0:
-        raise ValueError("Rule-of-thumb selector requires the x column to have positive variance.")
+        raise ValueError(
+            "Rule-of-thumb selector requires the x column to have positive variance."
+        )
     std_x = math.sqrt(var_x)
 
     sum_inv_density_sq = _gaussian_inverse_density_squared_sum(df, x, mean_x, std_x)
@@ -209,14 +211,12 @@ def _quantile_edges(x_norm: np.ndarray, num_bins: int) -> np.ndarray:
     try:
         edges = np.quantile(x_norm, quantiles, method="linear")
     except TypeError:  # numpy<1.22 compatibility
-        edges = np.quantile(x_norm, quantiles, interpolation="linear")
+        edges = np.quantile(x_norm, quantiles, interpolation="linear")  # type: ignore[call-overload]
     unique_edges = np.unique(edges)
     return unique_edges
 
 
-def _linear_spline_design(
-    x_norm: np.ndarray, interior_knots: np.ndarray
-) -> np.ndarray:
+def _linear_spline_design(x_norm: np.ndarray, interior_knots: np.ndarray) -> np.ndarray:
     design = np.empty((x_norm.size, 2 + interior_knots.size), dtype=float)
     design[:, 0] = 1.0
     design[:, 1] = x_norm
@@ -280,6 +280,7 @@ def _compute_dpi_variance_constant(
     XtY[:num_bins] = np.bincount(bin_idx, weights=y_values, minlength=num_bins)
 
     if q:
+        assert controls is not None  # type narrowing for checker
         sum_controls = np.zeros((num_bins, q), dtype=float)
         for idx in range(q):
             np.add.at(sum_controls[:, idx], bin_idx, controls[:, idx])
@@ -297,6 +298,7 @@ def _compute_dpi_variance_constant(
 
     fitted = beta_bins[bin_idx]
     if q:
+        assert controls is not None  # type narrowing for checker
         fitted = fitted + controls @ gamma
     residuals = y_values - fitted
     u_sq = residuals**2
@@ -306,6 +308,7 @@ def _compute_dpi_variance_constant(
         np.bincount(bin_idx, weights=u_sq, minlength=num_bins)
     )
     if q:
+        assert controls is not None  # type narrowing for checker
         cross = np.zeros((num_bins, q), dtype=float)
         for idx in range(q):
             np.add.at(cross[:, idx], bin_idx, controls[:, idx] * u_sq)
