@@ -49,7 +49,7 @@ jobs:
           cp -r /tmp/images .
 
           # Commit and force push
-          git add images/
+          git add -f images/
           git commit -m "Update README images [skip ci]"
           git push origin images-temp:images --force
 
