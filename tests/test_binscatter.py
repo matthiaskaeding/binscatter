@@ -166,6 +166,14 @@ def df_with_edge_cases():
     return pd.concat([x, y, cat1, cat2], axis=1)
 
 
+@pytest.fixture
+def df_all_invalid():
+    # All rows have at least one invalid value - should result in zero rows after filtering
+    x = pd.Series([np.nan, np.inf, -np.inf, None], name="x0")
+    y = pd.Series([np.inf, np.nan, None, -np.inf], name="y0")
+    return pd.concat([x, y], axis=1)
+
+
 fixt_dat = [
     ("df_good", False),
     ("df_x_num", False),
@@ -173,6 +181,7 @@ fixt_dat = [
     ("df_nulls", True),
     ("df_duplicates", True),
     ("df_with_edge_cases", False),  # Should filter out invalid values and work
+    ("df_all_invalid", True),  # Should error - no valid rows remain
 ]
 
 BASE_DF_TYPES = [name for name in DF_BACKENDS if name != "pyspark"]
