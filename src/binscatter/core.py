@@ -247,7 +247,9 @@ def binscatter(
     if moment_cache is None:
         total_rows = int(df_prepped.select(nw.len()).collect().item(0, 0))
     else:
-        _ensure_moments(df_prepped, moment_cache, {_moment_alias("total_count"): nw.len()})
+        _ensure_moments(
+            df_prepped, moment_cache, {_moment_alias("total_count"): nw.len()}
+        )
         total_rows = int(moment_cache[_moment_alias("total_count")])
     if total_rows < final_num_bins:
         if auto_bins:

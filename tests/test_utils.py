@@ -1,5 +1,4 @@
 import narwhals as nw
-import narwhals.selectors as ncs
 import numpy as np
 import pandas as pd
 from binscatter.core import (

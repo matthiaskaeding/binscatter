@@ -191,7 +191,10 @@ fixt_dat = [
     ("df_missing_column", True),
     ("df_nulls", True),
     ("df_duplicates", True),
-    ("df_with_edge_cases", True),  # Should error - only 4 valid rows after filtering, not enough for 20 bins
+    (
+        "df_with_edge_cases",
+        True,
+    ),  # Should error - only 4 valid rows after filtering, not enough for 20 bins
     ("df_all_invalid", True),  # Should error - no valid rows remain
     ("df_constant_categorical", False),  # Should handle constant categorical gracefully
 ]
@@ -754,10 +757,14 @@ def test_partial_out_controls_matches_statsmodels(df_type):
             control_blocks.append(dummies.to_numpy())
             control_means.append(dummies.mean().to_numpy())
     control_matrix = np.column_stack(control_blocks)
-    design_matrix = np.column_stack([bin_dummies.to_numpy(), control_matrix]).astype(float)
+    design_matrix = np.column_stack([bin_dummies.to_numpy(), control_matrix]).astype(
+        float
+    )
     mean_controls = np.concatenate(control_means)
 
-    model = sm.OLS(df_with_bins[profile.y_name].to_numpy().astype(float), design_matrix).fit()
+    model = sm.OLS(
+        df_with_bins[profile.y_name].to_numpy().astype(float), design_matrix
+    ).fit()
     theta = model.params
     beta = theta[: profile.num_bins]
     gamma = theta[profile.num_bins :]
