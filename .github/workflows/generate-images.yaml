@@ -4,9 +4,6 @@ on:
   workflow_dispatch:  # Manual trigger
   push:
     branches: [main]
-    paths:
-      - 'src/binscatter/**'
-      - 'scripts/readme/make_plots_readme.py'
 
 permissions:
   contents: write
