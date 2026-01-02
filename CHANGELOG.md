@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.3.0 - 2026-01-02
+
 ### Added
 - Backend-specific dummy variable builders in new `dummy_builders.py` module.
 - Hash-based dummy variable naming to prevent collisions (e.g., "foo/bar" vs "foo_bar").

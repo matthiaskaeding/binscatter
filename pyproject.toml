@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "binscatter"
-version = "0.2.0"
+version = "0.3.0"
 description = "Cross-backend binscatter plots."
 readme = "README.md"
 requires-python = ">=3.11"
