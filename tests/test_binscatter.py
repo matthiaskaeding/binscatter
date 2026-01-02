@@ -142,12 +142,27 @@ def df_duplicates():
     return pd.concat([x, y], axis=1)
 
 
+@pytest.fixture
+def df_with_edge_cases():
+    # Mix of valid, NaN, inf, -inf, and None values
+    x = pd.Series(
+        [1.0, 2.0, np.nan, 4.0, np.inf, 6.0, 7.0, -np.inf, 9.0, 10.0, None, 12.0],
+        name="x0",
+    )
+    y = pd.Series(
+        [10.0, np.nan, 30.0, 40.0, 50.0, np.inf, None, 80.0, 90.0, -np.inf, 110.0, 120.0],
+        name="y0",
+    )
+    return pd.concat([x, y], axis=1)
+
+
 fixt_dat = [
     ("df_good", False),
     ("df_x_num", False),
     ("df_missing_column", True),
     ("df_nulls", True),
     ("df_duplicates", True),
+    ("df_with_edge_cases", False),  # Should filter out invalid values and work
 ]
 
 BASE_DF_TYPES = [name for name in DF_BACKENDS if name != "pyspark"]
