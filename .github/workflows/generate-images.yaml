@@ -36,6 +36,11 @@ jobs:
 
           TEMP_DIR=$(mktemp -d)
           cp -r images "$TEMP_DIR"
+          PNG_COUNT=$(find "$TEMP_DIR/images" -type f -name '*.png' | wc -l)
+          if [ "$PNG_COUNT" -eq 0 ]; then
+            echo "No PNG files were generated; aborting deploy." >&2
+            exit 1
+          fi
 
           # Create orphan branch
           git checkout --orphan images-temp

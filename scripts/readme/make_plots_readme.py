@@ -7,6 +7,7 @@
 #     "plotly>=6.3",
 #     "numpy>=2.3",
 #     "pandas",
+#     "pyarrow>=17",
 # ]
 #
 # [tool.uv.sources]
@@ -30,6 +31,11 @@ ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = ROOT / "artifacts"
 IMAGES = ROOT / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
+
+REQUIRED_README_IMAGES = [
+    "gapminder_gdp_lifeexp_dpi.png",
+    "gapminder_gdp_lifeexp_fixed.png",
+]
 
 
 def _write_binscatter_variants(
@@ -191,6 +197,13 @@ def main() -> None:
         print(f"\nSkipped {len(failed)} dataset(s): {', '.join(failed)}")  # noqa: T201
     else:
         print("\nAll plots generated successfully.")  # noqa: T201
+
+    missing = [name for name in REQUIRED_README_IMAGES if not (IMAGES / name).exists()]
+    if missing:
+        files = ", ".join(missing)
+        raise FileNotFoundError(
+            f"Missing README image(s): {files}. Gapminder plots must render successfully."
+        )
 
 
 if __name__ == "__main__":
