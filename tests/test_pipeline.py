@@ -1,4 +1,3 @@
-import polars as pl
 import pytest
 import pandas as pd
 
@@ -7,7 +6,9 @@ import narwhals as nw
 from binscatter.core import _clean_controls, clean_df, add_regression_features
 from tests.conftest import DF_BACKENDS, convert_to_backend
 
-DF_TYPE_PARAMS = [pytest.param(df_type) for df_type in [b for b in DF_BACKENDS if b != "pyspark"]]
+DF_TYPE_PARAMS = [
+    pytest.param(df_type) for df_type in [b for b in DF_BACKENDS if b != "pyspark"]
+]
 if "pyspark" in DF_BACKENDS:
     DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
 
@@ -32,7 +33,11 @@ def test_clean_df_splits_controls(controls, expected, df_type):
     assert isinstance(df_lazy, nw.LazyFrame)
     assert numeric_controls == expected[0]
     assert categorical_controls == expected[1]
-    assert not is_lazy
+    # DuckDB, Dask, and PySpark inputs are detected as lazy by narwhals
+    if df_type in ("duckdb", "dask", "pyspark"):
+        assert is_lazy
+    else:
+        assert not is_lazy
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)

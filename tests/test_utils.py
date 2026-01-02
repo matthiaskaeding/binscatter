@@ -20,7 +20,9 @@ from tests.conftest import (
     SparkSession,
 )
 
-DF_TYPE_PARAMS = [pytest.param(df_type) for df_type in [b for b in DF_BACKENDS if b != "pyspark"]]
+DF_TYPE_PARAMS = [
+    pytest.param(df_type) for df_type in [b for b in DF_BACKENDS if b != "pyspark"]
+]
 if "pyspark" in DF_BACKENDS:
     DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
 
@@ -32,12 +34,15 @@ def test_filter_all_numeric_basic(df_type):
     df_native = convert_to_backend(df_pandas, df_type)
     df = nw.from_native(df_native)
 
-    cols_numeric = tuple(df.select(ncs.numeric()).columns)
-    cols_cat = tuple(df.select(ncs.categorical()).columns)
-    filtered = _remove_bad_values(df, cols_numeric, cols_cat)
-    assert filtered.shape[0] == 2
-    assert filtered["a"].to_numpy().tolist() == [1.0, 2.3]
-    assert filtered["b"].to_numpy().tolist() == [5, 6]
+    # Get column info using split_columns which handles all backends correctly
+    df_lazy = df.lazy()
+    cols_numeric, cols_cat = split_columns(df_lazy)
+    filtered = _remove_bad_values(df_lazy, cols_numeric, cols_cat)
+    # Collect the result for assertions
+    filtered_df = filtered.collect()
+    assert filtered_df.shape[0] == 2
+    assert filtered_df["a"].to_numpy().tolist() == [1.0, 2.3]
+    assert filtered_df["b"].to_numpy().tolist() == [5, 6]
 
 
 @pytest.mark.parametrize(

@@ -243,6 +243,25 @@ def binscatter(
     if controls or poly_line is not None:
         moment_cache = {}
 
+    # Check that we have enough rows for the bins (reuse cache if available)
+    if moment_cache is None:
+        total_rows = int(df_prepped.select(nw.len()).collect().item(0, 0))
+    else:
+        _ensure_moments(df_prepped, moment_cache, {_moment_alias("total_count"): nw.len()})
+        total_rows = int(moment_cache[_moment_alias("total_count")])
+    if total_rows < final_num_bins:
+        if auto_bins:
+            msg = (
+                f"Rule-of-thumb selected {final_num_bins} bins but only {total_rows} valid rows remain. "
+                "Specify num_bins manually or check your data for invalid values."
+            )
+        else:
+            msg = (
+                f"Requested {final_num_bins} bins but only {total_rows} valid rows remain. "
+                "Number of bins cannot exceed the number of valid rows."
+            )
+        raise ValueError(msg)
+
     if not controls:
         df_plotting = compute_bin_means(df_prepped, profile)
     else:
