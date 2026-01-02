@@ -32,6 +32,25 @@ IMAGES = ROOT / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
 
 
+def _write_binscatter_variants(
+    filename: str,
+    /,
+    *,
+    add_dpi_variant: bool,
+    dpi_filename: str | None = None,
+    args: tuple,
+    kwargs: dict,
+) -> None:
+    fig = binscatter(*args, **kwargs)
+    _write_fig(fig, filename)
+    if not add_dpi_variant:
+        return
+    dpi_kwargs = {**kwargs, "num_bins": "dpi"}
+    dpi_name = dpi_filename or filename.replace(".png", "_dpi.png")
+    fig_dpi = binscatter(*args, **dpi_kwargs)
+    _write_fig(fig_dpi, dpi_name)
+
+
 def _require_artifact(path: Path) -> Path:
     if not path.exists():
         msg = f"Missing {path}. Run the prerequisite prep scripts first."
@@ -76,14 +95,17 @@ def build_readme_plot() -> None:
         "statenum",
         "year",
     ]
-    fig = binscatter(
-        df,
-        x="mtr90_lag3",
-        y="lnpat",
-        controls=controls,
-        num_bins="rule-of-thumb",
+    _write_binscatter_variants(
+        "binscatter_controls.png",
+        add_dpi_variant=True,
+        args=(df,),
+        kwargs={
+            "x": "mtr90_lag3",
+            "y": "lnpat",
+            "controls": controls,
+            "num_bins": "rule-of-thumb",
+        },
     )
-    _write_fig(fig, "binscatter_controls.png")
 
 
 def build_lightgbm_plot() -> None:
@@ -99,26 +121,34 @@ def build_lightgbm_plot() -> None:
         ],
     )
     # Without controls
-    fig = binscatter(
-        df,
-        x="learning_rate",
-        y="rmse",
+    _write_binscatter_variants(
+        "lightgbm_learning_rate.png",
+        add_dpi_variant=True,
+        args=(df,),
+        kwargs={
+            "x": "learning_rate",
+            "y": "rmse",
+            "num_bins": "rule-of-thumb",
+        },
     )
-    _write_fig(fig, "lightgbm_learning_rate.png")
 
     # With controls
-    fig_controls = binscatter(
-        df,
-        x="learning_rate",
-        y="rmse",
-        controls=[
-            "num_leaves",
-            "min_child_samples",
-            "feature_fraction",
-            "lambda_l1",
-        ],
+    _write_binscatter_variants(
+        "lightgbm_learning_rate_controls.png",
+        add_dpi_variant=True,
+        args=(df,),
+        kwargs={
+            "x": "learning_rate",
+            "y": "rmse",
+            "controls": [
+                "num_leaves",
+                "min_child_samples",
+                "feature_fraction",
+                "lambda_l1",
+            ],
+            "num_bins": "rule-of-thumb",
+        },
     )
-    _write_fig(fig_controls, "lightgbm_learning_rate_controls.png")
 
 
 def build_gapminder_plots() -> None:
@@ -126,20 +156,20 @@ def build_gapminder_plots() -> None:
         pl.col("gdpPercap").log().alias("log_gdp"),
         pl.col("lifeExp").log().alias("log_life"),
     )
-    fig = binscatter(
-        df_pl,
-        "gdpPercap",
-        "lifeExp",
-        num_bins=40,
-    )
-    _write_fig(fig, "gapminder_gdp_lifeexp.png")
+    # DPI selector (default) - shown first in README
+    fig_dpi = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins="dpi")
+    _write_fig(fig_dpi, "gapminder_gdp_lifeexp_dpi.png")
 
-    fig_log = binscatter(
-        df_pl,
-        "log_gdp",
-        "log_life",
+    # Fixed 120 bins - shown second in README
+    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=120)
+    _write_fig(fig_fixed, "gapminder_gdp_lifeexp_fixed.png")
+
+    _write_binscatter_variants(
+        "gapminder_log_axes.png",
+        add_dpi_variant=False,
+        args=(df_pl, "log_gdp", "log_life"),
+        kwargs={},
     )
-    _write_fig(fig_log, "gapminder_log_axes.png")
 
 
 def main() -> None:

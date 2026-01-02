@@ -1,21 +1,59 @@
 # PLAN.md
 
-## Active Plan: PySpark performance optimizations
+## Active Plan: DPI (Direct Plug-In) Bin Selector
 
-### Completed
-1. **Categorical dummy caching** (optimization #1): Implemented backend-specific dummy builders via `configure_dummy_builder()`:
-   - `_dummy_builder_pyspark`: Batches all categorical discovery into a single `agg(*collect_set(...))` call
-   - `_dummy_builder_pandas_polars`: Uses native `pd.get_dummies()` / `pl.to_dummies()`
-   - `_dummy_builder_fallback`: Generic narwhals implementation for other backends
+### Overview
 
-2. **Automatic PySpark caching** (optimization #4): Added `_maybe_cache_pyspark` context manager:
-   - Caches dataframe after `clean_df` to avoid repeated scans
-   - Automatically unpersists on exit
-   - Results: `maybe_add_regression_features` 2.15s → 0.38s (5.7x faster), `_fit_polynomial_line` 1.14s → 0.71s (1.6x faster)
+Implement the DPI (Direct Plug-In) bin selector from Cattaneo et al. (2024) as an alternative to the current ROT (Rule-of-Thumb) selector. DPI is more data-driven and doesn't rely on parametric assumptions for the density.
 
-### Remaining optimizations
-3. **Reuse aggregated moments**: Push `_ensure_feature_moments` to request sums/cross-products in the same grouping job that produces `per_bin`
-4. **Spark-native regression solve**: Use VectorAssembler + Spark ML linear regression instead of shipping moments to driver
+### Background
+
+From binsreg results on gapminder:
+- ROT: 21 bins
+- DPI: 35 bins
+
+The DPI method typically recommends more bins than ROT because it uses pilot estimates of the IMSE components rather than asymptotic approximations.
+In testing each time the ROT method recommended way to few bins, in doubbt more bins is better than too few.
+
+### Research Needed
+
+1. **Read SA-4.2 of Cattaneo et al. (2024)** - DPI selector formula. Stay extremly close to that paper.
+2. **Identify key differences from ROT**:
+   - How is the bias term B estimated?
+   - How is the variance term V estimated?
+   - What pilot bandwidths/preliminary estimates are needed?
+
+### Implementation Steps
+
+1. **Understand DPI Formula**
+   - Extract DPI formula from paper's supplementary appendix
+   - Compare to ROT formula to identify differences
+   - Document the mathematical approach
+
+2. **Implement Core DPI Logic**
+   - Add `_select_dpi_bins()` function in core.py
+   - Implement pilot estimators for bias/variance
+   - Add numerical safeguards (similar to ROT)
+
+3. **Integrate with API**
+   - Add `"dpi"` as option for `num_bins` parameter
+   - Update type hints and docstrings
+   - Consider making DPI the default (if it performs better)
+
+4. **Testing**
+   - Add tests comparing to binsreg DPI output
+   - Test on various data distributions
+   - Verify numerical stability
+
+### Open Questions
+
+1. Should DPI become the default selector?
+2. What tolerance is acceptable vs binsreg? (ROT is within 0-2 bins for symmetric data)
+3. Are there performance considerations? (DPI may require more computation)
+
+### References
+
+- Cattaneo, M. D., Crump, R. K., Farrell, M. H., & Feng, Y. (2024). On Binscatter. American Economic Review, 114(5), 1488-1514.
 
 ---
 

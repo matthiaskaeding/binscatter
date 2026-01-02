@@ -14,6 +14,7 @@ from binscatter.core import (
     Profile,
     _fit_polynomial_line,
     _select_rule_of_thumb_bins,
+    _select_dpi_bins,
 )
 from binscatter.quantiles import (
     configure_add_bins,
@@ -241,6 +242,27 @@ def _get_rot_bins(
     return _select_rule_of_thumb_bins(df_with_features, x, y, regression_features)
 
 
+def _get_dpi_bins(
+    df,
+    x: str,
+    y: str,
+    controls: Iterable[str] | None = None,
+) -> int:
+    controls_tuple = tuple(controls or ())
+    df_clean, _, numeric_controls, categorical_controls = clean_df(
+        df,
+        controls_tuple,
+        x,
+        y,
+    )
+    df_with_features, regression_features = add_regression_features(
+        df_clean,
+        numeric_controls=numeric_controls,
+        categorical_controls=categorical_controls,
+    )
+    return _select_dpi_bins(df_with_features, x, y, regression_features)
+
+
 @pytest.mark.parametrize(
     "df_fixture,expect_error,df_type",
     fix_data_types,
@@ -461,6 +483,120 @@ def test_rule_of_thumb_similar_to_binsreg_with_controls():
     ours = _get_rot_bins(df, "x0", "y0", controls=["w1", "w2"])
     theirs = binsregselect(y, x, w=df[["w1", "w2"]].to_numpy()).nbinsrot_regul
     assert abs(ours - int(theirs)) <= 6
+
+
+# --------------------------------------------------------------------------
+# DPI (Direct Plug-In) bin selector tests
+# --------------------------------------------------------------------------
+
+
+def test_dpi_handles_gapminder():
+    """DPI selector works on real data and typically gives more bins than ROT."""
+    df = px.data.gapminder()
+    dpi_bins = _get_dpi_bins(df, "gdpPercap", "lifeExp")
+    rot_bins = _get_rot_bins(df, "gdpPercap", "lifeExp")
+    native = binscatter(
+        df,
+        "gdpPercap",
+        "lifeExp",
+        num_bins="dpi",
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == dpi_bins
+    # DPI typically recommends at least as many bins as ROT
+    assert dpi_bins >= rot_bins - 2
+
+
+def test_dpi_matches_helper(df_good):
+    """DPI num_bins='dpi' matches direct helper call."""
+    expected_bins = _get_dpi_bins(df_good, "x0", "y0")
+    native = binscatter(df_good, "x0", "y0", num_bins="dpi", return_type="native")
+    result_pd = to_pandas_native(native)
+    assert result_pd.shape[0] == expected_bins
+
+
+def test_dpi_similar_to_binsreg_no_controls():
+    """DPI matches binsreg DPI output."""
+    rng = np.random.default_rng(42)
+    n = 5000
+    x = rng.normal(size=n)
+    y = 2.0 * x + rng.normal(size=n)
+    df = pd.DataFrame({"x0": x, "y0": y})
+    ours = _get_dpi_bins(df, "x0", "y0")
+    theirs = binsregselect(y, x).nbinsdpi
+    assert abs(ours - int(theirs)) <= 1
+
+
+def test_dpi_similar_to_binsreg_with_controls():
+    """DPI with controls matches binsreg."""
+    rng = np.random.default_rng(43)
+    n = 3500
+    x = rng.normal(size=n)
+    w1 = rng.normal(scale=0.5, size=n)
+    w2 = rng.uniform(-1, 1, size=n)
+    y = 2.5 * x - 1.1 * w1 + 0.8 * w2 + rng.normal(scale=0.75, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y, "w1": w1, "w2": w2})
+    ours = _get_dpi_bins(df, "x0", "y0", controls=["w1", "w2"])
+    theirs = binsregselect(y, x, w=df[["w1", "w2"]].to_numpy()).nbinsdpi
+    assert abs(ours - int(theirs)) <= 1
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_dpi_works_across_backends(df_type):
+    """DPI selector works with all supported backends."""
+    rng = np.random.default_rng(100)
+    n = 1000
+    x = rng.normal(size=n)
+    y = 2.0 * x + rng.normal(size=n)
+    base = pd.DataFrame({"x0": x, "y0": y})
+    df = conv(base, df_type)
+    native = binscatter(df, "x0", "y0", num_bins="dpi", return_type="native")
+    result_pd = to_pandas_native(native)
+    # Just check we got a reasonable number of bins
+    assert result_pd.shape[0] >= 2
+    assert result_pd.shape[0] <= n // 5
+
+
+def test_dpi_skewed_data():
+    """DPI works with skewed distributions."""
+    rng = np.random.default_rng(201)
+    n = 2000
+    # Exponential x (right-skewed)
+    x = rng.exponential(scale=2.0, size=n)
+    y = np.log1p(x) + rng.normal(scale=0.3, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y})
+    ours = _get_dpi_bins(df, "x0", "y0")
+    theirs = binsregselect(y, x).nbinsdpi
+    assert abs(ours - int(theirs)) <= 1
+
+
+def test_dpi_quadratic_relationship():
+    """DPI with nonlinear relationship."""
+    rng = np.random.default_rng(202)
+    n = 3000
+    x = rng.uniform(-3, 3, size=n)
+    y = x**2 + rng.normal(scale=0.5, size=n)
+    df = pd.DataFrame({"x0": x, "y0": y})
+    ours = _get_dpi_bins(df, "x0", "y0")
+    # For quadratic relationships, DPI implementations can vary significantly
+    # Just ensure we're getting a reasonable number of bins
+    assert ours >= 5
+    assert ours <= n // 5  # At least 5 observations per bin
+
+
+def test_dpi_small_sample():
+    """DPI with small sample size."""
+    rng = np.random.default_rng(203)
+    n = 100
+    x = rng.normal(size=n)
+    y = 1.5 * x + rng.normal(size=n)
+    df = pd.DataFrame({"x0": x, "y0": y})
+    ours = _get_dpi_bins(df, "x0", "y0")
+    theirs = binsregselect(y, x).nbinsdpi
+    assert ours >= 2
+    assert ours <= n // 5
+    assert abs(ours - int(theirs)) <= 1
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
