@@ -42,6 +42,8 @@ jobs:
           # Create orphan branch
           git checkout --orphan images-temp
           git rm -rf .
+          git clean -fdx
+          find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
 
           # Copy images back
           cp -r /tmp/images .
