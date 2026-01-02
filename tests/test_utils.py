@@ -1,5 +1,4 @@
 import narwhals as nw
-import narwhals.selectors as ncs
 import numpy as np
 import pandas as pd
 from binscatter.core import (
@@ -20,30 +19,29 @@ from tests.conftest import (
     SparkSession,
 )
 
+DF_TYPE_PARAMS = [
+    pytest.param(df_type) for df_type in [b for b in DF_BACKENDS if b != "pyspark"]
+]
+if "pyspark" in DF_BACKENDS:
+    DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
 
-def test_filter_all_numeric_basic():
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_filter_all_numeric_basic(df_type):
     data = {"a": [1.0, 2.3, np.nan, 4.0, np.inf, None], "b": [5, 6, 7, None, 9, 10]}
     df_pandas = pd.DataFrame(data)
-    df = nw.from_native(df_pandas)
+    df_native = convert_to_backend(df_pandas, df_type)
+    df = nw.from_native(df_native)
 
-    cols_numeric = tuple(df.select(ncs.numeric()).columns)
-    cols_cat = tuple(df.select(ncs.categorical()).columns)
-    filtered = _remove_bad_values(df, cols_numeric, cols_cat)
-    assert filtered.shape[0] == 2
-    assert filtered["a"].to_numpy().tolist() == [1.0, 2.3]
-    assert filtered["b"].to_numpy().tolist() == [5, 6]
-
-    df_polars = pl.DataFrame(data)
-    df_from_polars = nw.from_native(df_polars)
-
-    cols_numeric_polars = tuple(df_from_polars.select(ncs.numeric()).columns)
-    cols_cat_polars = tuple(df_from_polars.select(ncs.categorical()).columns)
-    filtered_polars = _remove_bad_values(
-        df_from_polars, cols_numeric_polars, cols_cat_polars
-    )
-    assert filtered_polars.shape[0] == 2
-    assert filtered_polars["a"].to_numpy().tolist() == [1.0, 2.3]
-    assert filtered_polars["b"].to_numpy().tolist() == [5, 6]
+    # Get column info using split_columns which handles all backends correctly
+    df_lazy = df.lazy()
+    cols_numeric, cols_cat = split_columns(df_lazy)
+    filtered = _remove_bad_values(df_lazy, cols_numeric, cols_cat)
+    # Collect the result for assertions
+    filtered_df = filtered.collect()
+    assert filtered_df.shape[0] == 2
+    assert filtered_df["a"].to_numpy().tolist() == [1.0, 2.3]
+    assert filtered_df["b"].to_numpy().tolist() == [5, 6]
 
 
 @pytest.mark.parametrize(
@@ -130,7 +128,8 @@ def test_remove_bad_values_pyspark():
     _assert_remove_bad_values_backend("pyspark")
 
 
-def test_partial_out_controls_matches_closed_form():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_partial_out_controls_matches_closed_form(df_type):
     rng = np.random.default_rng(123)
     n = 500
     x = rng.normal(loc=1.0, scale=1.0, size=n)
@@ -142,7 +141,7 @@ def test_partial_out_controls_matches_closed_form():
     bins = np.repeat(np.arange(10), repeats=n // 10)
     bins = np.pad(bins, (0, n - bins.size), mode="edge")
 
-    df_native = pd.DataFrame(
+    df_pandas = pd.DataFrame(
         {
             "x0": x,
             "y0": y,
@@ -154,6 +153,7 @@ def test_partial_out_controls_matches_closed_form():
             "bin": bins,
         }
     )
+    df_native = convert_to_backend(df_pandas, df_type)
     frame = nw.from_native(df_native).lazy()
     profile = _sample_profile(10, ["c1", "c2", "c3", "c4", "c5"])
 
@@ -162,7 +162,7 @@ def test_partial_out_controls_matches_closed_form():
     x_means = result.get_column("x0").to_numpy()
     y_estimated = result.get_column("y0").to_numpy()
 
-    B = pd.get_dummies(df_native["bin"], drop_first=False).to_numpy()
+    B = pd.get_dummies(df_pandas["bin"], drop_first=False).to_numpy()
     design = np.column_stack([B, control_matrix])
     theta, *_ = np.linalg.lstsq(design, y, rcond=None)
     beta = theta[: profile.num_bins]
@@ -170,7 +170,13 @@ def test_partial_out_controls_matches_closed_form():
     mean_controls = control_matrix.mean(axis=0)
     y_reference = beta + mean_controls @ gamma
 
+    # Use looser tolerance for distributed backends
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 1e-3, 1e-2
+    else:
+        rtol, atol = 1e-6, 1e-6
+
     np.testing.assert_allclose(
-        x_means, df_native.groupby("bin")["x0"].mean().to_numpy()
+        x_means, df_pandas.groupby("bin")["x0"].mean().to_numpy(), rtol=rtol, atol=atol
     )
-    np.testing.assert_allclose(y_estimated, y_reference, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(y_estimated, y_reference, rtol=rtol, atol=atol)

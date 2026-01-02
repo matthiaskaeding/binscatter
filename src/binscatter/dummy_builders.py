@@ -159,7 +159,9 @@ def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
     for col in categorical_controls:
         # Get dummy column names for this categorical
         dummy_prefix = f"{col}{sep}"
-        dummy_cols_for_this_cat = [c for c in dummies_df.columns if c.startswith(dummy_prefix)]
+        dummy_cols_for_this_cat = [
+            c for c in dummies_df.columns if c.startswith(dummy_prefix)
+        ]
         # Sort and drop the first (matches pandas behavior)
         if dummy_cols_for_this_cat:
             sorted_dummies = sorted(dummy_cols_for_this_cat)
@@ -178,7 +180,7 @@ def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
 
     # Horizontally concatenate original lazy frame with dummies
     native_df = nw.to_native(df)
-    result_native = pl.concat([native_df, dummies_lazy], how='horizontal')
+    result_native = pl.concat([native_df, dummies_lazy], how="horizontal")
 
     return nw.from_native(result_native), tuple(dummy_cols)
 

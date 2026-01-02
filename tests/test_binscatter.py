@@ -142,12 +142,61 @@ def df_duplicates():
     return pd.concat([x, y], axis=1)
 
 
+@pytest.fixture
+def df_with_edge_cases():
+    # Mix of valid, NaN, inf, -inf, and None values in numeric columns
+    # Plus categorical columns with None/missing values
+    # After filtering, only 1 valid row remains - not enough for binscatter (needs at least 2 bins)
+    x = pd.Series(
+        [1.0, np.nan, np.inf, -np.inf, None, np.nan, np.inf, -np.inf],
+        name="x0",
+    )
+    y = pd.Series(
+        [10.0, np.nan, 30.0, 40.0, np.inf, None, -np.inf, 80.0],
+        name="y0",
+    )
+    # Categorical columns - row 0 must have valid values to be the single valid row
+    cat1 = pd.Series(
+        ["a", "b", None, "a", "b", "c", None, "a"],
+        name="cat1",
+    )
+    cat2 = pd.Series(
+        ["x", "x", "y", "x", None, "y", "x", "y"],
+        name="cat2",
+    )
+    return pd.concat([x, y, cat1, cat2], axis=1)
+
+
+@pytest.fixture
+def df_all_invalid():
+    # All rows have at least one invalid value - should result in zero rows after filtering
+    x = pd.Series([np.nan, np.inf, -np.inf, None], name="x0")
+    y = pd.Series([np.inf, np.nan, None, -np.inf], name="y0")
+    return pd.concat([x, y], axis=1)
+
+
+@pytest.fixture
+def df_constant_categorical():
+    # Categorical column with only one value (linear dependence edge case)
+    # This tests handling of constant categorical variables that produce no variance
+    x = pd.Series(np.arange(100), name="x0")
+    y = pd.Series(np.arange(100) + RNG.normal(0, 5, size=100), name="y0")
+    cat = pd.Series(["constant"] * 100, name="cat_const")  # Only one value
+    return pd.concat([x, y, cat], axis=1)
+
+
 fixt_dat = [
     ("df_good", False),
     ("df_x_num", False),
     ("df_missing_column", True),
     ("df_nulls", True),
     ("df_duplicates", True),
+    (
+        "df_with_edge_cases",
+        True,
+    ),  # Should error - only 4 valid rows after filtering, not enough for 20 bins
+    ("df_all_invalid", True),  # Should error - no valid rows remain
+    ("df_constant_categorical", False),  # Should handle constant categorical gracefully
 ]
 
 BASE_DF_TYPES = [name for name in DF_BACKENDS if name != "pyspark"]
@@ -270,22 +319,30 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         )
 
 
-def test_rule_of_thumb_matches_helper(df_good):
-    expected_bins = _get_rot_bins(df_good, "x0", "y0")
-    native = binscatter(
-        df_good, "x0", "y0", num_bins="rule-of-thumb", return_type="native"
-    )
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_matches_helper(df_good, df_type):
+    df = conv(df_good, df_type)
+    expected_bins = _get_rot_bins(df, "x0", "y0")
+    native = binscatter(df, "x0", "y0", num_bins="rule-of-thumb", return_type="native")
     result_pd = to_pandas_native(native)
-    assert result_pd.shape[0] == expected_bins
+    if df_type == "pyspark":
+        # PySpark uses approxQuantile which may produce fewer unique quantiles
+        # Just verify we get a reasonable number of bins
+        assert result_pd.shape[0] >= 2
+        assert result_pd.shape[0] <= expected_bins
+    else:
+        assert result_pd.shape[0] == expected_bins
 
 
-def test_rule_of_thumb_with_controls(df_good):
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_with_controls(df_good, df_type):
     df = df_good.copy()
     df["z_num"] = df["x0"] * 0.5
     df["z_cat"] = np.where(df["x0"] % 2 == 0, "even", "odd")
-    expected_bins = _get_rot_bins(df, "x0", "y0", controls=["z_num", "z_cat"])
+    df_backend = conv(df, df_type)
+    expected_bins = _get_rot_bins(df_backend, "x0", "y0", controls=["z_num", "z_cat"])
     native = binscatter(
-        df,
+        df_backend,
         "x0",
         "y0",
         controls=["z_num", "z_cat"],
@@ -293,14 +350,21 @@ def test_rule_of_thumb_with_controls(df_good):
         return_type="native",
     )
     result_pd = to_pandas_native(native)
-    assert result_pd.shape[0] == expected_bins
+    if df_type == "pyspark":
+        # PySpark uses approxQuantile which may produce fewer unique quantiles
+        assert result_pd.shape[0] >= 2
+        assert result_pd.shape[0] <= expected_bins
+    else:
+        assert result_pd.shape[0] == expected_bins
 
 
-def test_rule_of_thumb_handles_gapminder():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_rule_of_thumb_handles_gapminder(df_type):
     df = px.data.gapminder()
     expected_bins = _get_rot_bins(df, "gdpPercap", "lifeExp")
+    df_backend = conv(df, df_type)
     native = binscatter(
-        df,
+        df_backend,
         "gdpPercap",
         "lifeExp",
         num_bins="rule-of-thumb",
@@ -399,9 +463,11 @@ def test_rule_of_thumb_similar_to_binsreg_with_controls():
     assert abs(ours - int(theirs)) <= 6
 
 
-def test_binscatter_rejects_unknown_num_bins_string(df_good):
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_rejects_unknown_num_bins_string(df_good, df_type):
+    df = conv(df_good, df_type)
     with pytest.raises(ValueError):
-        binscatter(df_good, "x0", "y0", num_bins="unknown-option")
+        binscatter(df, "x0", "y0", num_bins="unknown-option")
 
 
 def _manual_binscatter_with_controls(
@@ -464,7 +530,8 @@ def _collect_lazyframe_to_pandas(frame):
     return to_pandas_native(frame.collect().to_native())
 
 
-def test_binscatter_controls_matches_reference():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_controls_matches_reference(df_type):
     rng = np.random.default_rng(123)
     n = 2000
     x = rng.normal(size=n)
@@ -474,8 +541,9 @@ def test_binscatter_controls_matches_reference():
     num_bins = 15
 
     expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
+    df_backend = conv(df, df_type)
     result = binscatter(
-        df,
+        df_backend,
         "x0",
         "y0",
         controls=["z"],
@@ -483,8 +551,13 @@ def test_binscatter_controls_matches_reference():
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
+    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 0.1, 0.15
+    else:
+        rtol, atol = 1e-6, 1e-6
     np.testing.assert_allclose(
-        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol, atol=atol
     )
 
 
@@ -556,7 +629,8 @@ def test_binscatter_controls_across_backends(df_type):
     )
 
 
-def test_binscatter_categorical_controls_only():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_categorical_controls_only(df_type):
     rng = np.random.default_rng(321)
     n = 1200
     x = rng.normal(size=n)
@@ -572,8 +646,9 @@ def test_binscatter_categorical_controls_only():
         control_cols=["cat"],
         categorical_controls=["cat"],
     )
+    df_backend = conv(df, df_type)
     result = binscatter(
-        df,
+        df_backend,
         "x0",
         "y0",
         controls=["cat"],
@@ -581,15 +656,21 @@ def test_binscatter_categorical_controls_only():
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
+    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 0.1, 0.15
+    else:
+        rtol, atol = 1e-6, 1e-6
     np.testing.assert_allclose(
-        result_pd["x0"].to_numpy(), expected_x, rtol=1e-6, atol=1e-6
+        result_pd["x0"].to_numpy(), expected_x, rtol=rtol, atol=atol
     )
     np.testing.assert_allclose(
-        result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
+        result_pd["y0"].to_numpy(), expected_y, rtol=rtol, atol=atol
     )
 
 
-def test_binscatter_controls_collapsed_bins_error():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_binscatter_controls_collapsed_bins_error(df_type):
     df = pd.DataFrame(
         {
             "x0": np.ones(50),
@@ -597,11 +678,15 @@ def test_binscatter_controls_collapsed_bins_error():
             "z": np.linspace(-1.0, 1.0, num=50),
         }
     )
+    df_backend = conv(df, df_type)
     with pytest.raises(ValueError, match="Could not produce at least 2 bins"):
-        binscatter(df, "x0", "y0", controls=["z"], num_bins=5, return_type="native")
+        binscatter(
+            df_backend, "x0", "y0", controls=["z"], num_bins=5, return_type="native"
+        )
 
 
-def test_partial_out_controls_matches_statsmodels():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_partial_out_controls_matches_statsmodels(df_type):
     rng = np.random.default_rng(2025)
     n = 1500
     x0 = rng.normal(size=n)
@@ -627,8 +712,13 @@ def test_partial_out_controls_matches_statsmodels():
         }
     )
     num_bins = 12
+    df_backend = conv(df, df_type)
     df_prepped, profile = _prepare_dataframe(
-        df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+        df_backend,
+        "x0",
+        "y0",
+        controls=["z_num", "region", "campaign"],
+        num_bins=num_bins,
     )
     df_with_bins = _collect_lazyframe_to_pandas(df_prepped)
     df_result, coeffs = partial_out_controls(df_prepped, profile)
@@ -643,11 +733,16 @@ def test_partial_out_controls_matches_statsmodels():
         .mean()
         .sort_index()
     )
+    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 0.1, 0.15
+    else:
+        rtol, atol = 1e-6, 1e-6
     np.testing.assert_allclose(
         result[profile.x_name].to_numpy(),
         bin_means.to_numpy(),
-        rtol=1e-6,
-        atol=1e-6,
+        rtol=rtol,
+        atol=atol,
     )
 
     bin_dummies = pd.get_dummies(
@@ -662,10 +757,14 @@ def test_partial_out_controls_matches_statsmodels():
             control_blocks.append(dummies.to_numpy())
             control_means.append(dummies.mean().to_numpy())
     control_matrix = np.column_stack(control_blocks)
-    design_matrix = np.column_stack([bin_dummies.to_numpy(), control_matrix])
+    design_matrix = np.column_stack([bin_dummies.to_numpy(), control_matrix]).astype(
+        float
+    )
     mean_controls = np.concatenate(control_means)
 
-    model = sm.OLS(df_with_bins[profile.y_name].to_numpy(), design_matrix).fit()
+    model = sm.OLS(
+        df_with_bins[profile.y_name].to_numpy().astype(float), design_matrix
+    ).fit()
     theta = model.params
     beta = theta[: profile.num_bins]
     gamma = theta[profile.num_bins :]
@@ -674,13 +773,13 @@ def test_partial_out_controls_matches_statsmodels():
     np.testing.assert_allclose(
         result[profile.y_name].to_numpy(),
         fitted,
-        rtol=1e-6,
-        atol=1e-6,
+        rtol=rtol,
+        atol=atol,
     )
 
     beta_ref = beta - beta[0]
     beta_actual = coeffs["beta"] - coeffs["beta"][0]
-    np.testing.assert_allclose(beta_actual, beta_ref, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(beta_actual, beta_ref, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -688,7 +787,7 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
     """Test that regression coefficients are identical across backends with categorical variables."""
     if df_type == "dask":
         pytest.importorskip("dask")
-    
+
     # Create synthetic data with categorical and numeric controls
     rng = np.random.default_rng(42)
     n = 1000
@@ -696,11 +795,11 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
     z = rng.normal(size=n)
     region = rng.choice(["north", "south", "east"], size=n, p=[0.4, 0.35, 0.25])
     campaign = rng.choice(["alpha", "beta"], size=n, p=[0.6, 0.4])
-    
+
     # Define effects
     region_effect = {"north": 0.5, "south": -0.2, "east": 0.1}
     campaign_effect = {"alpha": 0.4, "beta": -0.3}
-    
+
     y0 = (
         1.1 * x0
         + 0.8 * z
@@ -708,15 +807,17 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
         + np.vectorize(campaign_effect.get)(campaign)
         + rng.normal(scale=0.3, size=n)
     )
-    
-    df = pd.DataFrame({
-        "x0": x0,
-        "y0": y0,
-        "z_num": z,
-        "region": region,
-        "campaign": campaign,
-    })
-    
+
+    df = pd.DataFrame(
+        {
+            "x0": x0,
+            "y0": y0,
+            "z_num": z,
+            "region": region,
+            "campaign": campaign,
+        }
+    )
+
     # Compute reference coefficients with pandas
     num_bins = 10
     df_ref_prepped, profile_ref = _prepare_dataframe(
@@ -724,53 +825,66 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
     )
     df_ref_result, coeffs_ref = partial_out_controls(df_ref_prepped, profile_ref)
     beta_ref = coeffs_ref["beta"]
-    
+
     # Test with the specified backend
     df_backend = convert_to_backend(df, df_type)
     df_prepped, profile = _prepare_dataframe(
-        df_backend, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
+        df_backend,
+        "x0",
+        "y0",
+        controls=["z_num", "region", "campaign"],
+        num_bins=num_bins,
     )
     df_result, coeffs = partial_out_controls(df_prepped, profile)
     beta_test = coeffs["beta"]
-    
+
     # Coefficients should match exactly (or very close) across backends
-    # Use slightly looser tolerance for distributed backends (Dask has rounding differences)
-    if df_type in ("dask",):
-        rtol, atol = 0.1, 0.1  # Dask has larger numerical differences due to partition aggregation
+    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
+    if df_type in ("dask", "pyspark"):
+        rtol, atol = 0.1, 0.15
     else:
         rtol, atol = 1e-10, 1e-10
-    
+
     np.testing.assert_allclose(
         beta_test,
         beta_ref,
         rtol=rtol,
         atol=atol,
-        err_msg=f"Beta coefficients don't match for {df_type} backend with categorical controls"
+        err_msg=f"Beta coefficients don't match for {df_type} backend with categorical controls",
     )
-    
+
     # Also verify the partialled-out y values match
-    result_pd = _collect_lazyframe_to_pandas(df_result).sort_values(profile.bin_name).reset_index(drop=True)
-    ref_pd = _collect_lazyframe_to_pandas(df_ref_result).sort_values(profile_ref.bin_name).reset_index(drop=True)
-    
+    result_pd = (
+        _collect_lazyframe_to_pandas(df_result)
+        .sort_values(profile.bin_name)
+        .reset_index(drop=True)
+    )
+    ref_pd = (
+        _collect_lazyframe_to_pandas(df_ref_result)
+        .sort_values(profile_ref.bin_name)
+        .reset_index(drop=True)
+    )
+
     np.testing.assert_allclose(
         result_pd[profile.y_name].to_numpy(),
         ref_pd[profile_ref.y_name].to_numpy(),
         rtol=rtol,
         atol=atol,
-        err_msg=f"Partialled-out y values don't match for {df_type} backend"
+        err_msg=f"Partialled-out y values don't match for {df_type} backend",
     )
 
 
-
-def test_fit_polynomial_line_matches_statsmodels():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_fit_polynomial_line_matches_statsmodels(df_type):
     rng = np.random.default_rng(1234)
     n = 400
     x = rng.normal(loc=0.5, scale=1.5, size=n)
     z = rng.normal(size=n)
     y = 1.2 + 0.9 * x - 0.3 * x**2 + 0.5 * z + rng.normal(scale=0.2, size=n)
     df = pd.DataFrame({"x0": x, "y0": y, "z": z})
+    df_backend = conv(df, df_type)
     df_prepped, profile = _prepare_dataframe(
-        df,
+        df_backend,
         x="x0",
         y="y0",
         controls=["z"],
@@ -782,10 +896,16 @@ def test_fit_polynomial_line_matches_statsmodels():
 
     design = np.column_stack([np.ones(n), x, x**2, z])
     theta, *_ = np.linalg.lstsq(design, y, rcond=None)
-    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=1e-6)
+    # Use looser tolerance for distributed backends
+    if df_type in ("dask", "pyspark"):
+        rtol = 1e-3
+    else:
+        rtol = 1e-6
+    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=rtol)
 
 
-def test_poly_line_does_not_change_bins():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_poly_line_does_not_change_bins(df_type):
     df = pd.DataFrame(
         {
             "x0": np.linspace(-3, 3, 200),
@@ -793,11 +913,15 @@ def test_poly_line_does_not_change_bins():
             + np.random.default_rng(0).normal(scale=0.1, size=200),
         }
     )
-    native = binscatter(df, "x0", "y0", num_bins=15, return_type="native")
+    df_backend = conv(df, df_type)
+    native = binscatter(df_backend, "x0", "y0", num_bins=15, return_type="native")
     with_poly = binscatter(
-        df, "x0", "y0", num_bins=15, poly_line=2, return_type="native"
+        df_backend, "x0", "y0", num_bins=15, poly_line=2, return_type="native"
     )
-    pd.testing.assert_frame_equal(native, with_poly)
+    # Convert both to pandas for comparison
+    native_pd = to_pandas_native(native).sort_values("bin").reset_index(drop=True)
+    with_poly_pd = to_pandas_native(with_poly).sort_values("bin").reset_index(drop=True)
+    pd.testing.assert_frame_equal(native_pd, with_poly_pd)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -855,12 +979,14 @@ def test_configure_compute_quantiles_monotonic(df_type):
         )
 
 
-def test_configure_compute_quantiles_single_bin_raises():
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_configure_compute_quantiles_single_bin_raises(df_type):
     """Single bin (num_bins=1) should raise ValueError."""
     rng = np.random.default_rng(444)
     x = rng.normal(size=100)
     df_pd = pd.DataFrame({"x": x})
-    df_nw = nw.from_native(df_pd).lazy()
+    df = conv(df_pd, df_type)
+    df_nw = nw.from_native(df).lazy()
 
     with pytest.raises(ValueError, match="num_bins must be at least 2"):
         configure_compute_quantiles(1, df_nw.implementation)
@@ -998,7 +1124,9 @@ def testbuild_dummies_pandas_polars(backend):
     df = convert_to_backend(df_pd, backend)
     df_nw = nw.from_native(df).lazy()
 
-    build_dummies = build_dummies_pandas if backend == "pandas" else build_dummies_polars
+    build_dummies = (
+        build_dummies_pandas if backend == "pandas" else build_dummies_polars
+    )
     df_with_dummies, dummy_cols = build_dummies(df_nw, ("cat_a", "cat_b"))
 
     # Should create dummies (drop_first=True means n-1 dummies per categorical)
@@ -1136,13 +1264,14 @@ def test_dummy_builder_constant_categorical():
     # Should return the same dataframe
     assert df_with_dummies.collect().shape == df_pd.shape
 
+
 def test_build_dummies_pandas_with_empty_controls():
     """Test pandas builder with empty categorical controls."""
     from binscatter.dummy_builders import build_dummies_pandas
     import pandas as pd
     import narwhals as nw
 
-    df_pd = pd.DataFrame({'x': [1, 2, 3], 'y': [4, 5, 6]})
+    df_pd = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
     df_nw = nw.from_native(df_pd).lazy()
 
     df_result, dummy_cols = build_dummies_pandas(df_nw, ())
@@ -1158,19 +1287,23 @@ def test_build_dummies_polars_preserves_lazy():
     import narwhals as nw
 
     # Create a lazy polars dataframe
-    df_pl = pl.DataFrame({
-        'x': [1, 2, 3, 4, 5],
-        'y': [10, 20, 30, 40, 50],
-        'cat': ['A', 'B', 'A', 'B', 'A']
-    }).lazy()
+    df_pl = pl.DataFrame(
+        {
+            "x": [1, 2, 3, 4, 5],
+            "y": [10, 20, 30, 40, 50],
+            "cat": ["A", "B", "A", "B", "A"],
+        }
+    ).lazy()
     df_nw = nw.from_native(df_pl)
 
     # Build dummies
-    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat',))
+    df_result, dummy_cols = build_dummies_polars(df_nw, ("cat",))
 
     # Verify result is still lazy
     result_native = nw.to_native(df_result)
-    assert isinstance(result_native, pl.LazyFrame), f"Expected LazyFrame, got {type(result_native)}"
+    assert isinstance(result_native, pl.LazyFrame), (
+        f"Expected LazyFrame, got {type(result_native)}"
+    )
 
     # Should have created 1 dummy (2 levels - 1)
     assert len(dummy_cols) == 1
@@ -1186,15 +1319,17 @@ def test_build_dummies_polars_with_multiple_categoricals():
     import polars as pl
     import narwhals as nw
 
-    df_pl = pl.DataFrame({
-        'x': [1, 2, 3, 4],
-        'cat_a': ['A', 'B', 'C', 'A'],
-        'cat_b': ['X', 'Y', 'X', 'Y'],
-        'cat_c': ['P', 'Q', 'R', 'P']
-    }).lazy()
+    df_pl = pl.DataFrame(
+        {
+            "x": [1, 2, 3, 4],
+            "cat_a": ["A", "B", "C", "A"],
+            "cat_b": ["X", "Y", "X", "Y"],
+            "cat_c": ["P", "Q", "R", "P"],
+        }
+    ).lazy()
     df_nw = nw.from_native(df_pl)
 
-    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat_a', 'cat_b', 'cat_c'))
+    df_result, dummy_cols = build_dummies_polars(df_nw, ("cat_a", "cat_b", "cat_c"))
 
     # cat_a: 3 levels -> 2 dummies
     # cat_b: 2 levels -> 1 dummy
@@ -1215,14 +1350,16 @@ def test_build_dummies_fallback_with_multiple_categoricals():
     import pandas as pd
     import narwhals as nw
 
-    df_pd = pd.DataFrame({
-        'x': [1, 2, 3, 4],
-        'cat_a': ['foo', 'bar', 'baz', 'foo'],
-        'cat_b': ['red', 'blue', 'red', 'blue']
-    })
+    df_pd = pd.DataFrame(
+        {
+            "x": [1, 2, 3, 4],
+            "cat_a": ["foo", "bar", "baz", "foo"],
+            "cat_b": ["red", "blue", "red", "blue"],
+        }
+    )
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_result, dummy_cols = build_dummies_fallback(df_nw, ('cat_a', 'cat_b'))
+    df_result, dummy_cols = build_dummies_fallback(df_nw, ("cat_a", "cat_b"))
 
     # cat_a: 3 levels -> 2 dummies
     # cat_b: 2 levels -> 1 dummy
@@ -1244,13 +1381,10 @@ def test_build_dummies_pandas_single_categorical():
     import pandas as pd
     import narwhals as nw
 
-    df_pd = pd.DataFrame({
-        'x': [1, 2, 3],
-        'cat': ['only_one', 'only_one', 'only_one']
-    })
+    df_pd = pd.DataFrame({"x": [1, 2, 3], "cat": ["only_one", "only_one", "only_one"]})
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_result, dummy_cols = build_dummies_pandas(df_nw, ('cat',))
+    df_result, dummy_cols = build_dummies_pandas(df_nw, ("cat",))
 
     # Single level categorical should create no dummies
     assert len(dummy_cols) == 0
@@ -1262,17 +1396,15 @@ def test_build_dummies_polars_single_categorical():
     import polars as pl
     import narwhals as nw
 
-    df_pl = pl.DataFrame({
-        'x': [1, 2, 3],
-        'cat': ['only_one', 'only_one', 'only_one']
-    }).lazy()
+    df_pl = pl.DataFrame(
+        {"x": [1, 2, 3], "cat": ["only_one", "only_one", "only_one"]}
+    ).lazy()
     df_nw = nw.from_native(df_pl)
 
-    df_result, dummy_cols = build_dummies_polars(df_nw, ('cat',))
+    df_result, dummy_cols = build_dummies_polars(df_nw, ("cat",))
 
     # Single level categorical should create no dummies
     assert len(dummy_cols) == 0
-
 
 
 def test_configure_build_dummies_dispatch():
