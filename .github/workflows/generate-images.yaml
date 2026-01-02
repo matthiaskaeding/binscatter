@@ -33,11 +33,12 @@ jobs:
 
       - name: Deploy to images branch
         run: |
+          set -euxo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          # Save images to temp location
-          cp -r images /tmp/images
+          TEMP_DIR=$(mktemp -d)
+          cp -r images "$TEMP_DIR"
 
           # Create orphan branch
           git checkout --orphan images-temp
@@ -46,11 +47,12 @@ jobs:
           find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
 
           # Copy images back
-          cp -r /tmp/images .
+          cp -r "$TEMP_DIR/images" .
 
           # Commit and force push
           git add -f images/
           git commit -m "Update README images [skip ci]"
           git push origin images-temp:images --force
 
+          rm -rf "$TEMP_DIR"
           echo "Images deployed to 'images' branch"
