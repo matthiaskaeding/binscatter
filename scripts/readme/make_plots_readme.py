@@ -7,6 +7,7 @@
 #     "plotly>=6.3",
 #     "numpy>=2.3",
 #     "pandas",
+#     "pyarrow>=17",
 # ]
 #
 # [tool.uv.sources]
