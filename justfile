@@ -29,6 +29,14 @@ make-nb:
 setup-krnl:
     uv run -m ipykernel install --user --name=binscatter --display-name "Python binscatter"
 
+# Install pre-commit hooks
+install-hooks:
+    uv tool run prek install
+
+# Run pre-commit on all files
+pre-commit:
+    uv tool run prek run --all-files
+
 install-pkg:
     uv pip install .
 
