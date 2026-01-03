@@ -77,6 +77,8 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
         regression_features=regression_features,
         polynomial_features=polynomial_features,
         x_bounds=(quantiles[0], quantiles[-1]),
+        ci="none",
+        ci_level=0.95,
     )
     df_with_bins = configure_add_bins(profile)(df_with_features, quantiles)
     return df_with_bins, profile
@@ -857,7 +859,7 @@ def test_partial_out_controls_matches_statsmodels(df_type):
         num_bins=num_bins,
     )
     df_with_bins = _collect_lazyframe_to_pandas(df_prepped)
-    df_result, coeffs = partial_out_controls(df_prepped, profile)
+    df_result, coeffs, _ = partial_out_controls(df_prepped, profile)
     result = (
         _collect_lazyframe_to_pandas(df_result)
         .sort_values(profile.bin_name)
@@ -959,7 +961,7 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
     df_ref_prepped, profile_ref = _prepare_dataframe(
         df, "x0", "y0", controls=["z_num", "region", "campaign"], num_bins=num_bins
     )
-    df_ref_result, coeffs_ref = partial_out_controls(df_ref_prepped, profile_ref)
+    df_ref_result, coeffs_ref, _ = partial_out_controls(df_ref_prepped, profile_ref)
     beta_ref = coeffs_ref["beta"]
 
     # Test with the specified backend
@@ -971,7 +973,7 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
         controls=["z_num", "region", "campaign"],
         num_bins=num_bins,
     )
-    df_result, coeffs = partial_out_controls(df_prepped, profile)
+    df_result, coeffs, _ = partial_out_controls(df_prepped, profile)
     beta_test = coeffs["beta"]
 
     # Coefficients should match exactly (or very close) across backends

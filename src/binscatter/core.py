@@ -24,6 +24,13 @@ from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
 from binscatter.dummy_builders import configure_build_dummies
+from binscatter.inference import (
+    BinAggregates,
+    IntervalResult,
+    RegressionResult,
+    compute_pointwise_ci,
+    compute_rbc_ci,
+)
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
@@ -57,6 +64,8 @@ def binscatter(
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["plotly"] = "plotly",
     poly_line: int | None = None,
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> go.Figure: ...
 
@@ -71,6 +80,8 @@ def binscatter(
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["native"] = "native",
     poly_line: int | None = None,
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> object: ...
 
@@ -84,6 +95,8 @@ def binscatter(
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["plotly", "native"] = "plotly",
     poly_line: int | None = None,
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
@@ -96,13 +109,22 @@ def binscatter(
         num_bins: Number of quantile bins to form, or ``"dpi"`` (default), ``"rule-of-thumb"`` (``"rot"``) for automatic selection.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
+        ci: Confidence interval method: ``"none"`` (default), ``"pointwise"`` for heteroskedasticity-robust CIs, or ``"rbc"`` for robust bias-corrected CIs.
+        ci_level: Confidence level for intervals (default: 0.95 for 95% CI).
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
         A Plotly figure or native dataframe, depending on ``return_type``.
+        When ``ci != "none"`` and ``return_type == "native"``, the dataframe includes ``ci_lower``, ``ci_upper``, and ``ci_std_error`` columns.
     """
     if return_type not in ("plotly", "native"):
         msg = f"Invalid return_type: {return_type}"
+        raise ValueError(msg)
+    if ci not in ("none", "pointwise", "rbc"):
+        msg = f"Invalid ci option: {ci}. Must be 'none', 'pointwise', or 'rbc'"
+        raise ValueError(msg)
+    if not (0 < ci_level < 1):
+        msg = f"ci_level must be in (0, 1), got {ci_level}"
         raise ValueError(msg)
     manual_bins: int = 0
     if isinstance(num_bins, str):
@@ -245,6 +267,8 @@ def binscatter(
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
+        ci=ci,
+        ci_level=ci_level,
     )
     add_bins = configure_add_bins(profile)
     df_prepped = add_bins(df_with_regression_features, unique_quantiles)
@@ -275,9 +299,9 @@ def binscatter(
         raise ValueError(msg)
 
     if not controls:
-        df_plotting = compute_bin_means(df_prepped, profile)
+        df_plotting, ci_result = compute_bin_means(df_prepped, profile)
     else:
-        df_plotting, _ = partial_out_controls(
+        df_plotting, _, ci_result = partial_out_controls(
             df_prepped, profile, moment_cache=moment_cache
         )
 
@@ -293,9 +317,10 @@ def binscatter(
                 profile,
                 kwargs_binscatter=kwargs,
                 polynomial_line=polynomial_line,
+                ci_result=ci_result,
             )
         case "native":
-            return make_native_dataframe(df_plotting, profile)
+            return make_native_dataframe(df_plotting, profile, ci_result=ci_result)
 
 
 class Profile(NamedTuple):
@@ -311,6 +336,8 @@ class Profile(NamedTuple):
     regression_features: Tuple[str, ...]
     polynomial_features: Tuple[str, ...]
     x_bounds: Tuple[float, float]
+    ci: Literal["none", "pointwise", "rbc"]
+    ci_level: float
 
     @property
     def x_col(self) -> nw.Expr:
@@ -394,23 +421,142 @@ class PolynomialFit(NamedTuple):
     y: np.ndarray
 
 
+def _compute_robust_vcov(
+    df_prepped: nw.LazyFrame,
+    profile: Profile,
+    XTX: np.ndarray,
+    beta: np.ndarray,
+    gamma: np.ndarray,
+    counts: np.ndarray,
+    bin_control_sums: np.ndarray,
+) -> np.ndarray:
+    """Compute heteroskedasticity-robust variance-covariance matrix for bin effects.
+
+    Uses HC-style robust standard errors accounting for within-bin heteroskedasticity.
+
+    Args:
+        df_prepped: Preprocessed dataframe with bins and controls
+        profile: Configuration profile
+        XTX: Design matrix cross-product (X'X)
+        beta: Bin fixed effects
+        gamma: Control coefficients
+        counts: Observation counts per bin
+        bin_control_sums: Sum of controls per bin
+
+    Returns:
+        Variance-covariance matrix for bin effects (num_bins x num_bins)
+    """
+    num_bins = profile.num_bins
+    k = len(profile.regression_features)
+
+    # Compute residual sum of squares per bin
+    # We need to compute squared residuals from the model y = bin_effect + controls*gamma
+    bin_idx_col = nw.col(profile.bin_name)
+    y_expr = profile.y_col
+
+    # Create mapping from bin indices to beta values
+    # For each observation, compute fitted value = beta[bin] + controls @ gamma
+    exprs = [bin_idx_col.alias("__bin_idx"), y_expr.alias("__y")]
+    if k:
+        exprs.extend(
+            [
+                nw.col(c).alias(f"__ctrl_{i}")
+                for i, c in enumerate(profile.regression_features)
+            ]
+        )
+
+    bin_data = df_prepped.select(*exprs).collect()
+    bin_indices = bin_data.get_column("__bin_idx").to_numpy()
+    y_values = bin_data.get_column("__y").to_numpy()
+
+    # Map bin indices to 0-indexed integers
+    unique_bins = np.sort(np.unique(bin_indices))
+    bin_map = {b: i for i, b in enumerate(unique_bins)}
+    bin_idx_mapped = np.array([bin_map[b] for b in bin_indices])
+
+    # Compute fitted values
+    fitted = beta[bin_idx_mapped]
+    if k:
+        controls_matrix = np.column_stack(
+            [bin_data.get_column(f"__ctrl_{i}").to_numpy() for i in range(k)]
+        )
+        fitted += controls_matrix @ gamma
+
+    # Compute squared residuals
+    residuals = y_values - fitted
+    u_sq = residuals**2
+
+    # Build the "meat" of the sandwich estimator: X' diag(u^2) X
+    # For bin-level aggregates, we sum u^2 within each bin
+    size = num_bins + k
+    XtUX = np.zeros((size, size), dtype=float)
+
+    # Diagonal blocks: sum of squared residuals per bin
+    u_sq_sums = np.zeros(num_bins, dtype=float)
+    for i in range(num_bins):
+        mask = bin_idx_mapped == i
+        u_sq_sums[i] = np.sum(u_sq[mask])
+
+    XtUX[:num_bins, :num_bins] = np.diag(u_sq_sums)
+
+    # Off-diagonal blocks involving controls
+    if k:
+        # Cross terms between bins and controls
+        cross = np.zeros((num_bins, k), dtype=float)
+        for i in range(num_bins):
+            mask = bin_idx_mapped == i
+            if k:
+                cross[i, :] = np.sum(
+                    controls_matrix[mask, :] * u_sq[mask, np.newaxis], axis=0
+                )
+
+        XtUX[:num_bins, num_bins:] = cross
+        XtUX[num_bins:, :num_bins] = cross.T
+
+        # Control-control block
+        if k:
+            ctrl_block = controls_matrix.T @ (controls_matrix * u_sq[:, np.newaxis])
+            XtUX[num_bins:, num_bins:] = ctrl_block
+
+    # Sandwich estimator: (X'X)^{-1} X'UX (X'X)^{-1}
+    try:
+        XTX_inv = np.linalg.inv(XTX)
+    except np.linalg.LinAlgError:
+        XTX_inv = np.linalg.pinv(XTX)
+
+    vcov_full = XTX_inv @ XtUX @ XTX_inv
+
+    # Extract the bin-level block
+    vcov_bins = vcov_full[:num_bins, :num_bins]
+
+    return vcov_bins
+
+
 @timed
 def partial_out_controls(
     df_prepped: nw.LazyFrame,
     profile: Profile,
     moment_cache: dict[str, float] | None = None,
-) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
-    """Compute binscatter means after partialling out controls following Cattaneo et al. (2024)."""
+) -> tuple[nw.LazyFrame, dict[str, np.ndarray], IntervalResult | None]:
+    """Compute binscatter means after partialling out controls following Cattaneo et al. (2024).
+
+    Returns:
+        Tuple of (plotting_dataframe, coefficients_dict, confidence_intervals)
+        confidence_intervals is None if profile.ci == "none"
+    """
 
     if moment_cache is None:
         moment_cache = {}
 
+    # Build aggregation expressions - include sum_y_sq if computing CIs
     agg_exprs = [
         nw.len().alias("__count"),
         profile.x_col.mean().alias(profile.x_name),
         profile.y_col.sum().alias("__sum_y"),
         *[nw.col(c).sum().alias(c) for c in profile.regression_features],
     ]
+    if profile.ci != "none":
+        agg_exprs.append((profile.y_col * profile.y_col).sum().alias("__sum_y_sq"))
 
     per_bin = (
         df_prepped.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
@@ -420,7 +566,9 @@ def partial_out_controls(
     if counts.size < profile.num_bins:
         msg = "Quantiles are not unique. Decrease number of bins."
         raise ValueError(msg)
+    x_means = per_bin.get_column(profile.x_name).to_numpy()
     sum_y = per_bin.get_column("__sum_y").to_numpy()
+    y_means = sum_y / counts
     if profile.regression_features:
         bin_control_sums = np.column_stack(
             [
@@ -487,7 +635,38 @@ def partial_out_controls(
         per_bin.select(profile.bin_name, profile.x_name).with_columns(y_vals).lazy()
     )
 
-    return df_plotting, {"beta": beta, "gamma": gamma}
+    # Compute confidence intervals if requested
+    ci_result = None
+    if profile.ci != "none":
+        sum_y_sq = per_bin.get_column("__sum_y_sq").to_numpy()
+
+        # Compute heteroskedasticity-robust variance-covariance matrix
+        vcov_bins = _compute_robust_vcov(
+            df_prepped, profile, XTX, beta, gamma, counts, bin_control_sums
+        )
+
+        aggregates = BinAggregates(
+            counts=counts,
+            x_means=x_means,
+            y_means=y_means,
+            y_fitted=fitted,
+            sum_y_sq=sum_y_sq,
+            sum_controls=bin_control_sums if k else None,
+            n_total=int(total_count),
+        )
+
+        regression_result = RegressionResult(
+            beta=fitted, gamma=gamma, vcov_bins=vcov_bins
+        )
+
+        if profile.ci == "pointwise":
+            ci_result = compute_pointwise_ci(
+                aggregates, regression_result, profile.ci_level
+            )
+        elif profile.ci == "rbc":
+            ci_result = compute_rbc_ci(aggregates, regression_result, profile.ci_level)
+
+    return df_plotting, {"beta": beta, "gamma": gamma}, ci_result
 
 
 @timed
@@ -589,11 +768,13 @@ def make_plot_plotly(
     profile: Profile,
     kwargs_binscatter: dict[str, Any],
     polynomial_line: PolynomialFit | None = None,
+    ci_result: IntervalResult | None = None,
 ) -> go.Figure:
     """Make plot from prepared dataframe.
 
     Args:
-      df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile"""
+      df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile
+      ci_result: Optional confidence interval result to display as error bars"""
     data = df_plotting.select(profile.x_name, profile.y_name).collect()
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
@@ -618,8 +799,22 @@ def make_plot_plotly(
         "template": "simple_white",
         "color_discrete_sequence": ["black"],
     }
+
+    # Add error bars if CIs are available
+    if ci_result is not None:
+        # Compute symmetric error bars from CI bounds
+        y_array = np.array(y)
+        error_y_minus = y_array - ci_result.lower
+        error_y_plus = ci_result.upper - y_array
+        scatter_args["error_y"] = {
+            "type": "data",
+            "symmetric": False,
+            "array": error_y_plus.tolist(),
+            "arrayminus": error_y_minus.tolist(),
+        }
+
     for k in kwargs_binscatter:
-        if k in ("x", "y", "range_x"):
+        if k in ("x", "y", "range_x", "error_y"):
             msg = f"px.scatter will ignore keyword argument '{k}'"
             warnings.warn(msg)
             continue
@@ -1189,14 +1384,85 @@ def _gaussian_inverse_density_squared_sum(
 
 
 @timed
-def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
-    df_plotting: nw.LazyFrame = (
-        df.group_by(profile.bin_name)
-        .agg(profile.x_col.mean(), profile.y_col.mean())
-        .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
+def compute_bin_means(
+    df: nw.LazyFrame, profile: Profile
+) -> tuple[nw.LazyFrame, IntervalResult | None]:
+    """Compute bin means and optionally confidence intervals.
+
+    Args:
+        df: Preprocessed dataframe with bins assigned
+        profile: Configuration profile including CI settings
+
+    Returns:
+        Tuple of (plotting_dataframe, confidence_intervals)
+        confidence_intervals is None if profile.ci == "none"
+    """
+    if profile.ci == "none":
+        df_plotting: nw.LazyFrame = (
+            df.group_by(profile.bin_name)
+            .agg(profile.x_col.mean(), profile.y_col.mean())
+            .with_columns(nw.col(profile.bin_name).cast(nw.Int32))
+        ).lazy()
+        return df_plotting, None
+
+    # Collect aggregates for CI computation
+    agg_exprs = [
+        nw.len().alias("__count"),
+        profile.x_col.mean().alias(profile.x_name),
+        profile.y_col.mean().alias(profile.y_name),
+        profile.y_col.sum().alias("__sum_y"),
+        (profile.y_col * profile.y_col).sum().alias("__sum_y_sq"),
+    ]
+    per_bin = df.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
+    per_bin_collected = per_bin.collect()
+
+    counts = per_bin_collected.get_column("__count").to_numpy()
+    x_means = per_bin_collected.get_column(profile.x_name).to_numpy()
+    y_means = per_bin_collected.get_column(profile.y_name).to_numpy()
+    sum_y_sq = per_bin_collected.get_column("__sum_y_sq").to_numpy()
+
+    # No controls case: simple variance estimation
+    aggregates = BinAggregates(
+        counts=counts,
+        x_means=x_means,
+        y_means=y_means,
+        y_fitted=y_means,  # No controls, so fitted = mean
+        sum_y_sq=sum_y_sq,
+        sum_controls=None,
+        n_total=int(counts.sum()),
+    )
+
+    # Compute variance for each bin
+    # Var(y_bar) = sigma^2 / n where sigma^2 = E[(y - y_bar)^2]
+    # Sample variance: s^2 = (sum_y_sq - n * y_mean^2) / (n - 1)
+    variances = np.maximum(
+        (sum_y_sq - counts * y_means**2) / np.maximum(counts - 1, 1), 0.0
+    )
+    # Standard error of the mean: SE = sqrt(s^2 / n)
+    se_means = np.sqrt(variances / counts)
+
+    # Build variance-covariance matrix (diagonal, since bins are independent)
+    vcov_bins = np.diag(se_means**2)
+
+    regression_result = RegressionResult(
+        beta=y_means, gamma=np.array([]), vcov_bins=vcov_bins
+    )
+
+    # Compute CIs based on method
+    if profile.ci == "pointwise":
+        ci_result = compute_pointwise_ci(
+            aggregates, regression_result, profile.ci_level
+        )
+    elif profile.ci == "rbc":
+        ci_result = compute_rbc_ci(aggregates, regression_result, profile.ci_level)
+    else:
+        raise ValueError(f"Unknown CI method: {profile.ci}")
+
+    df_plotting = per_bin_collected.select(
+        profile.bin_name, profile.x_name, profile.y_name
     ).lazy()
 
-    return df_plotting
+    return df_plotting, ci_result
 
 
 @timed
@@ -1241,9 +1507,34 @@ def add_polynomial_features(
 
 
 @timed
-def make_native_dataframe(df_plotting: nw.LazyFrame, profile: Profile) -> IntoDataFrame:
-    """Convert the plotting frame into the native backend expected by the caller."""
+def make_native_dataframe(
+    df_plotting: nw.LazyFrame, profile: Profile, ci_result: IntervalResult | None = None
+) -> IntoDataFrame:
+    """Convert the plotting frame into the native backend expected by the caller.
+
+    If ci_result is provided, adds ci_lower, ci_upper, and ci_std_error columns.
+    """
     df_out_nw = df_plotting.rename({profile.bin_name: "bin"}).sort("bin")
+
+    # Add CI columns if requested
+    if ci_result is not None:
+        # Collect to add the CI columns as series
+        df_collected = df_out_nw.collect()
+        ci_lower_series = nw.new_series(
+            name="ci_lower", values=ci_result.lower, backend=df_collected.implementation
+        )
+        ci_upper_series = nw.new_series(
+            name="ci_upper", values=ci_result.upper, backend=df_collected.implementation
+        )
+        ci_se_series = nw.new_series(
+            name="ci_std_error",
+            values=ci_result.std_error,
+            backend=df_collected.implementation,
+        )
+        df_out_nw = df_collected.with_columns(
+            ci_lower_series, ci_upper_series, ci_se_series
+        ).lazy()
+
     logger.debug(
         "Type of df_out_nw: %s, implementation: %s",
         type(df_out_nw),

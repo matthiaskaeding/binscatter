@@ -38,7 +38,26 @@ binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_fixed.png" alt="Binscatter: GDP per capita vs Life Expectancy (120 bins)" width="640" />
 
+### Confidence Intervals
 
+Binscatter supports computing confidence intervals for the bin-level estimates using two methods:
+
+```python
+# Pointwise confidence intervals (heteroskedasticity-robust)
+binscatter(df, "gdpPercap", "lifeExp", ci="pointwise")
+
+# Robust bias-corrected (RBC) confidence intervals
+binscatter(df, "gdpPercap", "lifeExp", ci="rbc", ci_level=0.95)
+```
+
+When `return_type="native"`, the output dataframe includes `ci_lower`, `ci_upper`, and `ci_std_error` columns:
+
+```python
+result_df = binscatter(df, "gdpPercap", "lifeExp", ci="pointwise", return_type="native")
+# result_df has columns: bin, gdpPercap, lifeExp, ci_lower, ci_upper, ci_std_error
+```
+
+Both CI methods work seamlessly with controls and across all supported backends.
 
 This package implements binscatter plots following:
 
