@@ -1,9 +1,17 @@
 repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.9.2
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
   - repo: https://github.com/kynan/nbstripout
-    rev: 0.8.1 # or latest tag
+    rev: 0.8.2
     hooks:
       - id: nbstripout
         files: '^(?!examples/demo\.ipynb).*'
+
   - repo: local
     hooks:
       - id: nbstripout-keep-output
@@ -11,3 +19,8 @@ repos:
         entry: nbstripout --keep-output
         language: system
         files: examples/demo\.ipynb
+      - id: ty
+        name: ty
+        entry: uv tool run ty check src
+        language: system
+        pass_filenames: false
