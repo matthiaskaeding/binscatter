@@ -38,7 +38,7 @@ binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_fixed.png" alt="Binscatter: GDP per capita vs Life Expectancy (120 bins)" width="640" />
 
-This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576). See the [demo notebook](examples/demo.ipynb) for more examples.
+See the [demo notebook](examples/demo.ipynb) for more examples. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
 ## Tests
 
