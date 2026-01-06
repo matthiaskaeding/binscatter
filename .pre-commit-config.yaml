@@ -3,3 +3,11 @@ repos:
     rev: 0.8.1 # or latest tag
     hooks:
       - id: nbstripout
+        files: '^(?!examples/demo\.ipynb).*'
+  - repo: local
+    hooks:
+      - id: nbstripout-keep-output
+        name: nbstripout (keep output)
+        entry: nbstripout --keep-output
+        language: system
+        files: examples/demo\.ipynb

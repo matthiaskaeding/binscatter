@@ -87,12 +87,37 @@ Tests are parametrized across backends using `@pytest.fixture` from `conftest.py
 - Commit style: brief, imperative subjects (e.g., "Add dask support")
 - For Spark work, set `SPARK_LOG_LEVEL=ERROR` to reduce log noise
 
+## Example Notebooks
+
+**IMPORTANT: When adding new features that affect plots or user-facing behavior, update the example notebooks.**
+
+The repository maintains comprehensive example notebooks in `examples/` to showcase all library features:
+
+- `examples/demo.ipynb` - Demonstrates all binscatter features with readily available datasets
+
+### When to Update Examples
+
+Update the example notebooks when you:
+- Add new parameters to the `binscatter()` function
+- Implement new plot customization options
+- Add support for new data types or backends
+- Change the visual output or plotting behavior
+- Add new automatic bin selection methods
+
+### How to Update
+
+1. Add a new cell demonstrating the feature with clear explanatory text
+2. Use readily available datasets (preferably from `plotly.express.data`)
+3. Test that the entire notebook executes without errors: `uv run jupyter nbconvert --to notebook --execute examples/demo.ipynb --output test_output.ipynb`
+4. Include the notebook updates in the same PR as the feature
+
 ## Commit & Pull Request Guidelines
 
 - Follow the active Git history style: brief, imperative commit subjects (e.g., "Add dask") with optional detail in the body.
 - Before opening a PR, ensure `just ok` and tests pass locally.
 - Include concise summaries, reference related issues, and add screenshots or HTML links if visual outputs (Plotly renders) changed.
 - Update `CHANGELOG.md` for each feature branch before merging. Add entries under the `## Unreleased` section in the appropriate subsection (`Added`, `Changed`, `Fixed`, etc.).
+- **When adding new user-facing features (especially those that change plots), update the example notebooks** (see Example Notebooks section above).
 
 ## Planning
 
