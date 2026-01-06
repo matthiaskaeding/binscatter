@@ -31,7 +31,7 @@ binscatter(df, "gdpPercap", "lifeExp")
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_dpi.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI selector)" width="640" />
 
-By default binscatter chooses bins via the DPI (Direct Plug-In) selector. Often we want more bins for a rawer look, `num_bins`overrides this:
+By default binscatter chooses bins via the DPI (Direct Plug-In) selector. Often we want more bins for a rawer look—use `num_bins` to specify the bin count:
 ```python
 binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
 ```
