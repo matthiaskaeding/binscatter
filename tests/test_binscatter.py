@@ -1060,6 +1060,37 @@ def test_poly_line_does_not_change_bins(df_type):
     pd.testing.assert_frame_equal(native_pd, with_poly_pd)
 
 
+def test_poly_line_does_not_change_y_axis_range():
+    """Test that adding poly_line doesn't change the y-axis range (issue #65)."""
+    rng = np.random.default_rng(42)
+    df = pd.DataFrame({
+        'x': np.linspace(0, 10, 100),
+        'y': np.linspace(0, 10, 100) + rng.normal(0, 2, 100)
+    })
+
+    # Create plot without poly_line
+    fig_without_poly = binscatter(df, 'x', 'y', num_bins=20)
+
+    # Create plot with poly_line
+    fig_with_poly = binscatter(df, 'x', 'y', num_bins=20, poly_line=1)
+
+    # Both figures should have explicit y-axis ranges set
+    assert fig_without_poly.layout.yaxis.range is not None, "Y-axis range should be explicitly set"
+    assert fig_with_poly.layout.yaxis.range is not None, "Y-axis range should be explicitly set with poly_line"
+
+    # The y-axis ranges should be the same
+    np.testing.assert_allclose(
+        fig_without_poly.layout.yaxis.range,
+        fig_with_poly.layout.yaxis.range,
+        rtol=1e-10,
+        err_msg="Y-axis range should not change when poly_line is added"
+    )
+
+    # Verify that the polynomial trace was added
+    assert len(fig_with_poly.data) == 2, "Should have 2 traces (scatter + polynomial)"
+    assert len(fig_without_poly.data) == 1, "Should have 1 trace (scatter only)"
+
+
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_configure_compute_quantiles_returns_correct_length(df_type):
     """Quantiles should have num_bins + 1 elements (including min and max)."""

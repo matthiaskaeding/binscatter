@@ -605,12 +605,20 @@ def make_plot_plotly(
     y = data.get_column(profile.y_name).to_list()
 
     raw_x_min, raw_x_max = profile.x_bounds
-    pad = (raw_x_max - raw_x_min) * 0.04
-    padded_range_x = (raw_x_min - pad, raw_x_max + pad)
+    pad_x = (raw_x_max - raw_x_min) * 0.04
+    padded_range_x = (raw_x_min - pad_x, raw_x_max + pad_x)
+
+    # Calculate y-axis range based on scatter points only (not polynomial)
+    y_min, y_max = min(y), max(y)
+    y_span = y_max - y_min
+    pad_y = y_span * 0.04 if y_span > 0 else 0.04
+    padded_range_y = (y_min - pad_y, y_max + pad_y)
+
     scatter_args = {
         "x": x,
         "y": y,
         "range_x": padded_range_x,
+        "range_y": padded_range_y,
         "labels": {
             "x": profile.x_name,
             "y": profile.y_name,
@@ -619,7 +627,7 @@ def make_plot_plotly(
         "color_discrete_sequence": ["black"],
     }
     for k in kwargs_binscatter:
-        if k in ("x", "y", "range_x"):
+        if k in ("x", "y", "range_x", "range_y"):
             msg = f"px.scatter will ignore keyword argument '{k}'"
             warnings.warn(msg)
             continue
