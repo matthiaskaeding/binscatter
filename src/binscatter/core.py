@@ -608,10 +608,18 @@ def make_plot_plotly(
     pad_x = (raw_x_max - raw_x_min) * 0.04
     padded_range_x = (raw_x_min - pad_x, raw_x_max + pad_x)
 
+    # Calculate y-axis range based on scatter points only
+    # This ensures consistent y-axis scaling regardless of poly_line presence
+    y_min, y_max = min(y), max(y)
+    y_span = y_max - y_min
+    pad_y = y_span * 0.04 if y_span > 0 else 0.04
+    padded_range_y = (y_min - pad_y, y_max + pad_y)
+
     scatter_args = {
         "x": x,
         "y": y,
         "range_x": padded_range_x,
+        "range_y": padded_range_y,
         "labels": {
             "x": profile.x_name,
             "y": profile.y_name,
@@ -619,15 +627,6 @@ def make_plot_plotly(
         "template": "simple_white",
         "color_discrete_sequence": ["black"],
     }
-
-    # Only set y-axis range explicitly when polynomial overlay is present
-    # to prevent autorange from including the polynomial line's extent
-    if polynomial_line is not None:
-        y_min, y_max = min(y), max(y)
-        y_span = y_max - y_min
-        pad_y = y_span * 0.04 if y_span > 0 else 0.04
-        padded_range_y = (y_min - pad_y, y_max + pad_y)
-        scatter_args["range_y"] = padded_range_y
     for k in kwargs_binscatter:
         if k in ("x", "y", "range_x", "range_y"):
             msg = f"px.scatter will ignore keyword argument '{k}'"

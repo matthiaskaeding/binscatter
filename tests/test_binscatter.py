@@ -1074,25 +1074,16 @@ def test_poly_line_does_not_change_y_axis_range():
     # Create plot with poly_line
     fig_with_poly = binscatter(df, 'x', 'y', num_bins=20, poly_line=1)
 
-    # Without poly_line, y-axis should use default autorange (None)
-    assert fig_without_poly.layout.yaxis.range is None, "Y-axis should use autorange without poly_line"
-
-    # With poly_line, y-axis range should be explicitly set based on scatter points
+    # Both figures should have explicit y-axis ranges set based on scatter points
+    assert fig_without_poly.layout.yaxis.range is not None, "Y-axis range should be explicitly set"
     assert fig_with_poly.layout.yaxis.range is not None, "Y-axis range should be explicitly set with poly_line"
 
-    # Get scatter data to calculate expected range
-    scatter_y = [y for y in fig_with_poly.data[0].y]
-    y_min, y_max = min(scatter_y), max(scatter_y)
-    y_span = y_max - y_min
-    pad_y = y_span * 0.04
-    expected_range = (y_min - pad_y, y_max + pad_y)
-
-    # Verify the y-axis range matches scatter points (not polynomial)
+    # The y-axis ranges should be identical
     np.testing.assert_allclose(
+        fig_without_poly.layout.yaxis.range,
         fig_with_poly.layout.yaxis.range,
-        expected_range,
         rtol=1e-10,
-        err_msg="Y-axis range should be based on scatter points, not polynomial"
+        err_msg="Y-axis range should be identical with and without poly_line"
     )
 
     # Verify that the polynomial trace was added
