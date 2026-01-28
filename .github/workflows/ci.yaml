@@ -3,33 +3,38 @@ name: CI
 on:
   push:
     branches:
-      - main
+    - main
   pull_request:
     branches:
-      - main
+    - main
   workflow_dispatch:
 
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    - name: Checkout
+      uses: actions/checkout@v4
 
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+    - name: Set up uv
+      uses: astral-sh/setup-uv@v3
 
-      # Optionally install a specific Python version via uv
-      - name: Install Python
-        run: uv python install 3.11
+    - name: Install Python
+      run: uv python install 3.11
 
-      - name: Install project with dev dependencies
-        run: |
-          uv venv
-          uv pip install -e .
+    - name: Install project with dev dependencies
+      run: |
+        uv venv
+        uv pip install -e .
 
-      - name: Ruff lint
-        run: uv tool run ruff check src tests
+    - name: Run ruff format
+      run: uv tool run ruff format --check
 
-      - name: Run fast tests (skip PySpark)
-        run: uv run --no-default-groups --group ci pytest tests
+    - name: Run ruff lint
+      run: uv tool run ruff check
+
+    - name: Run ty
+      run: uv tool run ty@latest check src
+
+    - name: Run fast tests (skip PySpark)
+      run: uv run --no-default-groups --group ci pytest tests

@@ -1063,27 +1063,33 @@ def test_poly_line_does_not_change_bins(df_type):
 def test_poly_line_does_not_change_y_axis_range():
     """Test that adding poly_line doesn't change the y-axis range (issue #65)."""
     rng = np.random.default_rng(42)
-    df = pd.DataFrame({
-        'x': np.linspace(0, 10, 100),
-        'y': np.linspace(0, 10, 100) + rng.normal(0, 2, 100)
-    })
+    df = pd.DataFrame(
+        {
+            "x": np.linspace(0, 10, 100),
+            "y": np.linspace(0, 10, 100) + rng.normal(0, 2, 100),
+        }
+    )
 
     # Create plot without poly_line
-    fig_without_poly = binscatter(df, 'x', 'y', num_bins=20)
+    fig_without_poly = binscatter(df, "x", "y", num_bins=20)
 
     # Create plot with poly_line
-    fig_with_poly = binscatter(df, 'x', 'y', num_bins=20, poly_line=1)
+    fig_with_poly = binscatter(df, "x", "y", num_bins=20, poly_line=1)
 
     # Both figures should have explicit y-axis ranges set based on scatter points
-    assert fig_without_poly.layout.yaxis.range is not None, "Y-axis range should be explicitly set"
-    assert fig_with_poly.layout.yaxis.range is not None, "Y-axis range should be explicitly set with poly_line"
+    assert fig_without_poly.layout.yaxis.range is not None, (
+        "Y-axis range should be explicitly set"
+    )
+    assert fig_with_poly.layout.yaxis.range is not None, (
+        "Y-axis range should be explicitly set with poly_line"
+    )
 
     # The y-axis ranges should be identical
     np.testing.assert_allclose(
         fig_without_poly.layout.yaxis.range,
         fig_with_poly.layout.yaxis.range,
         rtol=1e-10,
-        err_msg="Y-axis range should be identical with and without poly_line"
+        err_msg="Y-axis range should be identical with and without poly_line",
     )
 
     # Verify that the polynomial trace was added

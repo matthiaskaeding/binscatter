@@ -201,7 +201,7 @@ def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
     if not categorical_controls:
         return df, ()
 
-    from pyspark.sql import functions as F  # type: ignore[import-not-found]
+    from pyspark.sql import functions as F
 
     native = nw.to_native(df)
     agg_exprs = [

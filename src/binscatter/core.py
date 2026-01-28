@@ -696,15 +696,15 @@ def split_columns(
             else:
                 if schema is not None:
                     if hasattr(schema, "names") and callable(schema.names):
-                        names = schema.names()  # type: ignore[attr-defined]
+                        names = schema.names()
                         if names:
-                            return tuple(names)  # type: ignore[arg-type]
+                            return tuple(names)
                     if isinstance(schema, dict):
                         return tuple(schema.keys())
         columns: Tuple[str, ...] = tuple()
         if hasattr(selection, "columns"):
             try:
-                columns = tuple(selection.columns)  # type: ignore[attr-defined]
+                columns = tuple(selection.columns)
             except Exception:  # pragma: no cover - backend quirk
                 columns = tuple()
         if columns:
