@@ -5,7 +5,7 @@ lint:
 
 # type check
 ty:
-    uv tool run ty check src
+    uv tool run ty@latest check src
 
 # lint, format and type check
 ok:
