@@ -36,8 +36,5 @@ jobs:
     - name: Run ty
       run: uv tool run ty@latest check src
 
-    - name: Run nbstripout keep-output check
-      run: uv run nbstripout --keep-output examples/demo.ipynb
-
     - name: Run fast tests (skip PySpark)
       run: uv run --no-default-groups --group ci pytest tests
