@@ -16,23 +16,23 @@ uv pip install -e .[dev]
 uv run python examples/demo.py
 
 # Linting and formatting
-just lint                    # runs ruff format + ruff check --fix
+make lint                    # runs ruff format + ruff check --fix
 
 # Type checking
-just ty                      # runs ty check src
+make ty                      # runs ty check src
 
 # Both lint and type check
-just ok
+make ok
 ```
 
 ## Testing
 
 ```bash
 # Fast tests (excludes PySpark)
-just ftest
+make ftest
 
 # Full test suite including PySpark
-just test
+make test
 
 # Run a single test
 uv run pytest tests/test_binscatter.py::test_name -v
@@ -82,7 +82,7 @@ Tests are parametrized across backends using `@pytest.fixture` from `conftest.py
 
 ## Coding Conventions
 
-- **Run `just ok` before committing** to ensure code is formatted and type-checked
+- **Run `make ok` before committing** to ensure code is formatted and type-checked
 - Use lazy imports (try/except blocks) for optional backend dependencies—never assume Spark, DuckDB, or Dask availability in core paths
 - Commit style: brief, imperative subjects (e.g., "Add dask support")
 - For Spark work, set `SPARK_LOG_LEVEL=ERROR` to reduce log noise
@@ -114,7 +114,7 @@ Update the example notebooks when you:
 ## Commit & Pull Request Guidelines
 
 - Follow the active Git history style: brief, imperative commit subjects (e.g., "Add dask") with optional detail in the body.
-- Before opening a PR, ensure `just ok` and tests pass locally.
+- Before opening a PR, ensure `make ok` and tests pass locally.
 - Include concise summaries, reference related issues, and add screenshots or HTML links if visual outputs (Plotly renders) changed.
 - Update `CHANGELOG.md` for each feature branch before merging. Add entries under the `## Unreleased` section in the appropriate subsection (`Added`, `Changed`, `Fixed`, etc.).
 - **When adding new user-facing features (especially those that change plots), update the example notebooks** (see Example Notebooks section above).
