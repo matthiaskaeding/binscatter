@@ -1,6 +1,31 @@
 # PLAN.md
 
-## Active Plan: DPI (Direct Plug-In) Bin Selector
+## Active Plan: None
+
+All tracked workstreams are complete. Add a new active plan here when another task begins.
+
+---
+
+## Archived Plan: Replace justfile With Makefile
+
+**Status: Complete**
+
+### Overview
+
+Move the developer workflow from the previous `justfile` commands to a standard `Makefile`, ensure all documentation references are updated, and provide a default help target that explains the available commands.
+
+### Steps
+
+1. **Switch Branches**: Move to `main`, create a feature branch, and ensure the workspace is clean.
+2. **Introduce Makefile**: Recreate the existing developer targets in a new `Makefile`, add a user-friendly default help target, and remove the old `justfile`.
+3. **Update References**: Replace every instruction that mentions the old command runner (README, contributor guides, CHANGELOG, etc.) with the appropriate `make` invocations and add a CHANGELOG entry for the switch.
+4. **Verification**: Run a representative target (e.g., `make help`) to confirm the Makefile works and search the repo to confirm no lingering references remain.
+
+---
+
+## Archived Plan: DPI (Direct Plug-In) Bin Selector
+
+**Status: Deferred**
 
 ### Overview
 

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- Replaced the `justfile` with a Makefile that includes a default help target and updated all contributor docs to reference the new commands.
+
 ### Fixed
 - Fixed y-axis scaling issue with `poly_line` parameter (#65): When polynomial overlay was enabled, the y-axis would auto-scale to include both scatter points and polynomial line, causing unexpected rescaling. Now the y-axis range is always explicitly set based on binned scatter points (with 4% padding), ensuring identical y-axis scaling whether `poly_line` is present or not.
 
@@ -43,7 +46,7 @@
 - Automatic rule-of-thumb bin selection for the canonical binscatter implementation.
 - Plotly-friendly x-axis padding to keep the rightmost point away from the edge.
 - CI workflow plus optional PySpark tests, enabling PR checks.
-- ``just`` targets for lint, test, and plot replication, and README documentation improvements.
+- Developer command targets for lint, test, and plot replication plus README documentation improvements.
 
 ### Changed
 - Refactored ``partial_out_controls`` internals into reusable helpers so future regression overlays can share the same cached cross-moments.

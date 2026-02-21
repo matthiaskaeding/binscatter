@@ -42,5 +42,5 @@ See the [demo notebook](examples/demo.ipynb) for more examples. This package imp
 
 ## Tests
 
-- Run the full backend matrix, including PySpark: `just test`
-- Use the faster run without PySpark: `just ftest`
+- Run the full backend matrix, including PySpark: `make test`
+- Use the faster run without PySpark: `make ftest`
