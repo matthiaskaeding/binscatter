@@ -36,7 +36,10 @@ def convert_to_backend(df: pd.DataFrame, backend: str):
                 .appName("binscatter-tests")
                 .getOrCreate()
             )
-            return spark.createDataFrame(df)
+            # pandas>=3 stores strings in the "str" dtype, whose missing value
+            # createDataFrame turns into the literal string "NaN". Round-trip
+            # through object dtype so nulls stay null on the Spark side.
+            return spark.createDataFrame(df.astype(object).where(df.notna(), None))
         case _:
             raise ValueError(f"Unknown backend '{backend}'")
 
