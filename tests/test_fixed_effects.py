@@ -14,7 +14,12 @@ import pytest
 
 import binscatter.fixed_effects as fe_mod
 from binscatter import binscatter, core
-from binscatter.fixed_effects import demean_within, group_codes, within_correct
+from binscatter.fixed_effects import (
+    absorb_map,
+    demean_within,
+    group_codes,
+    within_correct,
+)
 from tests.conftest import DF_BACKENDS, convert_to_backend
 
 DF_TYPE_PARAMS = [
@@ -161,6 +166,117 @@ def test_absorbed_matches_statsmodels_oracle(force_absorption):
     expected = beta + means @ gamma
 
     np.testing.assert_allclose(fitted, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_multiway_map_matches_statsmodels_oracle(force_absorption):
+    """Eager MAP matches explicit dummies for two fixed effects."""
+    sm = pytest.importorskip("statsmodels.api")
+    df = make_panel(n=1800, n_groups=14, seed=61)
+    num_bins = 6
+
+    fitted = run_native(df, controls=["age", "grp", "region"], num_bins=num_bins)
+
+    edges = np.quantile(df["x"], np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(
+        np.searchsorted(edges, df["x"], side="right") - 1, 0, num_bins - 1
+    )
+    bin_dummies = pd.get_dummies(pd.Series(bin_idx), drop_first=False)
+    grp_dummies = pd.get_dummies(df["grp"], drop_first=True)
+    region_dummies = pd.get_dummies(df["region"], drop_first=True)
+    controls = np.column_stack(
+        [df["age"].to_numpy(), grp_dummies, region_dummies]
+    ).astype(float)
+    design = np.column_stack([bin_dummies, controls]).astype(float)
+    theta = sm.OLS(df["y"].to_numpy(), design).fit().params
+    expected = theta[:num_bins] + controls.mean(axis=0) @ theta[num_bins:]
+
+    np.testing.assert_allclose(fitted, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_eager_routes_multiple_high_cardinality_fixed_effects(force_absorption):
+    df = make_panel(n=600, n_groups=8, seed=63)
+    lazy, _, numeric, categorical = core.clean_df(
+        df, ("age", "grp", "region"), "x", "y"
+    )
+
+    _, features, eager_absorbed = core.add_regression_features(
+        lazy,
+        numeric_controls=numeric,
+        categorical_controls=categorical,
+        multiway_map=True,
+    )
+    _, lazy_features, lazy_absorbed = core.add_regression_features(
+        lazy,
+        numeric_controls=numeric,
+        categorical_controls=categorical,
+        multiway_map=False,
+    )
+
+    assert eager_absorbed == ("grp", "region")
+    assert features == ("age",)
+    assert lazy_absorbed == "grp"
+    assert len(lazy_features) > 1  # age plus one-hot region
+
+
+def test_polars_eager_uses_map_but_lazy_retains_one_way(monkeypatch, force_absorption):
+    pl = pytest.importorskip("polars")
+    df = make_panel(n=700, n_groups=8, seed=65)
+    calls = 0
+    original = core.absorb_map
+
+    def counting_map(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(core, "absorb_map", counting_map)
+    binscatter(
+        pl.from_pandas(df),
+        "x",
+        "y",
+        controls=["age", "grp", "region"],
+        num_bins=5,
+        return_type="native",
+    )
+    assert calls > 0
+
+    calls = 0
+    binscatter(
+        pl.from_pandas(df).lazy(),
+        "x",
+        "y",
+        controls=["age", "grp", "region"],
+        num_bins=5,
+        return_type="native",
+    )
+    assert calls == 0
+
+
+def test_multiway_map_is_invariant_to_row_order_and_labels(force_absorption):
+    df = make_panel(n=1200, n_groups=11, seed=69)
+    expected = run_native(df, controls=["age", "grp", "region"], num_bins=5)
+
+    changed = df.sample(frac=1.0, random_state=4).reset_index(drop=True)
+    changed["grp"] = changed["grp"].map(
+        {label: f"firm-{idx * 17}" for idx, label in enumerate(df["grp"].unique())}
+    )
+    changed["region"] = changed["region"].map(
+        {label: f"area-{idx * 13}" for idx, label in enumerate(df["region"].unique())}
+    )
+    actual = run_native(changed, controls=["age", "grp", "region"], num_bins=5)
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_multiway_map_handles_nested_fixed_effects(force_absorption):
+    df = make_panel(n=1400, n_groups=12, seed=71)
+    group_number = df["grp"].str.removeprefix("g").astype(int)
+    df["parent"] = np.where(group_number < 6, "first", "second")
+
+    nested = run_native(df, controls=["age", "grp", "parent"], num_bins=5)
+    one_way = run_native(df, controls=["age", "grp"], num_bins=5)
+
+    np.testing.assert_allclose(nested, one_way, rtol=1e-8, atol=1e-8)
 
 
 # --------------------------------------------------------------------------
@@ -357,6 +473,45 @@ def test_poly_line_with_absorbed_fixed_effect(monkeypatch, force_absorption):
     np.testing.assert_allclose(absorbed_line, fig2.data[1].y, rtol=1e-8, atol=1e-8)
 
 
+@pytest.mark.parametrize("selector", ["rot", "dpi"])
+def test_multiway_map_automatic_selectors(selector, force_absorption):
+    df = make_panel(n=1800, n_groups=14, seed=73)
+    out = binscatter(
+        df,
+        "x",
+        "y",
+        controls=["age", "grp", "region"],
+        num_bins=selector,
+        return_type="native",
+    )
+    assert len(out) >= 2
+    assert np.all(np.isfinite(out["y"].to_numpy()))
+
+
+def test_poly_line_with_multiway_map(monkeypatch, force_absorption):
+    df = make_panel(n=1600, n_groups=12, seed=79)
+    mapped = binscatter(
+        df,
+        "x",
+        "y",
+        controls=["age", "grp", "region"],
+        num_bins=5,
+        poly_line=2,
+    )
+    without_absorption(monkeypatch)
+    one_hot = binscatter(
+        df,
+        "x",
+        "y",
+        controls=["age", "grp", "region"],
+        num_bins=5,
+        poly_line=2,
+    )
+    np.testing.assert_allclose(
+        mapped.data[1].y, one_hot.data[1].y, rtol=1e-8, atol=1e-8
+    )
+
+
 # --------------------------------------------------------------------------
 # 6. Nulls
 # --------------------------------------------------------------------------
@@ -406,6 +561,31 @@ def test_high_cardinality_completes():
     assert np.all(np.isfinite(out))
 
 
+def test_two_high_cardinality_integer_ids_complete_with_map():
+    rng = np.random.default_rng(83)
+    n = 12_000
+    firm = rng.integers(0, 120, n)
+    worker = rng.integers(0, 90, n)
+    x = rng.normal(size=n)
+    y = (
+        0.6 * x
+        + rng.normal(size=120)[firm]
+        + rng.normal(size=90)[worker]
+        + rng.normal(size=n)
+    )
+    df = pd.DataFrame({"x": x, "y": y, "firm": firm, "worker": worker})
+
+    out = run_native(
+        df,
+        controls=["firm", "worker"],
+        categorical=["firm", "worker"],
+        num_bins=8,
+    )
+
+    assert out.shape == (8,)
+    assert np.all(np.isfinite(out))
+
+
 # --------------------------------------------------------------------------
 # 8. Unit tests for the algebra itself
 # --------------------------------------------------------------------------
@@ -441,3 +621,27 @@ def test_demean_within_zeroes_group_means():
     out = demean_within(values, codes, counts)
     sums = np.bincount(codes, weights=out, minlength=counts.size)
     np.testing.assert_allclose(sums, 0.0, atol=1e-10)
+
+
+def test_absorb_map_matches_explicit_dummy_projection():
+    rng = np.random.default_rng(89)
+    n = 700
+    first = rng.integers(0, 17, n)
+    second = rng.integers(0, 9, n)
+    values = rng.normal(size=(n, 3))
+
+    projected = absorb_map(values, (first, second))
+    first_dummies = pd.get_dummies(first, drop_first=False).to_numpy(dtype=float)
+    second_dummies = pd.get_dummies(second, drop_first=True).to_numpy(dtype=float)
+    dummies = np.column_stack([first_dummies, second_dummies])
+    expected = values - dummies @ np.linalg.lstsq(dummies, values, rcond=None)[0]
+
+    np.testing.assert_allclose(projected, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_absorb_map_reports_non_convergence():
+    rng = np.random.default_rng(97)
+    n = 500
+    groups = (rng.integers(0, 20, n), rng.integers(0, 15, n))
+    with pytest.raises(ValueError, match="did not converge"):
+        absorb_map(rng.normal(size=n), groups, max_iterations=1)

@@ -1,6 +1,39 @@
 # PLAN.md
 
-_No active feature plan._
+## Active Plan: Eager Multi-Way Fixed Effects With MAP
+
+**Status: Complete**
+
+### Objective
+
+Support multiple high-cardinality fixed effects on eager, in-memory dataframes with
+the standard method of alternating projections (MAP), while preserving the current
+exact one-way moment correction for lazy and distributed backends.
+
+### Design
+
+1. Keep automatic categorical discovery and the existing `categorical=` override.
+2. Continue one-hot encoding low-cardinality categoricals everywhere.
+3. Continue the exact one-way aggregate absorption path when only one categorical
+   clears `ABSORB_MIN_LEVELS`, on every backend.
+4. On eager inputs, route two or more high-cardinality categoricals to MAP. Apply
+   cyclic group demeaning jointly to the response and regression design until a
+   documented convergence tolerance is met.
+5. On lazy and distributed inputs, retain the current behavior: absorb the largest
+   categorical and one-hot encode the remainder.
+6. Use the same MAP projection for final bin estimates, ROT and DPI selection, and
+   polynomial overlays so every consumer fits the same model.
+
+### Verification
+
+1. Compare eager multi-way MAP estimates against explicit dummy OLS and the forced
+   one-hot path.
+2. Test convergence, non-convergence, label invariance, row-order invariance,
+   nested factors, and integer IDs supplied through `categorical=`.
+3. Verify eager pandas and Polars route to MAP while lazy/distributed inputs retain
+   one-way absorption.
+4. Run focused tests across backends, formatting, linting, typing, the fast suite,
+   and the example notebook.
 
 ---
 

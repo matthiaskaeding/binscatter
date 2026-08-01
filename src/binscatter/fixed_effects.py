@@ -15,8 +15,9 @@ counts, group sums, and the bin x group crosstab are needed -- two aggregations,
 independent of the number of levels, and no per-row residuals are materialized.
 
 This is the Mundlak transform applied at the moment level. It is exact for a single
-categorical, because ``D'D`` is diagonal; with two absorbed factors ``D'D`` picks up
-incidence blocks and there is no closed form (the two-way fixed effects problem).
+categorical, because ``D'D`` is diagonal. Eager inputs with multiple
+high-cardinality factors use the standard method of alternating projections (MAP)
+instead: cyclically subtracting each factor's group means until convergence.
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 _FE_COUNT = "__fe_count"
+
+MAP_TOLERANCE = 1e-8
+MAP_MAX_ITERATIONS = 10_000
 
 
 @dataclass
@@ -88,6 +92,71 @@ def demean_within(
     return values - (sums / counts)[codes]
 
 
+def absorb_map(
+    values: np.ndarray,
+    groups: Sequence[np.ndarray],
+    *,
+    tolerance: float = MAP_TOLERANCE,
+    max_iterations: int = MAP_MAX_ITERATIONS,
+) -> np.ndarray:
+    """Absorb multiple fixed effects by alternating group-mean projections.
+
+    Each sweep subtracts the group means for every factor in turn. This is the
+    standard MAP algorithm used by high-dimensional fixed-effect estimators. The
+    returned array has the same dimensionality as ``values`` and the input is never
+    mutated.
+
+    Raises:
+        ValueError: If fewer than two factors are supplied, inputs are malformed,
+            or the projections do not converge within ``max_iterations``.
+    """
+    if len(groups) < 2:
+        raise ValueError("MAP requires at least two fixed-effect columns.")
+    if tolerance <= 0:
+        raise ValueError("MAP tolerance must be positive.")
+    if max_iterations < 1:
+        raise ValueError("MAP max_iterations must be at least one.")
+
+    original = np.asarray(values, dtype=float)
+    was_vector = original.ndim == 1
+    if was_vector:
+        result = original[:, None].copy()
+    elif original.ndim == 2:
+        result = original.copy()
+    else:
+        raise ValueError("MAP values must be a one- or two-dimensional array.")
+
+    encoded: list[tuple[np.ndarray, np.ndarray]] = []
+    for factor in groups:
+        factor_values = np.asarray(factor)
+        if factor_values.ndim != 1 or factor_values.size != result.shape[0]:
+            raise ValueError(
+                "Every MAP fixed-effect column must be one-dimensional and match "
+                "the number of rows in values."
+            )
+        encoded.append(group_codes(factor_values))
+
+    for _ in range(max_iterations):
+        previous = result.copy()
+        for codes, counts in encoded:
+            sums = np.zeros((counts.size, result.shape[1]), dtype=float)
+            for column in range(result.shape[1]):
+                sums[:, column] = np.bincount(
+                    codes, weights=result[:, column], minlength=counts.size
+                )
+            result -= (sums / counts[:, None])[codes]
+
+        change = float(np.max(np.abs(result - previous), initial=0.0))
+        scale = max(float(np.max(np.abs(previous), initial=0.0)), 1.0)
+        if change <= tolerance * scale:
+            return result[:, 0] if was_vector else result
+
+    raise ValueError(
+        "Multi-way fixed-effect absorption did not converge after "
+        f"{max_iterations} iterations (tolerance={tolerance:g})."
+    )
+
+
 #: Below this many levels the one-hot path is kept, so existing results do not move.
 #:
 #: Absorbing is exact for the bin estimates, but the DPI selector's sandwich variance
@@ -112,12 +181,20 @@ ABSORB_MIN_LEVELS = 50
 
 
 def select_absorbed(
-    df: nw.LazyFrame, categorical_controls: tuple[str, ...]
-) -> str | None:
-    """Pick the categorical control to absorb: the one with the most levels.
+    df: nw.LazyFrame,
+    categorical_controls: tuple[str, ...],
+    *,
+    multiway: bool = False,
+) -> str | tuple[str, ...] | None:
+    """Pick the categorical controls to absorb.
 
     Returns ``None`` when there is nothing to absorb. Costs a single pass computing
     ``n_unique`` for every categorical control at once.
+
+    With ``multiway=True``, two or more controls clearing the absorption threshold
+    are returned as a tuple for MAP. A single eligible control is still returned as
+    a string for the exact one-way path. With ``multiway=False``, only the
+    highest-cardinality control is returned, preserving lazy/distributed behavior.
 
     A constant categorical is never absorbed: it carries no information, and the
     one-hot path already drops it, so absorbing it would only introduce a degenerate
@@ -130,6 +207,19 @@ def select_absorbed(
         *(nw.col(c).n_unique().alias(c) for c in categorical_controls)
     ).collect()
     cardinalities = {c: int(counts.item(0, c)) for c in categorical_controls}
+    eligible = tuple(
+        column
+        for column in categorical_controls
+        if cardinalities[column] >= ABSORB_MIN_LEVELS
+    )
+    if multiway and len(eligible) >= 2:
+        logger.debug(
+            "[fixed_effects] cardinalities=%s absorbing_with_map=%s",
+            cardinalities,
+            eligible,
+        )
+        return eligible
+
     absorbed = max(categorical_controls, key=lambda c: cardinalities[c])
     if cardinalities[absorbed] < ABSORB_MIN_LEVELS:
         logger.debug(

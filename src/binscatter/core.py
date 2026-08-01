@@ -25,6 +25,7 @@ from plotly import graph_objects as go
 from binscatter.dummy_builders import configure_build_dummies
 from binscatter.fixed_effects import (
     FEMoments,
+    absorb_map,
     compute_fe_moments,
     demean_within,
     group_codes,
@@ -107,7 +108,9 @@ def binscatter(
         categorical: Controls to treat as categorical regardless of dtype, for integer-coded
             identifiers such as ``firm_id`` that would otherwise enter as a single linear term.
             Must be a subset of ``controls``. This is an override, not a declaration: string
-            columns are still detected automatically.
+            columns are still detected automatically. Eager inputs absorb multiple
+            high-cardinality categoricals with alternating projections; lazy and distributed
+            inputs retain one-way aggregate absorption and encode the remaining categoricals.
         num_bins: Number of quantile bins to form, or ``"dpi"`` (default), ``"rule-of-thumb"`` (``"rot"``) for automatic selection.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
@@ -192,6 +195,7 @@ def binscatter(
             df,
             numeric_controls=numeric_columns,
             categorical_controls=categorical_columns,
+            multiway_map=not is_lazy_input,
         )
     )
     logger.debug("[binscatter] regression features total=%d", len(regression_features))
@@ -340,7 +344,7 @@ class Profile(NamedTuple):
     regression_features: tuple[str, ...]
     polynomial_features: tuple[str, ...]
     x_bounds: tuple[float, float]
-    fe_name: str | None = None
+    fe_name: str | tuple[str, ...] | None = None
 
     @property
     def x_col(self) -> nw.Expr:
@@ -349,6 +353,14 @@ class Profile(NamedTuple):
     @property
     def y_col(self) -> nw.Expr:
         return nw.col(self.y_name)
+
+
+def _fe_names(fe_name: str | tuple[str, ...] | None) -> tuple[str, ...]:
+    if fe_name is None:
+        return ()
+    if isinstance(fe_name, str):
+        return (fe_name,)
+    return fe_name
 
 
 def _moment_alias(kind: str, *parts: str) -> str:
@@ -424,6 +436,66 @@ class PolynomialFit(NamedTuple):
     y: np.ndarray
 
 
+def _partial_out_controls_map(
+    df_prepped: nw.LazyFrame,
+    profile: Profile,
+    fe_names: tuple[str, ...],
+) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
+    """Partial out multiple eager fixed effects with alternating projections."""
+    agg_exprs = [
+        nw.len().alias("__count"),
+        profile.x_col.mean().alias(profile.x_name),
+    ]
+    per_bin = (
+        df_prepped.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
+    ).collect()
+    if per_bin.shape[0] < profile.num_bins:
+        raise ValueError("Quantiles are not unique. Decrease number of bins.")
+
+    required = (
+        profile.bin_name,
+        profile.y_name,
+        *profile.regression_features,
+        *fe_names,
+    )
+    native = df_prepped.select(*(nw.col(c) for c in required)).collect().to_pandas()
+    bin_labels = per_bin.get_column(profile.bin_name).to_list()
+    bin_lookup = {label: idx for idx, label in enumerate(bin_labels)}
+    bin_idx = np.asarray([bin_lookup[label] for label in native[profile.bin_name]])
+
+    bin_design = np.zeros((native.shape[0], profile.num_bins), dtype=float)
+    bin_design[np.arange(native.shape[0]), bin_idx] = 1.0
+    if profile.regression_features:
+        controls = native[list(profile.regression_features)].to_numpy(dtype=float)
+    else:
+        controls = np.zeros((native.shape[0], 0), dtype=float)
+    design = np.column_stack([bin_design, controls])
+    response = native[profile.y_name].to_numpy(dtype=float)
+    groups = tuple(native[name].to_numpy() for name in fe_names)
+
+    projected = absorb_map(np.column_stack([response, design]), groups)
+    projected_response = projected[:, 0]
+    projected_design = projected[:, 1:]
+    theta = np.linalg.lstsq(projected_design, projected_response, rcond=None)[0]
+
+    beta = theta[: profile.num_bins]
+    gamma = theta[profile.num_bins :]
+    # MAP removes the common level along with the fixed effects. Recover their
+    # sample-average contribution so the curve stays on the original y scale.
+    level = float(np.mean(response - design @ theta))
+    fitted = beta + level
+    if gamma.size:
+        fitted = fitted + controls.mean(axis=0) @ gamma
+
+    y_vals = nw.new_series(
+        name=profile.y_name, values=fitted, backend=per_bin.implementation
+    )
+    df_plotting = (
+        per_bin.select(profile.bin_name, profile.x_name).with_columns(y_vals).lazy()
+    )
+    return df_plotting, {"beta": beta, "gamma": gamma}
+
+
 @timed
 def partial_out_controls(
     df_prepped: nw.LazyFrame,
@@ -434,6 +506,10 @@ def partial_out_controls(
 
     if moment_cache is None:
         moment_cache = {}
+
+    fe_names = _fe_names(profile.fe_name)
+    if len(fe_names) > 1:
+        return _partial_out_controls_map(df_prepped, profile, fe_names)
 
     agg_exprs = [
         nw.len().alias("__count"),
@@ -495,10 +571,10 @@ def partial_out_controls(
     bin_y = sum_y.astype(float, copy=False)
 
     fe_moments: FEMoments | None = None
-    if profile.fe_name is not None:
+    if fe_names:
         fe_moments = compute_fe_moments(
             df_prepped,
-            fe_name=profile.fe_name,
+            fe_name=fe_names[0],
             bin_name=profile.bin_name,
             bin_labels=per_bin.get_column(profile.bin_name).to_list(),
             feature_names=profile.regression_features,
@@ -597,13 +673,26 @@ def _fit_polynomial_line(
         xtx[1:, 0] = column_sums
 
     fe_level = 0.0
-    if profile.fe_name is not None and feature_names:
+    fe_names = _fe_names(profile.fe_name)
+    if len(fe_names) > 1 and feature_names:
+        required = (profile.y_name, *feature_names, *fe_names)
+        native = df_prepped.select(*(nw.col(c) for c in required)).collect().to_pandas()
+        response = native[profile.y_name].to_numpy(dtype=float)
+        design = native[list(feature_names)].to_numpy(dtype=float)
+        groups = tuple(native[name].to_numpy() for name in fe_names)
+        projected = absorb_map(np.column_stack([response, design]), groups)
+        feature_coefs = np.linalg.lstsq(projected[:, 1:], projected[:, 0], rcond=None)[
+            0
+        ]
+        fe_level = float(np.mean(response - design @ feature_coefs))
+        coefficients = np.concatenate([[0.0], feature_coefs])
+    elif fe_names and feature_names:
         # Absorbing removes the intercept, so the design is the features alone.
         # The overlay level is restored from the mean fixed effect, exactly as in
         # partial_out_controls.
         moments = compute_fe_moments(
             df_prepped,
-            fe_name=profile.fe_name,
+            fe_name=fe_names[0],
             feature_names=feature_names,
             response_exprs={"y": profile.y_col},
         )
@@ -909,15 +998,74 @@ def clean_df(
     return df_filtered.lazy(), is_lazy_input, numeric_controls, categorical_controls
 
 
+def _select_rule_of_thumb_bins_map(
+    df: nw.LazyFrame,
+    x: str,
+    y: str,
+    regression_features: tuple[str, ...],
+    fe_names: tuple[str, ...],
+) -> int:
+    """Compute ROT after projecting an eager design over multiple fixed effects."""
+    data_cols = (x, *regression_features)
+    required = (y, *data_cols, *fe_names)
+    native = df.select(*(nw.col(c) for c in required)).collect().to_pandas()
+    response = native[y].to_numpy(dtype=float)
+    design = native[list(data_cols)].to_numpy(dtype=float)
+    groups = tuple(native[name].to_numpy() for name in fe_names)
+    projected = absorb_map(np.column_stack([response, design]), groups)
+    response_within = projected[:, 0]
+    design_within = projected[:, 1:]
+    beta = np.linalg.lstsq(design_within, response_within, rcond=None)[0]
+
+    n_obs = response.size
+    if n_obs <= 1:
+        raise ValueError(
+            "Rule-of-thumb selector needs at least two observations in the design."
+        )
+    x_values = native[x].to_numpy(dtype=float)
+    std_x = float(np.std(x_values))
+    if std_x <= 0:
+        raise ValueError(
+            "Rule-of-thumb selector requires the x column to have positive variance."
+        )
+    mean_x = float(np.mean(x_values))
+    sum_inv_density_sq = _gaussian_inverse_density_squared_sum(df, x, mean_x, std_x)
+
+    bias_constant = (
+        (1.0 / 12.0) * float(beta[0] ** 2) * (sum_inv_density_sq / float(n_obs))
+    )
+    if bias_constant <= 0 or not math.isfinite(bias_constant):
+        raise ValueError(
+            "Rule-of-thumb selector estimated a non-positive bias constant; "
+            "consider specifying num_bins explicitly."
+        )
+
+    residuals = response_within - design_within @ beta
+    variance_constant = float(residuals @ residuals) / float(n_obs)
+    if variance_constant <= 0 or not math.isfinite(variance_constant):
+        raise ValueError(
+            "Rule-of-thumb selector estimated a non-positive variance constant; "
+            "consider specifying num_bins explicitly."
+        )
+
+    prefactor = (2.0 * bias_constant) / variance_constant
+    computed_bins = max(2, round(prefactor ** (1.0 / 3.0) * n_obs ** (1.0 / 3.0)))
+    return min(max(2, n_obs // 10), computed_bins)
+
+
 @timed
 def _select_rule_of_thumb_bins(
     df: nw.LazyFrame,
     x: str,
     y: str,
     regression_features: tuple[str, ...],
-    fe_name: str | None = None,
+    fe_name: str | tuple[str, ...] | None = None,
 ) -> int:
     """Implement the SA-4.1 rule-of-thumb selector (currently for p=0, v=0)."""
+    fe_names = _fe_names(fe_name)
+    if len(fe_names) > 1:
+        return _select_rule_of_thumb_bins_map(df, x, y, regression_features, fe_names)
+
     data_cols: tuple[str, ...] = (x, *regression_features)
     stats = _collect_rule_of_thumb_stats(df, data_cols, y)
     n_obs = stats.item(0, "__n")
@@ -954,7 +1102,7 @@ def _select_rule_of_thumb_bins(
             xtx[idx + 1, jdx + 1] = value
             xtx[jdx + 1, idx + 1] = value
 
-    if fe_name is None:
+    if not fe_names:
         beta_y = _solve_normal_equations(xtx, xty)
         beta_y_sq = _solve_normal_equations(xtx, xty_sq)
         # With an intercept in the design, OLS fitted values sum to the response
@@ -967,7 +1115,7 @@ def _select_rule_of_thumb_bins(
         # columns alone, within-transformed via their group sums.
         moments = compute_fe_moments(
             df,
-            fe_name=fe_name,
+            fe_name=fe_names[0],
             feature_names=data_cols,
             response_exprs={"y": nw.col(y), "y_sq": nw.col(y) * nw.col(y)},
         )
@@ -1036,14 +1184,13 @@ def _select_dpi_bins(
     x: str,
     y: str,
     regression_features: tuple[str, ...],
-    fe_name: str | None = None,
+    fe_name: str | tuple[str, ...] | None = None,
 ) -> int:
     """Implement the SA-4.2 direct plug-in selector (for p=0, s=0, v=0)."""
     pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features, fe_name)
 
-    required_cols = (x, y) + regression_features
-    if fe_name is not None:
-        required_cols = required_cols + (fe_name,)
+    fe_names = _fe_names(fe_name)
+    required_cols = (x, y) + regression_features + fe_names
     collected = df.select(*(nw.col(col) for col in required_cols)).collect()
     native = collected.to_pandas()
 
@@ -1057,7 +1204,7 @@ def _select_dpi_bins(
     else:
         controls = None
 
-    raw_groups = native[fe_name].to_numpy() if fe_name is not None else None
+    raw_groups = tuple(native[name].to_numpy() for name in fe_names)
 
     mask = np.isfinite(x_values) & np.isfinite(y_values)
     if controls is not None:
@@ -1068,8 +1215,7 @@ def _select_dpi_bins(
         y_values = y_values[mask]
         if controls is not None:
             controls = controls[mask]
-        if raw_groups is not None:
-            raw_groups = raw_groups[mask]
+        raw_groups = tuple(groups[mask] for groups in raw_groups)
 
     n_obs = x_values.size
     if n_obs < 5:
@@ -1077,12 +1223,13 @@ def _select_dpi_bins(
 
     fe_codes: np.ndarray | None = None
     fe_counts: np.ndarray | None = None
-    if raw_groups is not None:
+    map_groups: tuple[np.ndarray, ...] = ()
+    if len(raw_groups) == 1:
         # Already materialized here, so absorb by demeaning directly rather than via
         # the moment correction. y and the controls are residualized within group;
         # x stays raw because bins are formed on the original scale. Demeaning runs
         # after the finite mask so group means reflect the rows actually used.
-        fe_codes, fe_counts = group_codes(raw_groups)
+        fe_codes, fe_counts = group_codes(raw_groups[0])
         y_values = demean_within(y_values, fe_codes, fe_counts)
         if controls is not None:
             controls = np.column_stack(
@@ -1091,6 +1238,14 @@ def _select_dpi_bins(
                     for j in range(controls.shape[1])
                 ]
             )
+    elif len(raw_groups) > 1:
+        map_groups = raw_groups
+        if controls is None:
+            y_values = absorb_map(y_values, map_groups)
+        else:
+            projected = absorb_map(np.column_stack([y_values, controls]), map_groups)
+            y_values = projected[:, 0]
+            controls = projected[:, 1:]
 
     constants = _estimate_dpi_imse_constants(
         x_values,
@@ -1099,6 +1254,7 @@ def _select_dpi_bins(
         pilot_bins,
         fe_codes,
         fe_counts,
+        map_groups,
     )
     if constants is None:
         return pilot_bins
@@ -1124,12 +1280,13 @@ def _estimate_dpi_imse_constants(
     pilot_bins: int,
     fe_codes: np.ndarray | None = None,
     fe_counts: np.ndarray | None = None,
+    map_groups: tuple[np.ndarray, ...] = (),
 ) -> tuple[float, float] | None:
     """Compute the IMSE bias/variance constants for the DPI selector.
 
-    When ``fe_codes`` is given the caller has already demeaned ``y_values`` and
-    ``controls``; the spline design and the bin dummies are within-transformed here
-    so the whole system stays consistent with Frisch-Waugh-Lovell.
+    The caller has already projected ``y_values`` and ``controls`` over any fixed
+    effects. The spline and bin designs receive the same projection here so the
+    whole system stays consistent with Frisch-Waugh-Lovell.
     """
     n_obs = x_values.size
     if n_obs == 0:
@@ -1155,7 +1312,9 @@ def _estimate_dpi_imse_constants(
     interior_knots = edges[1:-1]
     spline_design = _linear_spline_design(x_norm, interior_knots)
     fit_design = spline_design
-    if fe_codes is not None and fe_counts is not None:
+    if map_groups:
+        fit_design = absorb_map(spline_design, map_groups)
+    elif fe_codes is not None and fe_counts is not None:
         # Within-transform the basis so the fitted coefficients are the within
         # estimates. The intercept column collapses to zero; lstsq handles the
         # resulting rank deficiency and the derivative only reads columns 1 onward.
@@ -1187,14 +1346,19 @@ def _estimate_dpi_imse_constants(
     if bias_cons is None:
         return None
 
-    variance_cons = _compute_dpi_variance_constant(
-        y_values,
-        controls,
-        bin_idx,
-        bin_counts,
-        fe_codes,
-        fe_counts,
-    )
+    if map_groups:
+        variance_cons = _compute_dpi_variance_constant_map(
+            y_values, controls, bin_idx, bin_counts, map_groups
+        )
+    else:
+        variance_cons = _compute_dpi_variance_constant(
+            y_values,
+            controls,
+            bin_idx,
+            bin_counts,
+            fe_codes,
+            fe_counts,
+        )
     if variance_cons is None:
         return None
 
@@ -1258,6 +1422,41 @@ def _compute_dpi_bias_constant(
     )
     bias_residuals = bias_raw[valid] - bin_means[bin_idx[valid]]
     return float(np.mean(bias_residuals**2))
+
+
+def _compute_dpi_variance_constant_map(
+    y_values: np.ndarray,
+    controls: np.ndarray | None,
+    bin_idx: np.ndarray,
+    bin_counts: np.ndarray,
+    groups: tuple[np.ndarray, ...],
+) -> float | None:
+    """Compute DPI's HC1 variance from an explicitly MAP-projected design."""
+    num_bins = bin_counts.size
+    bin_design = np.zeros((y_values.size, num_bins), dtype=float)
+    bin_design[np.arange(y_values.size), bin_idx] = 1.0
+    projected_bins = absorb_map(bin_design, groups)
+    if controls is not None and controls.size:
+        design = np.column_stack([projected_bins, controls])
+    else:
+        design = projected_bins
+
+    try:
+        theta = np.linalg.lstsq(design, y_values, rcond=None)[0]
+        bread = np.linalg.pinv(design.T @ design)
+    except np.linalg.LinAlgError:
+        return None
+    residuals = y_values - design @ theta
+    meat = design.T @ (design * (residuals**2)[:, None])
+    rank = int(np.linalg.matrix_rank(design))
+    residual_dof = y_values.size - rank
+    if residual_dof <= 0:
+        return None
+    covariance = (y_values.size / residual_dof) * (bread @ meat @ bread)
+    variance_sum = float(np.trace(covariance[:num_bins, :num_bins]))
+    if not math.isfinite(variance_sum) or variance_sum <= 0:
+        return None
+    return variance_sum * (num_bins / y_values.size)
 
 
 def _compute_dpi_variance_constant(
@@ -1447,21 +1646,29 @@ def add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: tuple[str, ...],
     categorical_controls: tuple[str, ...],
-) -> tuple[nw.LazyFrame, tuple[str, ...], str | None]:
+    *,
+    multiway_map: bool = False,
+) -> tuple[
+    nw.LazyFrame,
+    tuple[str, ...],
+    str | tuple[str, ...] | None,
+]:
     """Inject numeric controls and one-hot categorical controls when requested.
 
     The highest-cardinality categorical is absorbed rather than encoded, so it is
-    excluded from the dummies and returned as the third element. Remaining
-    categoricals are one-hot encoded as before and ride along inside the control
-    block, where the within correction handles them for free.
+    excluded from the dummies and returned as the third element. With
+    ``multiway_map=True``, two or more categoricals clearing the threshold are
+    returned as a tuple for MAP. Remaining categoricals are one-hot encoded and
+    ride along inside the control block.
     """
     if not numeric_controls and not categorical_controls:
         return df, (), None
     if numeric_controls and not categorical_controls:
         return df, numeric_controls, None
 
-    absorbed = select_absorbed(df, categorical_controls)
-    remaining = tuple(c for c in categorical_controls if c != absorbed)
+    absorbed = select_absorbed(df, categorical_controls, multiway=multiway_map)
+    absorbed_names = _fe_names(absorbed)
+    remaining = tuple(c for c in categorical_controls if c not in absorbed_names)
     if not remaining:
         return df, numeric_controls, absorbed
 

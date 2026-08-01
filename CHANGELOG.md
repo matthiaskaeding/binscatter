@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- Eager dataframes now absorb two or more high-cardinality categorical controls with the standard method of alternating projections (MAP). This adds scalable multi-way fixed effects for pandas and eager Polars inputs without changing the exact one-way aggregate path used by lazy and distributed backends; ROT, DPI, polynomial overlays, and final bin estimates all use the same projection.
 - Benchmark tests comparing binscatter's bin dot values and automatic bin counts (ROT and DPI, with and without controls) directly against the `binsreg` Python package's own reference output, using its canonical simulation dataset (checked in at `data/binsreg_sim.csv`) (#71).
 - Property-based tests in `tests/test_properties.py` using Hypothesis, covering structural invariants (bin count, ordering, range containment), invariance under row permutation and control rescaling, equivariance under affine maps of `x` and `y`, dropping of null/non-finite rows, and label-independence of categorical controls (#53).
 - `.github/workflows/publish.yaml`: publishing is driven by GitHub Releases, so cutting a release is the single action that ships a version and pushes to `main` never publish (#72). The release tag is checked against the version in `pyproject.toml` before anything is built, so a release tagged `v0.1.0` cannot ship a `0.4.0` artifact, and upload uses PyPI trusted publishing rather than a stored API token. `workflow_dispatch` runs the same build and `twine check` as a dry run that stops short of publishing.
