@@ -4,6 +4,23 @@ _No active feature plan._
 
 ---
 
+## Archived Plan: Resolve PR #80 Merge Conflicts
+
+**Status: Complete.**
+
+Current `main` was merged into `claude/issue-71-binsreg-benchmark`. Both sets of
+changelog entries and test imports were preserved, while `uv.lock` remains deleted
+per current repository policy. Focused benchmark/property tests, the fast suite,
+the affected PySpark tests, formatting, linting, and type checking all pass.
+
+1. Merge current `main` into `claude/issue-71-binsreg-benchmark` in an isolated
+   checkout.
+2. Preserve both changelog histories and all compatible test imports.
+3. Keep `uv.lock` deleted, matching current repository policy.
+4. Run focused tests and repository checks, then push the resolution.
+
+---
+
 ## Archived Plan: Verify Default DPI With Controls on Discrete `x` (#70)
 
 **Status: Complete** — closes #70.

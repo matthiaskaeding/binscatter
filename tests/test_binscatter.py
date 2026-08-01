@@ -1,5 +1,6 @@
 import uuid
 from collections.abc import Iterable
+from pathlib import Path
 
 import dask.dataframe as dd
 import duckdb
@@ -11,6 +12,7 @@ import plotly.graph_objs as go
 import polars as pl
 import pytest
 import statsmodels.api as sm
+from binsreg import binsreg as binsreg_fit
 from binsreg import binsregselect
 
 from binscatter.core import (
@@ -41,6 +43,15 @@ else:  # pragma: no cover - optional dependency
     pyspark = None
 
 RNG = np.random.default_rng(42)
+
+# Reference simulation data from the `binsreg` Python package (the official
+# companion package for Cattaneo, Crump, Farrell & Feng (2024), "On Binscatter",
+# American Economic Review 114(5): 1488-1514).
+BINSREG_SIM_PATH = Path(__file__).resolve().parents[1] / "data" / "binsreg_sim.csv"
+
+
+def _load_binsreg_sim_data() -> pd.DataFrame:
+    return pd.read_csv(BINSREG_SIM_PATH)
 
 
 def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = None):
@@ -634,6 +645,81 @@ def test_dpi_small_sample():
     assert ours >= 2
     assert ours <= n // 5
     assert abs(ours - int(theirs)) <= 1
+
+
+# --------------------------------------------------------------------------
+# Benchmark against binsreg's actual dot values, not just its bin-count
+# selectors, using the reference simulation data shipped with the `binsreg`
+# Python package (Cattaneo et al. 2024).
+# --------------------------------------------------------------------------
+
+
+def test_binscatter_matches_binsreg_sim_no_controls():
+    df = _load_binsreg_sim_data()
+    num_bins = 20
+
+    reference = binsreg_fit(df["y"], df["x"], nbins=num_bins, noplot=True)
+    ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
+
+    result = binscatter(df, "x", "y", num_bins=num_bins, return_type="native")
+    result = result.sort_values("x").reset_index(drop=True)
+
+    np.testing.assert_allclose(
+        result["x"].to_numpy(), ref_dots["x"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result["y"].to_numpy(), ref_dots["fit"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+
+
+@pytest.mark.parametrize(
+    "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
+)
+def test_rule_of_thumb_matches_binsreg_sim(controls):
+    """ROT bin count agrees with binsreg on the reference simulation data."""
+    df = _load_binsreg_sim_data()
+    w = df[controls].to_numpy() if controls else None
+
+    ours = _get_rot_bins(df, "x", "y", controls=controls)
+    theirs = int(binsregselect(df["y"], df["x"], w=w).nbinsrot_regul)
+
+    assert abs(ours - theirs) <= 1
+
+
+@pytest.mark.parametrize(
+    "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
+)
+def test_dpi_matches_binsreg_sim(controls):
+    """DPI bin count agrees with binsreg on the reference simulation data."""
+    df = _load_binsreg_sim_data()
+    w = df[controls].to_numpy() if controls else None
+
+    ours = _get_dpi_bins(df, "x", "y", controls=controls)
+    theirs = int(binsregselect(df["y"], df["x"], w=w).nbinsdpi)
+
+    assert abs(ours - theirs) <= 2
+
+
+def test_binscatter_matches_binsreg_sim_with_controls():
+    df = _load_binsreg_sim_data()
+    num_bins = 20
+
+    reference = binsreg_fit(
+        df["y"], df["x"], w=df[["w"]].to_numpy(), nbins=num_bins, noplot=True
+    )
+    ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
+
+    result = binscatter(
+        df, "x", "y", controls=["w"], num_bins=num_bins, return_type="native"
+    )
+    result = result.sort_values("x").reset_index(drop=True)
+
+    np.testing.assert_allclose(
+        result["x"].to_numpy(), ref_dots["x"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result["y"].to_numpy(), ref_dots["fit"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
