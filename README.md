@@ -55,7 +55,7 @@ Use `ci_level` to change the level (default `0.95`). With `return_type="native"`
 
 Intervals are only trustworthy when the number of bins is well above the IMSE-optimal choice, so pass `num_bins` explicitly rather than relying on the automatic selectors — binscatter warns if you don't.
 
-See the [demo notebook](examples/demo.ipynb) for more examples. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
+See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. Its lightweight source lives at [`examples/demo.ipynb`](examples/demo.ipynb); GitHub Actions executes it after relevant pushes to `main` and publishes the output separately so generated plots do not inflate the main branch. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
 ## Tests
 
