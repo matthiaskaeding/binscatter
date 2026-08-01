@@ -1020,7 +1020,10 @@ def _estimate_dpi_imse_constants(
 
 def _quantile_edges(x_norm: np.ndarray, num_bins: int) -> np.ndarray:
     quantiles = np.linspace(0.0, 1.0, num_bins + 1)
-    edges = np.quantile(x_norm, quantiles, method="linear")
+    try:
+        edges = np.quantile(x_norm, quantiles, method="linear")
+    except TypeError:  # numpy<1.22 compatibility
+        edges = np.quantile(x_norm, quantiles, interpolation="linear")  # type: ignore[call-overload]
     unique_edges = np.unique(edges)
     return unique_edges
 

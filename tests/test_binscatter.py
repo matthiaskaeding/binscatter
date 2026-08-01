@@ -317,7 +317,7 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
                 assert isinstance(quant_df, pl.DataFrame)
                 quant_df_pd = quant_df.to_pandas()
             case "duckdb":
-                want = duckdb.DuckDBPyRelation
+                want = duckdb.duckdb.DuckDBPyRelation
                 assert isinstance(quant_df, want), f"{want=}\ngot={type(quant_df)}"
                 quant_df_pd = quant_df.df()
             case "pyspark":

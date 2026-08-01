@@ -9,9 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# uv lockfile is not committed in this repo
-uv.lock
-
 # Downloaded reference data (fetched via `make dl-sims`)
 data/
 binscatter_ref.pdf
