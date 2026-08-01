@@ -561,6 +561,40 @@ def test_dpi_works_across_backends(df_type):
     assert result_pd.shape[0] <= n // 5
 
 
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_default_dpi_handles_discrete_x_with_controls(df_type):
+    """The default DPI selector supports controls when x has only two values."""
+    rng = np.random.default_rng(987)
+    x = np.tile([0.0, 1.0], 50)
+    control = rng.normal(size=100)
+    base = pd.DataFrame(
+        {
+            "x0": x,
+            # The steep signal and low noise force the ROT pilot above the two
+            # feasible bins, so DPI has to deduplicate its pilot quantile edges.
+            "y0": 8.0 * x + 1.5 * control + rng.normal(scale=0.05, size=100),
+            "z_ctrl": control,
+        }
+    )
+    assert _get_rot_bins(base, "x0", "y0", controls=["z_ctrl"]) > 2
+    expected_x, expected_y = _manual_binscatter_with_controls(
+        base, 2, control_cols=["z_ctrl"]
+    )
+    native = binscatter(
+        conv(base, df_type),
+        "x0",
+        "y0",
+        controls=["z_ctrl"],
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native).sort_values("bin").reset_index(drop=True)
+
+    assert result_pd.shape[0] == 2
+    assert result_pd["bin"].nunique() == 2
+    np.testing.assert_allclose(result_pd["x0"].to_numpy(), expected_x)
+    np.testing.assert_allclose(result_pd["y0"].to_numpy(), expected_y)
+
+
 def test_dpi_skewed_data():
     """DPI works with skewed distributions."""
     rng = np.random.default_rng(201)
