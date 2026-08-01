@@ -32,6 +32,7 @@ from binscatter.fixed_effects import (
     select_absorbed,
     within_correct,
 )
+from binscatter.inference import IntervalResult, compute_intervals
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
@@ -66,6 +67,8 @@ def binscatter(
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["plotly"] = "plotly",
     poly_line: int | None = None,
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> go.Figure: ...
 
@@ -81,6 +84,8 @@ def binscatter(
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["native"] = "native",
     poly_line: int | None = None,
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> object: ...
 
@@ -95,6 +100,8 @@ def binscatter(
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["plotly", "native"] = "plotly",
     poly_line: int | None = None,
+    ci: Literal["none", "pointwise", "rbc"] = "none",
+    ci_level: float = 0.95,
     **kwargs,
 ) -> object:
     """Creates a binned scatter plot by grouping x values into quantile bins and plotting mean y values.
@@ -111,6 +118,13 @@ def binscatter(
         num_bins: Number of quantile bins to form, or ``"dpi"`` (default), ``"rule-of-thumb"`` (``"rot"``) for automatic selection.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
+        ci: Confidence intervals to report alongside the dots. ``"pointwise"`` gives the
+            heteroskedasticity-robust interval for the binscatter estimator itself, centred
+            on each dot. ``"rbc"`` gives the robust bias-corrected interval for the
+            underlying regression function, built from the next-order fit; it is a valid
+            interval for the true conditional mean and is deliberately not centred on the
+            dot. Default ``"none"``.
+        ci_level: Confidence level used when ``ci`` is not ``"none"``. Default ``0.95``.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
     Returns:
@@ -148,6 +162,14 @@ def binscatter(
             raise TypeError("poly_line must be an integer in {1, 2, 3}")
         if poly_line not in (1, 2, 3):
             raise ValueError("poly_line must be one of {1, 2, 3}")
+    if ci not in ("none", "pointwise", "rbc"):
+        msg = f"Invalid ci option: {ci}. Expected one of 'none', 'pointwise', 'rbc'."
+        raise ValueError(msg)
+    if ci != "none":
+        if isinstance(ci_level, bool) or not isinstance(ci_level, (int, float)):
+            raise TypeError("ci_level must be a number strictly between 0 and 1")
+        if not 0.0 < float(ci_level) < 1.0:
+            raise ValueError("ci_level must lie strictly between 0 and 1")
 
     controls = _clean_controls(controls)
     logger.debug(
@@ -274,6 +296,7 @@ def binscatter(
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
         fe_name=absorbed_fe,
+        bin_edges=unique_quantiles,
     )
     add_bins = configure_add_bins(profile)
     df_prepped = add_bins(df_with_regression_features, unique_quantiles)
@@ -310,6 +333,18 @@ def binscatter(
             df_prepped, profile, moment_cache=moment_cache
         )
 
+    if ci != "none":
+        if auto_bins:
+            warnings.warn(
+                "Confidence intervals are only valid when the number of bins is well "
+                f"above the IMSE-optimal choice, but num_bins={final_num_bins} was "
+                f"picked by the {auto_bins.upper()} selector to minimise IMSE. Pass a "
+                "larger num_bins explicitly for intervals you can rely on.",
+                stacklevel=2,
+            )
+        intervals = compute_intervals(df_prepped, profile, ci, float(ci_level))
+        df_plotting = _attach_intervals(df_plotting, profile, intervals)
+
     polynomial_line: PolynomialFit | None = None
     if poly_line is not None and return_type == "plotly":
         cache = moment_cache or {}
@@ -341,6 +376,9 @@ class Profile(NamedTuple):
     polynomial_features: tuple[str, ...]
     x_bounds: tuple[float, float]
     fe_name: str | None = None
+    #: The ``num_bins + 1`` quantile boundaries the bins were cut on. Only the
+    #: inference path needs them; everything else works off the bin labels.
+    bin_edges: tuple[float, ...] = ()
 
     @property
     def x_col(self) -> nw.Expr:
@@ -555,6 +593,23 @@ def partial_out_controls(
     return df_plotting, {"beta": beta, "gamma": gamma}
 
 
+def _attach_intervals(
+    df_plotting: nw.LazyFrame, profile: Profile, intervals: IntervalResult
+) -> nw.LazyFrame:
+    """Add the interval columns to the plotting frame, aligned by bin order.
+
+    ``compute_bin_means`` does not sort, so the frame is sorted here before the
+    interval arrays (which are in bin order) are attached.
+    """
+    collected = df_plotting.sort(profile.bin_name).collect()
+    backend = collected.implementation
+    return collected.with_columns(
+        nw.new_series(name="ci_lower", values=intervals.lower, backend=backend),
+        nw.new_series(name="ci_upper", values=intervals.upper, backend=backend),
+        nw.new_series(name="ci_std_error", values=intervals.std_error, backend=backend),
+    ).lazy()
+
+
 @timed
 def _fit_polynomial_line(
     df_prepped: nw.LazyFrame,
@@ -682,7 +737,8 @@ def make_plot_plotly(
 
     Args:
       df_prepped (nw.LazyFrame): Prepared dataframe. Has three columns: bin, x, y with names in profile"""
-    data = df_plotting.select(profile.x_name, profile.y_name).collect()
+    collected = df_plotting.collect()
+    data = collected.select(profile.x_name, profile.y_name)
     if data.shape[0] < profile.num_bins:
         raise ValueError("Quantiles are not unique. Decrease number of bins.")
 
@@ -691,6 +747,11 @@ def make_plot_plotly(
         msg = f"Unique number of bins is {len(set(x))} fewer than {profile.num_bins} as desired. Decrease parameter num_bins."
         raise ValueError(msg)
     y = data.get_column(profile.y_name).to_list()
+
+    has_ci = {"ci_lower", "ci_upper"}.issubset(set(collected.columns))
+    if has_ci:
+        ci_lower = collected.get_column("ci_lower").to_list()
+        ci_upper = collected.get_column("ci_upper").to_list()
 
     raw_x_min, raw_x_max = profile.x_bounds
     pad_ratio = 0.06872
@@ -701,6 +762,11 @@ def make_plot_plotly(
     # Calculate y-axis range based on scatter points only
     # Plotly auto-range expands ~6.9% beyond the data span, so match that feel
     y_min, y_max = min(y), max(y)
+    if has_ci:
+        # Interval bars are data, not decoration: clipping them would understate
+        # the uncertainty the caller asked to see.
+        y_min = min(y_min, *ci_lower)
+        y_max = max(y_max, *ci_upper)
     y_span = y_max - y_min
     pad_ratio_y = 0.06872
     pad_y = y_span * pad_ratio_y if y_span > 0 else 1.0
@@ -731,6 +797,26 @@ def make_plot_plotly(
     else:
         warnings.warn(
             "binscatter plot respects provided 'size' keyword; default marker size of 8 skipped."
+        )
+    if has_ci:
+        # Drawn as segments rather than plotly error bars: a robust bias-corrected
+        # interval is not centred on its dot, and error bars can only express an
+        # offset from the marker.
+        bar_x: list[float | None] = []
+        bar_y: list[float | None] = []
+        for xi, lo, hi in zip(x, ci_lower, ci_upper):
+            bar_x.extend((xi, xi, None))
+            bar_y.extend((lo, hi, None))
+        figure.add_trace(
+            go.Scatter(
+                x=bar_x,
+                y=bar_y,
+                mode="lines",
+                name="Confidence interval",
+                showlegend=False,
+                hoverinfo="skip",
+                line={"color": "black", "width": 1},
+            )
         )
     if polynomial_line is not None:
         figure.add_trace(
