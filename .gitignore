@@ -8,9 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
-
-# Downloaded reference data (fetched via `make dl-sims`)
-data/
 binscatter_ref.pdf
 *.png
 .DS_Store

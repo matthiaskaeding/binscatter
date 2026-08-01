@@ -3,7 +3,7 @@
 ## Unreleased
 
 ### Added
-- Benchmark tests comparing binscatter's bin dot values directly against the `binsreg` Python package's own reference output, using its canonical simulation dataset (`data/binsreg_sim.csv`, fetched via `make dl-sims`) (#71).
+- Benchmark tests comparing binscatter's bin dot values directly against the `binsreg` Python package's own reference output, using its canonical simulation dataset (checked in at `data/binsreg_sim.csv`) (#71).
 
 ## 0.3.1 - 2026-01-29
 

@@ -46,13 +46,11 @@ RNG = np.random.default_rng(42)
 
 # Reference simulation data from the `binsreg` Python package (the official
 # companion package for Cattaneo, Crump, Farrell & Feng (2024), "On Binscatter",
-# American Economic Review 114(5): 1488-1514). Fetch via `make dl-sims`.
+# American Economic Review 114(5): 1488-1514).
 BINSREG_SIM_PATH = Path(__file__).resolve().parents[1] / "data" / "binsreg_sim.csv"
 
 
 def _load_binsreg_sim_data() -> pd.DataFrame:
-    if not BINSREG_SIM_PATH.exists():
-        pytest.skip(f"Run `make dl-sims` to fetch {BINSREG_SIM_PATH}")
     return pd.read_csv(BINSREG_SIM_PATH)
 
 
