@@ -13,9 +13,15 @@ statsmodels oracle), but the DPI selector's sandwich variance is not invariant t
 the reparameterization: the one-hot design is full rank because `drop_first` pins
 the level, while the within system is rank-deficient by one, so `pinv` returns a
 min-norm inverse and the per-bin variances differ (~0.4x on the test panel, moving
-the selected bin count from 24 to 30). Hence `ABSORB_MIN_LEVELS = 100`: small
+the selected bin count from 24 to 30). Hence `ABSORB_MIN_LEVELS = 50`: small
 categoricals stay on the existing path so no current result moves, and large ones
 get a path that works at all.
+
+The threshold was set from measurement rather than guessed (`make benchmark-fe`).
+One-hot scales roughly cubically in levels — 0.74s at 50, 3.52s at 100, 31s at 200,
+~6 minutes at 400 (pandas, n=20,000) — so 50 sits at the knee: past it users pay
+seconds for an estimator difference they cannot see, before it the existing path is
+genuinely cheap.
 
 ### Overview
 

@@ -87,14 +87,27 @@ def demean_within(
     return values - (sums / counts)[codes]
 
 
-#: Below this many levels the one-hot path is cheap, so it is kept. Absorbing is
-#: exact for the bin estimates, but the DPI selector's sandwich variance is not
-#: invariant to the reparameterization: the one-hot design is full rank (drop_first
-#: pins the level) while the within system is rank-deficient by one, so the
-#: individual bin coefficients -- and hence their variances -- are only identified
-#: up to a shift. Keeping small categoricals on the existing path means existing
-#: results do not move; absorbing large ones makes them possible at all.
-ABSORB_MIN_LEVELS = 100
+#: Below this many levels the one-hot path is kept, so existing results do not move.
+#:
+#: Absorbing is exact for the bin estimates, but the DPI selector's sandwich variance
+#: is not invariant to the reparameterization: the one-hot design is full rank
+#: (drop_first pins the level) while the within system is rank-deficient by one, so
+#: the individual bin coefficients -- and hence their variances -- are identified
+#: only up to a shift. Crossing the threshold can therefore shift the selected bin
+#: count, which is why small categoricals stay where they are.
+#:
+#: 50 is where the one-hot path starts costing real time without yet being
+#: unusable. Measured on pandas at n=20,000, num_bins=10 (`make benchmark-fe`):
+#:
+#:     levels   one-hot   absorbed
+#:         50     0.74s      0.04s
+#:        100     3.52s      0.02s
+#:        200    31.32s      0.03s
+#:        400   ~6 min       0.02s
+#:
+#: It scales roughly cubically in levels, so the exact cutoff matters less than
+#: being on the right side of the knee.
+ABSORB_MIN_LEVELS = 50
 
 
 def select_absorbed(
