@@ -36,5 +36,8 @@ jobs:
     - name: Run ty
       run: uv tool run ty@latest check src
 
+    - name: Download binsreg reference simulation data
+      run: make dl-sims
+
     - name: Run fast tests (skip PySpark)
       run: uv run --no-default-groups --group ci pytest tests
