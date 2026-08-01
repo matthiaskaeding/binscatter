@@ -49,10 +49,12 @@ jobs:
       - name: Build sdist and wheel
         run: uv build
 
+      # twine is a standalone tool rather than a project dependency, so this
+      # runs it directly instead of syncing the dev group — that group pulls in
+      # pyspark, dask and ibis, none of which have anything to do with checking
+      # metadata. Pinned for the same reason ci.yaml pins its tools.
       - name: Check metadata renders on PyPI
-        run: |
-          uv sync --group dev
-          uv run twine check dist/*
+        run: uv tool run twine@7.0.0 check dist/*
 
       - uses: actions/upload-artifact@v4
         with:
