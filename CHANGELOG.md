@@ -16,6 +16,7 @@
 
 ### Removed
 - Stopped committing `uv.lock`; dependency versions are no longer pinned in the repo.
+- Dropped the requirement that contributors keep a written plan in `PLAN.md`, and deleted the file. Its contents were entirely archived plans for work that has already shipped, and the instruction is gone from both `AGENTS.md` and `CLAUDE.md`, so no contributor guide asks for a plan file any more.
 
 ### Fixed
 - `_quantile_edges` (`core.py`, `bin_selectors.py`) no longer carries a `numpy<1.22` fallback passing the `interpolation=` keyword that NumPy removed in 2.0. The project requires `numpy>=2.3`, so the `except TypeError` branch was unreachable and its `type: ignore` was masking a real overload error.
