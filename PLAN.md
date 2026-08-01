@@ -2,8 +2,8 @@
 
 ## Active Plan: Absorb Fixed Effects (Mundlak) + `categorical=` Parameter
 
-**Status: Implemented, released as 0.4.0** — closes #69. Remaining: update
-`examples/demo.ipynb` with a `categorical=` / high-cardinality example.
+**Status: Complete, released as 0.4.0** — closes #69. Multi-way absorption is
+tracked separately in #73.
 
 ### Outcome note
 
