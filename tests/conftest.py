@@ -64,31 +64,17 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         action="store_true",
         help="Run tests that require PySpark (skipped by default)",
     )
-    parser.addoption(
-        "--skip-benchmarks",
-        action="store_true",
-        help="Skip timing-sensitive benchmarks",
-    )
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "pyspark: mark test as requiring PySpark and --run-pyspark"
     )
-    config.addinivalue_line(
-        "markers", "benchmark: timing-sensitive test, skippable via --skip-benchmarks"
-    )
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    if config.getoption("--skip-benchmarks"):
-        skip_bench = pytest.mark.skip(reason="--skip-benchmarks was passed")
-        for item in items:
-            if "benchmark" in item.keywords:
-                item.add_marker(skip_bench)
-
     if config.getoption("--run-pyspark"):
         return
 

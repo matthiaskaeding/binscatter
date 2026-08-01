@@ -397,6 +397,11 @@ def test_high_cardinality_completes():
             "firm_id": g,
         }
     )
+    # Assert the routing decision directly rather than by timing it: if this ever
+    # falls back to one-hot the test would still pass, just take minutes.
+    lazy, _, _, categorical = core.clean_df(df, ("firm_id",), "x", "y", ("firm_id",))
+    assert fe_mod.select_absorbed(lazy, categorical) == "firm_id"
+
     out = run_native(df, controls=["firm_id"], categorical=["firm_id"], num_bins=10)
     assert out.shape == (10,)
     assert np.all(np.isfinite(out))
