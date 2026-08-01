@@ -4,13 +4,14 @@
 
 ### Added
 - Benchmark tests comparing binscatter's bin dot values and automatic bin counts (ROT and DPI, with and without controls) directly against the `binsreg` Python package's own reference output, using its canonical simulation dataset (checked in at `data/binsreg_sim.csv`) (#71).
-- Property-based tests in `tests/test_properties.py` using Hypothesis, covering structural invariants (bin count, ordering, range containment), invariance under row permutation and control rescaling, equivariance under affine maps of `x` and `y`, dropping of null/non-finite rows, and label-independence of categorical controls (#53).
+- Property-based tests in `tests/test_properties.py` using Hypothesis, covering structural invariants (bin count, ordering, range containment), invariance under row permutation and control rescaling, equivariance under affine maps of `x` and `y`, dropping of null/non-finite rows, and label-independence of categorical controls (#53). `hypothesis>=6.100` is now a `dev` and `ci` dependency.
 - `.github/workflows/publish.yaml`: publishing is driven by GitHub Releases, so cutting a release is the single action that ships a version and pushes to `main` never publish (#72). The release tag is checked against the version in `pyproject.toml` before anything is built, so a release tagged `v0.1.0` cannot ship a `0.4.0` artifact, and upload uses PyPI trusted publishing rather than a stored API token. `workflow_dispatch` runs the same build and `twine check` as a dry run that stops short of publishing.
 - Cross-backend regression coverage for the default DPI selector with controls on
   discrete `x`, ensuring duplicate pilot quantile boundaries produce the two
   feasible bins and the correct control-adjusted estimates (#70).
 
 ### Changed
+- The contributing guides (`AGENTS.md`, `CLAUDE.md`) now require a `CHANGELOG.md` entry in the same commit or PR as the change itself, where they previously asked only for one "before merging", and say what qualifies: not just library features, but bug fixes reachable on a single backend, build and packaging changes, and tooling changes that alter what CI enforces. Entries deferred to release time are the reason the 0.3.0–0.4.0 sections had to be reconstructed from the commit log afterwards; those sections are now backfilled.
 - Upgraded ruff to 0.16.1 and fixed the 143 findings its newer default rule set reports, rather than staying on a release old enough not to raise them. The version is named in three places that are now kept in step — `ci.yaml`, `.pre-commit-config.yaml`, and `required-version` in `pyproject.toml` — so CI, contributors' hooks and a stray global install cannot lint under different rules; a mismatch fails with one line naming the cause instead of a wall of unreproducible findings. `BLE001` and `S110` are ignored in `pyproject.toml`, since the broad `except` in the optional-backend import guards is the intended behaviour rather than an oversight.
 
 ### Removed
