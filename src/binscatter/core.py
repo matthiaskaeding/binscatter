@@ -4,14 +4,13 @@ import operator
 import time
 import uuid
 import warnings
+from collections.abc import Iterable
 from functools import reduce, wraps
 from typing import (
     Any,
-    Iterable,
-    List,
     Literal,
     NamedTuple,
-    Tuple,
+    cast,
     overload,
 )
 
@@ -24,6 +23,15 @@ from narwhals.typing import IntoDataFrame
 from plotly import graph_objects as go
 
 from binscatter.dummy_builders import configure_build_dummies
+from binscatter.fixed_effects import (
+    FEMoments,
+    compute_fe_moments,
+    demean_within,
+    group_codes,
+    recover_levels,
+    select_absorbed,
+    within_correct,
+)
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
@@ -54,6 +62,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
+    categorical: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["plotly"] = "plotly",
     poly_line: int | None = None,
@@ -68,6 +77,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
+    categorical: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["native"] = "native",
     poly_line: int | None = None,
@@ -81,6 +91,7 @@ def binscatter(
     y: str,
     *,
     controls: Iterable[str] | str | None = None,
+    categorical: Iterable[str] | str | None = None,
     num_bins: int | Literal["rule-of-thumb", "rot", "dpi"] = "dpi",
     return_type: Literal["plotly", "native"] = "plotly",
     poly_line: int | None = None,
@@ -93,6 +104,10 @@ def binscatter(
         x: Name of the x column.
         y: Name of the y column.
         controls: Optional control columns to partial out (either a string or iterable of strings).
+        categorical: Controls to treat as categorical regardless of dtype, for integer-coded
+            identifiers such as ``firm_id`` that would otherwise enter as a single linear term.
+            Must be a subset of ``controls``. This is an override, not a declaration: string
+            columns are still detected automatically.
         num_bins: Number of quantile bins to form, or ``"dpi"`` (default), ``"rule-of-thumb"`` (``"rot"``) for automatic selection.
         return_type: If ``plotly`` (default) return a Plotly figure; if ``native`` return a dataframe matching the input backend.
         poly_line: Optional integer degree (1, 2, or 3) to fit a polynomial in ``x`` using the raw data (plus controls) and overlay it on the Plotly figure.
@@ -145,13 +160,24 @@ def binscatter(
     if len(set(controls)) < len(controls):
         raise ValueError("controls contains duplicate entries")
 
+    categorical = _clean_controls(categorical)
+    if len(set(categorical)) < len(categorical):
+        raise ValueError("categorical contains duplicate entries")
+    not_controls = [c for c in categorical if c not in controls]
+    if not_controls:
+        msg = (
+            f"categorical entries must also appear in controls: {not_controls}. "
+            "categorical only overrides how a control is classified; it does not add controls."
+        )
+        raise ValueError(msg)
+
     distinct_suffix = str(uuid.uuid4()).replace(
         "-", "_"
     )  # "-" in col names can cause issues
     bin_name = f"bins____{distinct_suffix}"
 
     df, is_lazy_input, numeric_columns, categorical_columns = clean_df(
-        df, controls, x, y
+        df, controls, x, y, categorical
     )
     logger.debug(
         "[binscatter] clean_df backend=%s lazy=%s numeric_controls=%d categorical_controls=%d",
@@ -161,10 +187,12 @@ def binscatter(
         len(categorical_columns),
     )
 
-    df_with_regression_features, regression_features = add_regression_features(
-        df,
-        numeric_controls=numeric_columns,
-        categorical_controls=categorical_columns,
+    df_with_regression_features, regression_features, absorbed_fe = (
+        add_regression_features(
+            df,
+            numeric_controls=numeric_columns,
+            categorical_controls=categorical_columns,
+        )
     )
     logger.debug("[binscatter] regression features total=%d", len(regression_features))
     if poly_line is not None:
@@ -186,14 +214,14 @@ def binscatter(
 
     if auto_bins == "rot":
         computed_num_bins = _select_rule_of_thumb_bins(
-            df_with_regression_features, x, y, regression_features
+            df_with_regression_features, x, y, regression_features, absorbed_fe
         )
         logger.info(
             "Selected %d bins using rule-of-thumb (ROT) selector", computed_num_bins
         )
     elif auto_bins == "dpi":
         computed_num_bins = _select_dpi_bins(
-            df_with_regression_features, x, y, regression_features
+            df_with_regression_features, x, y, regression_features, absorbed_fe
         )
         logger.info(
             "Selected %d bins using direct plug-in (DPI) selector", computed_num_bins
@@ -245,6 +273,7 @@ def binscatter(
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
+        fe_name=absorbed_fe,
     )
     add_bins = configure_add_bins(profile)
     df_prepped = add_bins(df_with_regression_features, unique_quantiles)
@@ -308,9 +337,10 @@ class Profile(NamedTuple):
     distinct_suffix: str
     is_lazy_input: bool
     implementation: Implementation
-    regression_features: Tuple[str, ...]
-    polynomial_features: Tuple[str, ...]
-    x_bounds: Tuple[float, float]
+    regression_features: tuple[str, ...]
+    polynomial_features: tuple[str, ...]
+    x_bounds: tuple[float, float]
+    fe_name: str | None = None
 
     @property
     def x_col(self) -> nw.Expr:
@@ -347,7 +377,7 @@ def _ensure_moments(
 
 def _ensure_feature_moments(
     df: nw.LazyFrame,
-    feature_names: Tuple[str, ...],
+    feature_names: tuple[str, ...],
     y_expr: nw.Expr,
     cache: dict[str, float],
 ) -> None:
@@ -367,7 +397,7 @@ def _ensure_feature_moments(
 
 
 def _build_feature_normal_equations(
-    feature_names: Tuple[str, ...], cache: dict[str, float]
+    feature_names: tuple[str, ...], cache: dict[str, float]
 ) -> tuple[np.ndarray, np.ndarray]:
     if not feature_names:
         return np.zeros((0, 0), dtype=float), np.zeros(0, dtype=float)
@@ -460,24 +490,59 @@ def partial_out_controls(
     num_bins = profile.num_bins
     k = len(profile.regression_features)
     size = num_bins + k
+
+    bin_block = np.diag(counts.astype(float, copy=False))
+    bin_y = sum_y.astype(float, copy=False)
+
+    fe_moments: FEMoments | None = None
+    if profile.fe_name is not None:
+        fe_moments = compute_fe_moments(
+            df_prepped,
+            fe_name=profile.fe_name,
+            bin_name=profile.bin_name,
+            bin_labels=per_bin.get_column(profile.bin_name).to_list(),
+            feature_names=profile.regression_features,
+            response_exprs={"y": profile.y_col},
+        )
+        inv = fe_moments.inv_counts
+        s_bin = fe_moments.bin_counts
+        s_feat = fe_moments.feature_sums
+        s_y = fe_moments.response_sums["y"]
+
+        bin_block = within_correct(bin_block, s_bin, s_bin, inv)
+        bin_y = within_correct(bin_y, s_bin, s_y, inv)
+        if k:
+            bin_control_sums = within_correct(bin_control_sums, s_bin, s_feat, inv)
+            ww = within_correct(ww, s_feat, s_feat, inv)
+            wy = within_correct(wy, s_feat, s_y, inv)
+
     XTX = np.zeros((size, size), dtype=float)
     XTy = np.zeros(size, dtype=float)
 
-    XTX[:num_bins, :num_bins] = np.diag(counts.astype(float, copy=False))
+    XTX[:num_bins, :num_bins] = bin_block
     if k:
         XTX[:num_bins, num_bins:] = bin_control_sums
         XTX[num_bins:, :num_bins] = bin_control_sums.T
         XTX[num_bins:, num_bins:] = ww
         XTy[num_bins:] = wy
 
-    XTy[:num_bins] = sum_y.astype(float, copy=False)
+    XTy[:num_bins] = bin_y
 
-    theta = _solve_normal_equations(XTX, XTy)
+    if fe_moments is None:
+        theta = _solve_normal_equations(XTX, XTy)
+    else:
+        # The within system is rank-deficient by exactly one (demeaned bin dummies
+        # sum to zero row-wise), and a near-singular matrix often makes
+        # np.linalg.solve return garbage rather than raise, so go straight to the
+        # minimum-norm solution.
+        theta = np.linalg.lstsq(XTX, XTy, rcond=None)[0]
 
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
     mean_controls = total_ctrl_sums / total_count if k else np.array([])
     fitted = beta + (mean_controls @ gamma if k else 0.0)
+    if fe_moments is not None:
+        fitted = fitted + recover_levels(fe_moments, beta, gamma, "y")
 
     y_vals = nw.new_series(
         name=profile.y_name, values=fitted, backend=per_bin.implementation
@@ -531,7 +596,30 @@ def _fit_polynomial_line(
         xtx[0, 1:] = column_sums
         xtx[1:, 0] = column_sums
 
-    coefficients = _solve_normal_equations(xtx, xty)
+    fe_level = 0.0
+    if profile.fe_name is not None and feature_names:
+        # Absorbing removes the intercept, so the design is the features alone.
+        # The overlay level is restored from the mean fixed effect, exactly as in
+        # partial_out_controls.
+        moments = compute_fe_moments(
+            df_prepped,
+            fe_name=profile.fe_name,
+            feature_names=feature_names,
+            response_exprs={"y": profile.y_col},
+        )
+        inv = moments.inv_counts
+        s_feat = moments.feature_sums
+        s_y = moments.response_sums["y"]
+        within_xtx = within_correct(xtx[1:, 1:], s_feat, s_feat, inv)
+        within_xty = within_correct(xty[1:], s_feat, s_y, inv)
+        feature_coefs = _solve_normal_equations(within_xtx, within_xty)
+        alpha = inv * (s_y - s_feat @ feature_coefs)
+        fe_level = float(moments.counts @ alpha / moments.total_count)
+        coefficients = np.concatenate([[0.0], feature_coefs])
+    else:
+        coefficients = _solve_normal_equations(xtx, xty)
+    coefficients = coefficients.copy()
+    coefficients[0] += fe_level
     x_min, x_max = profile.x_bounds
     x_grid = _build_prediction_grid(x_min, x_max)
     if profile.regression_features:
@@ -630,12 +718,12 @@ def make_plot_plotly(
         "template": "simple_white",
         "color_discrete_sequence": ["black"],
     }
-    for k in kwargs_binscatter:
+    for k, v in kwargs_binscatter.items():
         if k in ("x", "y", "range_x", "range_y"):
             msg = f"px.scatter will ignore keyword argument '{k}'"
             warnings.warn(msg)
             continue
-        scatter_args[k] = kwargs_binscatter[k]
+        scatter_args[k] = v
 
     figure = px.scatter(**scatter_args)
     if "size" not in kwargs_binscatter:
@@ -682,12 +770,12 @@ def _remove_bad_values(
 
 def split_columns(
     frame: nw.LazyFrame | nw.DataFrame,
-) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Return tuples of numeric and categorical column names for a narwhals frame."""
 
-    def _safe_columns(selection: Any) -> Tuple[str, ...]:
+    def _safe_columns(selection: Any) -> tuple[str, ...]:
         if selection is None:
-            return tuple()
+            return ()
         if hasattr(selection, "collect_schema"):
             try:
                 schema = selection.collect_schema()
@@ -701,15 +789,15 @@ def split_columns(
                             return tuple(names)
                     if isinstance(schema, dict):
                         return tuple(schema.keys())
-        columns: Tuple[str, ...] = tuple()
+        columns: tuple[str, ...] = ()
         if hasattr(selection, "columns"):
             try:
                 columns = tuple(selection.columns)
             except Exception:  # pragma: no cover - backend quirk
-                columns = tuple()
+                columns = ()
         if columns:
             return columns
-        return tuple()
+        return ()
 
     numeric_cols = _safe_columns(frame.select(ncs.numeric()))
     frame_columns = _safe_columns(frame)
@@ -718,7 +806,7 @@ def split_columns(
     return numeric_cols, categorical_cols
 
 
-def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
+def _clean_controls(controls: Iterable[str] | str | None) -> tuple[str, ...]:
     if not controls:
         return ()
     if isinstance(controls, str):
@@ -738,19 +826,26 @@ def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
 
 @timed
 def clean_df(
-    df_in: IntoDataFrame, controls: Tuple[str, ...], x: str, y: str
-) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
+    df_in: IntoDataFrame,
+    controls: tuple[str, ...],
+    x: str,
+    y: str,
+    categorical: tuple[str, ...] = (),
+) -> tuple[nw.LazyFrame, bool, tuple[str, ...], tuple[str, ...]]:
     """Normalize the input dataframe and split controls by type.
 
     Returns a lazy narwhals frame containing only the requested columns, whether
     the original input was lazy, and tuples of numeric / categorical controls.
+
+    ``categorical`` names controls that must be treated as categorical even when
+    their dtype is numeric.
     """
     # Try cheap column access for non-lazy inputs
-    cols: List[str] | None = None
+    cols: list[str] | None = None
     if hasattr(df_in, "collect_schema"):
         pass  # lazy frame, defer to narwhals
     elif hasattr(df_in, "columns"):
-        cols = list(getattr(df_in, "columns"))
+        cols = list(cast(Any, df_in).columns)
 
     dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
 
@@ -791,7 +886,22 @@ def clean_df(
         msg = f"y column '{y}' must be numeric"
         raise TypeError(msg)
 
+    # Filtering must key off the *actual* dtypes: a numeric column reclassified as
+    # categorical still needs its non-finite values removed, or NaN silently becomes
+    # its own category.
     df_filtered = _remove_bad_values(df, cols_numeric, cols_cat)
+
+    if categorical:
+        schema = df.collect_schema()
+        float_cats = [c for c in categorical if schema[c].is_float()]
+        if float_cats:
+            msg = (
+                f"categorical columns must not be floating point: {float_cats}. "
+                "Grouping on floats is unreliable; cast to an integer or string column first."
+            )
+            raise TypeError(msg)
+        cols_numeric = tuple(c for c in cols_numeric if c not in categorical)
+        cols_cat = tuple(cols_cat) + tuple(c for c in categorical if c not in cols_cat)
 
     numeric_controls = tuple(c for c in controls if c in cols_numeric)
     categorical_controls = tuple(c for c in controls if c in cols_cat)
@@ -801,10 +911,14 @@ def clean_df(
 
 @timed
 def _select_rule_of_thumb_bins(
-    df: nw.LazyFrame, x: str, y: str, regression_features: Tuple[str, ...]
+    df: nw.LazyFrame,
+    x: str,
+    y: str,
+    regression_features: tuple[str, ...],
+    fe_name: str | None = None,
 ) -> int:
     """Implement the SA-4.1 rule-of-thumb selector (currently for p=0, v=0)."""
-    data_cols: Tuple[str, ...] = (x, *regression_features)
+    data_cols: tuple[str, ...] = (x, *regression_features)
     stats = _collect_rule_of_thumb_stats(df, data_cols, y)
     n_obs = stats.item(0, "__n")
     if n_obs is None or n_obs <= 1:
@@ -840,8 +954,32 @@ def _select_rule_of_thumb_bins(
             xtx[idx + 1, jdx + 1] = value
             xtx[jdx + 1, idx + 1] = value
 
-    beta_y = _solve_normal_equations(xtx, xty)
-    beta_y_sq = _solve_normal_equations(xtx, xty_sq)
+    if fe_name is None:
+        beta_y = _solve_normal_equations(xtx, xty)
+        beta_y_sq = _solve_normal_equations(xtx, xty_sq)
+        # With an intercept in the design, OLS fitted values sum to the response
+        # total, so this equals the raw sum of y-squared.
+        sum_y_sq_resid = float(column_sums @ beta_y_sq)
+        design_xtx = xtx
+        slope_index = 1
+    else:
+        # Absorbing the fixed effect kills the intercept, so the design is the data
+        # columns alone, within-transformed via their group sums.
+        moments = compute_fe_moments(
+            df,
+            fe_name=fe_name,
+            feature_names=data_cols,
+            response_exprs={"y": nw.col(y), "y_sq": nw.col(y) * nw.col(y)},
+        )
+        inv = moments.inv_counts
+        s_feat = moments.feature_sums
+        s_y = moments.response_sums["y"]
+        design_xtx = within_correct(xtx[1:, 1:], s_feat, s_feat, inv)
+        design_xty = within_correct(xty[1:], s_feat, s_y, inv)
+        beta_y = _solve_normal_equations(design_xtx, design_xty)
+        # Within-transformed total sum of squares for y.
+        sum_y_sq_resid = float(xty_sq[0] - s_y @ (inv * s_y))
+        slope_index = 0
 
     # Sample moments of x for the Gaussian reference density.
     x_sum = column_sums[1]
@@ -862,7 +1000,7 @@ def _select_rule_of_thumb_bins(
     # B_hat = (1/12) * slope² * (1/n) * Σᵢ 1/f_X(xᵢ)²
     sum_inv_density_sq = _gaussian_inverse_density_squared_sum(df, x, mean_x, std_x)
 
-    slope = beta_y[1]
+    slope = beta_y[slope_index]
     # bcons for p=0, s=0, v=0: 1/(2*1+1) / 1!² / C(2,1)² = 1/3 / 1 / 4 = 1/12
     imse_bcons = 1.0 / 12.0
     bias_constant = imse_bcons * (slope**2) * (sum_inv_density_sq / n_obs_f)
@@ -874,9 +1012,8 @@ def _select_rule_of_thumb_bins(
 
     # V_hat = (1/n) * Σᵢ σ²(xᵢ) where σ²(x) = E[y²|x] - E[y|x]²
     # We estimate this as the average residual variance from the polynomial fit
-    sum_pred_y_sq = float(column_sums @ beta_y_sq)
-    quad_form = float(beta_y.T @ xtx @ beta_y)
-    variance_constant = (sum_pred_y_sq - quad_form) / n_obs_f
+    quad_form = float(beta_y.T @ design_xtx @ beta_y)
+    variance_constant = (sum_y_sq_resid - quad_form) / n_obs_f
     variance_constant = max(variance_constant, 0.0)
     if variance_constant <= 0 or not math.isfinite(variance_constant):
         raise ValueError(
@@ -889,18 +1026,24 @@ def _select_rule_of_thumb_bins(
     j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
     # Cap at ~10 observations per bin to avoid noisy estimates
     max_bins = max(2, int(n_obs) // 10)
-    computed_bins = max(2, int(round(j_float)))
+    computed_bins = max(2, round(j_float))
     return min(max_bins, computed_bins)
 
 
 @timed
 def _select_dpi_bins(
-    df: nw.LazyFrame, x: str, y: str, regression_features: Tuple[str, ...]
+    df: nw.LazyFrame,
+    x: str,
+    y: str,
+    regression_features: tuple[str, ...],
+    fe_name: str | None = None,
 ) -> int:
     """Implement the SA-4.2 direct plug-in selector (for p=0, s=0, v=0)."""
-    pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features)
+    pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features, fe_name)
 
     required_cols = (x, y) + regression_features
+    if fe_name is not None:
+        required_cols = required_cols + (fe_name,)
     collected = df.select(*(nw.col(col) for col in required_cols)).collect()
     native = collected.to_pandas()
 
@@ -914,6 +1057,8 @@ def _select_dpi_bins(
     else:
         controls = None
 
+    raw_groups = native[fe_name].to_numpy() if fe_name is not None else None
+
     mask = np.isfinite(x_values) & np.isfinite(y_values)
     if controls is not None:
         mask &= np.all(np.isfinite(controls), axis=1)
@@ -923,16 +1068,37 @@ def _select_dpi_bins(
         y_values = y_values[mask]
         if controls is not None:
             controls = controls[mask]
+        if raw_groups is not None:
+            raw_groups = raw_groups[mask]
 
     n_obs = x_values.size
     if n_obs < 5:
         return pilot_bins
+
+    fe_codes: np.ndarray | None = None
+    fe_counts: np.ndarray | None = None
+    if raw_groups is not None:
+        # Already materialized here, so absorb by demeaning directly rather than via
+        # the moment correction. y and the controls are residualized within group;
+        # x stays raw because bins are formed on the original scale. Demeaning runs
+        # after the finite mask so group means reflect the rows actually used.
+        fe_codes, fe_counts = group_codes(raw_groups)
+        y_values = demean_within(y_values, fe_codes, fe_counts)
+        if controls is not None:
+            controls = np.column_stack(
+                [
+                    demean_within(controls[:, j], fe_codes, fe_counts)
+                    for j in range(controls.shape[1])
+                ]
+            )
 
     constants = _estimate_dpi_imse_constants(
         x_values,
         y_values,
         controls,
         pilot_bins,
+        fe_codes,
+        fe_counts,
     )
     if constants is None:
         return pilot_bins
@@ -956,8 +1122,15 @@ def _estimate_dpi_imse_constants(
     y_values: np.ndarray,
     controls: np.ndarray | None,
     pilot_bins: int,
+    fe_codes: np.ndarray | None = None,
+    fe_counts: np.ndarray | None = None,
 ) -> tuple[float, float] | None:
-    """Compute the IMSE bias/variance constants for the DPI selector."""
+    """Compute the IMSE bias/variance constants for the DPI selector.
+
+    When ``fe_codes`` is given the caller has already demeaned ``y_values`` and
+    ``controls``; the spline design and the bin dummies are within-transformed here
+    so the whole system stays consistent with Frisch-Waugh-Lovell.
+    """
     n_obs = x_values.size
     if n_obs == 0:
         return None
@@ -981,10 +1154,21 @@ def _estimate_dpi_imse_constants(
 
     interior_knots = edges[1:-1]
     spline_design = _linear_spline_design(x_norm, interior_knots)
+    fit_design = spline_design
+    if fe_codes is not None and fe_counts is not None:
+        # Within-transform the basis so the fitted coefficients are the within
+        # estimates. The intercept column collapses to zero; lstsq handles the
+        # resulting rank deficiency and the derivative only reads columns 1 onward.
+        fit_design = np.column_stack(
+            [
+                demean_within(spline_design[:, j], fe_codes, fe_counts)
+                for j in range(spline_design.shape[1])
+            ]
+        )
     if controls is not None and controls.size:
-        design_matrix = np.column_stack((spline_design, controls))
+        design_matrix = np.column_stack((fit_design, controls))
     else:
-        design_matrix = spline_design
+        design_matrix = fit_design
 
     try:
         beta, *_ = np.linalg.lstsq(design_matrix, y_values, rcond=None)
@@ -1008,6 +1192,8 @@ def _estimate_dpi_imse_constants(
         controls,
         bin_idx,
         bin_counts,
+        fe_codes,
+        fe_counts,
     )
     if variance_cons is None:
         return None
@@ -1020,10 +1206,7 @@ def _estimate_dpi_imse_constants(
 
 def _quantile_edges(x_norm: np.ndarray, num_bins: int) -> np.ndarray:
     quantiles = np.linspace(0.0, 1.0, num_bins + 1)
-    try:
-        edges = np.quantile(x_norm, quantiles, method="linear")
-    except TypeError:  # numpy<1.22 compatibility
-        edges = np.quantile(x_norm, quantiles, interpolation="linear")  # type: ignore[call-overload]
+    edges = np.quantile(x_norm, quantiles, method="linear")
     unique_edges = np.unique(edges)
     return unique_edges
 
@@ -1082,20 +1265,45 @@ def _compute_dpi_variance_constant(
     controls: np.ndarray | None,
     bin_idx: np.ndarray,
     bin_counts: np.ndarray,
+    fe_codes: np.ndarray | None = None,
+    fe_counts: np.ndarray | None = None,
 ) -> float | None:
     num_bins = bin_counts.size
     q = 0 if controls is None else controls.shape[1]
     size = num_bins + q
+
+    # Under absorption the bin dummies become e_b - shares[g], where shares[g] is
+    # group g's distribution across bins. Everything below is expressible from the
+    # (group, bin) cell aggregates, so the n x J demeaned design is never formed.
+    shares: np.ndarray | None = None
+    if fe_codes is not None and fe_counts is not None:
+        cell_counts = np.zeros((fe_counts.size, num_bins), dtype=float)
+        np.add.at(cell_counts, (fe_codes, bin_idx), 1.0)
+        shares = cell_counts / fe_counts[:, None]
+
     XtX = np.zeros((size, size), dtype=float)
-    XtX[:num_bins, :num_bins] = np.diag(bin_counts)
     XtY = np.zeros(size, dtype=float)
-    XtY[:num_bins] = np.bincount(bin_idx, weights=y_values, minlength=num_bins)
+    bin_block = np.diag(bin_counts)
+    bin_y = np.bincount(bin_idx, weights=y_values, minlength=num_bins)
+    if shares is not None:
+        assert fe_codes is not None and fe_counts is not None
+        group_y = np.bincount(fe_codes, weights=y_values, minlength=fe_counts.size)
+        bin_block = bin_block - shares.T @ (fe_counts[:, None] * shares)
+        bin_y = bin_y - shares.T @ group_y
+    XtX[:num_bins, :num_bins] = bin_block
+    XtY[:num_bins] = bin_y
 
     if q:
         assert controls is not None  # type narrowing for checker
         sum_controls = np.zeros((num_bins, q), dtype=float)
         for idx in range(q):
             np.add.at(sum_controls[:, idx], bin_idx, controls[:, idx])
+        if shares is not None:
+            assert fe_codes is not None and fe_counts is not None
+            group_controls = np.zeros((fe_counts.size, q), dtype=float)
+            for idx in range(q):
+                np.add.at(group_controls[:, idx], fe_codes, controls[:, idx])
+            sum_controls = sum_controls - shares.T @ group_controls
         XtX[:num_bins, num_bins:] = sum_controls
         XtX[num_bins:, :num_bins] = sum_controls.T
         XtX[num_bins:, num_bins:] = controls.T @ controls
@@ -1109,6 +1317,9 @@ def _compute_dpi_variance_constant(
     gamma = params[num_bins:]
 
     fitted = beta_bins[bin_idx]
+    if shares is not None:
+        assert fe_codes is not None
+        fitted = fitted - (shares @ beta_bins)[fe_codes]
     if q:
         assert controls is not None  # type narrowing for checker
         fitted = fitted + controls @ gamma
@@ -1116,19 +1327,39 @@ def _compute_dpi_variance_constant(
     u_sq = residuals**2
 
     XtUX = np.zeros_like(XtX)
-    XtUX[:num_bins, :num_bins] = np.diag(
-        np.bincount(bin_idx, weights=u_sq, minlength=num_bins)
-    )
+    bin_meat = np.diag(np.bincount(bin_idx, weights=u_sq, minlength=num_bins))
+    if shares is not None:
+        assert fe_codes is not None and fe_counts is not None
+        cell_u = np.zeros((fe_counts.size, num_bins), dtype=float)
+        np.add.at(cell_u, (fe_codes, bin_idx), u_sq)
+        group_u = cell_u.sum(axis=1)
+        bin_meat = (
+            bin_meat
+            - cell_u.T @ shares
+            - shares.T @ cell_u
+            + shares.T @ (group_u[:, None] * shares)
+        )
+    XtUX[:num_bins, :num_bins] = bin_meat
     if q:
         assert controls is not None  # type narrowing for checker
         cross = np.zeros((num_bins, q), dtype=float)
         for idx in range(q):
             np.add.at(cross[:, idx], bin_idx, controls[:, idx] * u_sq)
+        if shares is not None:
+            assert fe_codes is not None and fe_counts is not None
+            group_cross = np.zeros((fe_counts.size, q), dtype=float)
+            for idx in range(q):
+                np.add.at(group_cross[:, idx], fe_codes, controls[:, idx] * u_sq)
+            cross = cross - shares.T @ group_cross
         XtUX[:num_bins, num_bins:] = cross
         XtUX[num_bins:, :num_bins] = cross.T
         XtUX[num_bins:, num_bins:] = controls.T @ (controls * u_sq[:, None])
 
-    dof = max(y_values.size - size, 1)
+    # Absorbing does not make the fixed effect free: it still consumes G-1
+    # parameters (exactly what drop_first dummies would have cost), and leaving them
+    # out of the count inflates the degrees of freedom and shifts the selected bins.
+    n_params = size + (fe_counts.size - 1 if fe_counts is not None else 0)
+    dof = max(y_values.size - n_params, 1)
     XtUX *= y_values.size / dof
 
     XtX_inv = np.linalg.pinv(XtX)
@@ -1139,7 +1370,7 @@ def _compute_dpi_variance_constant(
 
 
 def _collect_rule_of_thumb_stats(
-    df: nw.LazyFrame, data_cols: Tuple[str, ...], y: str
+    df: nw.LazyFrame, data_cols: tuple[str, ...], y: str
 ) -> nw.DataFrame:
     """Gather the global cross-moments needed by the rule-of-thumb selector."""
     y_expr = nw.col(y)
@@ -1214,22 +1445,33 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
 @timed
 def add_regression_features(
     df: nw.LazyFrame,
-    numeric_controls: Tuple[str, ...],
-    categorical_controls: Tuple[str, ...],
-) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
-    """Inject numeric controls and one-hot categorical controls when requested."""
+    numeric_controls: tuple[str, ...],
+    categorical_controls: tuple[str, ...],
+) -> tuple[nw.LazyFrame, tuple[str, ...], str | None]:
+    """Inject numeric controls and one-hot categorical controls when requested.
+
+    The highest-cardinality categorical is absorbed rather than encoded, so it is
+    excluded from the dummies and returned as the third element. Remaining
+    categoricals are one-hot encoded as before and ride along inside the control
+    block, where the within correction handles them for free.
+    """
     if not numeric_controls and not categorical_controls:
-        return df, ()
+        return df, (), None
     if numeric_controls and not categorical_controls:
-        return df, numeric_controls
+        return df, numeric_controls, None
+
+    absorbed = select_absorbed(df, categorical_controls)
+    remaining = tuple(c for c in categorical_controls if c != absorbed)
+    if not remaining:
+        return df, numeric_controls, absorbed
 
     build_dummies = configure_build_dummies(df.implementation)
-    df_with_dummies, dummy_cols = build_dummies(df, categorical_controls)
+    df_with_dummies, dummy_cols = build_dummies(df, remaining)
     if not dummy_cols:
         logger.debug("No dummy expressions created, all categorical controls constant")
-        return df_with_dummies, numeric_controls
+        return df_with_dummies, numeric_controls, absorbed
 
-    return df_with_dummies, numeric_controls + dummy_cols
+    return df_with_dummies, numeric_controls + dummy_cols, absorbed
 
 
 @timed
@@ -1239,7 +1481,7 @@ def add_polynomial_features(
     x_name: str,
     degree: int,
     distinct_suffix: str,
-) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+) -> tuple[nw.LazyFrame, tuple[str, ...]]:
     """Append polynomial columns in x up to the requested degree."""
     exprs: list[nw.Expr] = []
     names: list[str] = []

@@ -1,9 +1,11 @@
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 import pandas as pd
 import plotly.express as px
-from binscatter import binscatter
 from plotly.subplots import make_subplots
+
+from binscatter import binscatter
 
 images_folder = Path(__file__).parents[1] / "images" / "readme"
 images_folder.mkdir(exist_ok=True, parents=True)

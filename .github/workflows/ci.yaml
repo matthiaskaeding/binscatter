@@ -27,23 +27,19 @@ jobs:
         uv venv
         uv pip install -e .
 
-    # The ruff version is pinned here and also asserted by `required-version`
-    # in pyproject.toml, so the two cannot drift apart quietly. Leaving it
-    # unpinned means CI silently follows ruff's latest release, whose default
-    # rule set grows between versions — a green main can turn red with no
-    # change to the code.
+    # Pinned to match .pre-commit-config.yaml, and asserted a third time by
+    # `required-version` in pyproject.toml so the three cannot drift apart
+    # quietly. Unpinned, `uv tool run ruff` resolves to the newest release, so
+    # an upstream change to the default rule set breaks CI with no change to
+    # this repo -- and diverges from what contributors' hooks enforce locally.
     - name: Run ruff format
-      run: uv tool run ruff@0.15.8 format --check
+      run: uv tool run ruff@0.16.1 format --check
 
     - name: Run ruff lint
-      run: uv tool run ruff@0.15.8 check
+      run: uv tool run ruff@0.16.1 check
 
-    # Pinned for the same reason as ruff above, and matching the `ty` version
-    # resolved in uv.lock. `ty@latest` is especially volatile — it is still a
-    # 0.0.x tool, so each release can add diagnostics that turn a green main
-    # red without a code change.
     - name: Run ty
-      run: uv tool run ty@0.0.8 check src
+      run: uv tool run ty@latest check src
 
     - name: Run fast tests (skip PySpark)
       run: uv run --no-default-groups --group ci pytest tests

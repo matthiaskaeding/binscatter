@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, List, Tuple, TYPE_CHECKING, Any, cast
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, cast
 
 import narwhals as nw
 from narwhals import Implementation
@@ -12,7 +13,7 @@ if TYPE_CHECKING:  # pragma: no cover - circular import guard
 logger = logging.getLogger(__name__)
 
 
-def _make_probs(num_bins: int) -> List[float]:
+def _make_probs(num_bins: int) -> list[float]:
     if num_bins < 2:
         raise ValueError("num_bins must be at least 2")
     return [i / num_bins for i in range(num_bins + 1)]
@@ -20,7 +21,7 @@ def _make_probs(num_bins: int) -> List[float]:
 
 def configure_compute_quantiles(
     num_bins: int, implementation: Implementation
-) -> Callable[[nw.LazyFrame, str], Tuple[float, ...]]:
+) -> Callable[[nw.LazyFrame, str], tuple[float, ...]]:
     """Return a function that computes quantile edges for the given backend."""
     probs = _make_probs(num_bins)
 
@@ -37,8 +38,8 @@ def configure_compute_quantiles(
 
 
 def configure_add_bins(
-    profile: "Profile",
-) -> Callable[[nw.LazyFrame, Tuple[float, ...]], nw.LazyFrame]:
+    profile: Profile,
+) -> Callable[[nw.LazyFrame, tuple[float, ...]], nw.LazyFrame]:
     """Return a function that assigns bin labels given quantiles."""
     if profile.implementation == Implementation.PANDAS:
         return lambda df, quantiles: _assign_bins_pandas(df, profile, quantiles)
@@ -55,8 +56,8 @@ def configure_add_bins(
 
 
 def _quantiles_from_pandas(
-    df: nw.LazyFrame, x_name: str, probs: List[float]
-) -> Tuple[float, ...]:
+    df: nw.LazyFrame, x_name: str, probs: list[float]
+) -> tuple[float, ...]:
     try:
         df_native = df.to_native()
         x = df_native[x_name]
@@ -67,8 +68,8 @@ def _quantiles_from_pandas(
 
 
 def _quantiles_from_dask(
-    df: nw.LazyFrame, x_name: str, probs: List[float]
-) -> Tuple[float, ...]:
+    df: nw.LazyFrame, x_name: str, probs: list[float]
+) -> tuple[float, ...]:
     try:
         df_native = df.to_native()
         quantiles = df_native[x_name].quantile(probs).compute()
@@ -78,8 +79,8 @@ def _quantiles_from_dask(
 
 
 def _quantiles_from_polars(
-    df: nw.LazyFrame, x_name: str, probs: List[float]
-) -> Tuple[float, ...]:
+    df: nw.LazyFrame, x_name: str, probs: list[float]
+) -> tuple[float, ...]:
     try:
         import polars as pl
     except ImportError as err:  # pragma: no cover - optional dependency
@@ -93,8 +94,8 @@ def _quantiles_from_polars(
 
 
 def _quantiles_from_pyspark(
-    df: nw.LazyFrame, x_name: str, probs: List[float]
-) -> Tuple[float, ...]:
+    df: nw.LazyFrame, x_name: str, probs: list[float]
+) -> tuple[float, ...]:
     try:
         sdf = df.to_native()
         splits = sdf.approxQuantile(
@@ -108,8 +109,8 @@ def _quantiles_from_pyspark(
 
 
 def _quantiles_fallback(
-    df: nw.LazyFrame, x_name: str, probs: List[float]
-) -> Tuple[float, ...]:
+    df: nw.LazyFrame, x_name: str, probs: list[float]
+) -> tuple[float, ...]:
     x_expr = nw.col(x_name)
     try:
         qs = df.select(
@@ -118,16 +119,16 @@ def _quantiles_fallback(
     except TypeError:
         expr = cast(Any, x_expr)
         qs = df.select([expr.quantile(p).alias(f"q{p}") for p in probs]).collect()
-    except Exception as err:  # pragma: no cover - defensive logging
+    except Exception:  # pragma: no cover - defensive logging
         logger.error("Fallback quantile computation failed for df type %s", type(df))
-        raise err
+        raise
     qs_nw = qs if hasattr(qs, "to_native") else nw.from_native(qs)
     num_cols = qs_nw.shape[1]
     return tuple(float(qs_nw.item(0, i)) for i in range(num_cols))
 
 
 def _assign_bins_pandas(
-    df: nw.LazyFrame, profile: "Profile", quantiles: Tuple[float, ...]
+    df: nw.LazyFrame, profile: Profile, quantiles: tuple[float, ...]
 ) -> nw.LazyFrame:
     try:
         from pandas import cut
@@ -155,7 +156,7 @@ def _assign_bins_pandas(
 
 
 def _assign_bins_dask(
-    df: nw.LazyFrame, profile: "Profile", quantiles: Tuple[float, ...]
+    df: nw.LazyFrame, profile: Profile, quantiles: tuple[float, ...]
 ) -> nw.LazyFrame:
     try:
         from pandas import cut
@@ -182,7 +183,7 @@ def _assign_bins_dask(
 
 
 def _assign_bins_polars(
-    df: nw.LazyFrame, profile: "Profile", quantiles: Tuple[float, ...]
+    df: nw.LazyFrame, profile: Profile, quantiles: tuple[float, ...]
 ) -> nw.LazyFrame:
     try:
         import polars as pl
@@ -208,7 +209,7 @@ def _assign_bins_polars(
 
 
 def _assign_bins_pyspark(
-    df: nw.LazyFrame, profile: "Profile", quantiles: Tuple[float, ...]
+    df: nw.LazyFrame, profile: Profile, quantiles: tuple[float, ...]
 ) -> nw.LazyFrame:
     try:
         from pyspark.ml.feature import Bucketizer
@@ -242,7 +243,7 @@ def _assign_bins_pyspark(
 
 
 def _assign_bins_duckdb(
-    df: nw.LazyFrame, profile: "Profile", quantiles: Tuple[float, ...]
+    df: nw.LazyFrame, profile: Profile, quantiles: tuple[float, ...]
 ) -> nw.LazyFrame:
     try:
         import duckdb  # noqa: F401
@@ -271,7 +272,7 @@ def _assign_bins_duckdb(
 
 
 def _assign_bins_fallback(
-    df: nw.LazyFrame, profile: "Profile", quantiles: Tuple[float, ...]
+    df: nw.LazyFrame, profile: Profile, quantiles: tuple[float, ...]
 ) -> nw.LazyFrame:
     # Build quantile bins frame for join_asof
     # Filter out values equal to min (they create empty first bin)
@@ -302,7 +303,7 @@ def _assign_bins_fallback(
     )
 
 
-def _to_float_tuple(values: Any) -> Tuple[float, ...]:
+def _to_float_tuple(values: Any) -> tuple[float, ...]:
     if values is None:
         return ()
     if isinstance(values, (list, tuple)):

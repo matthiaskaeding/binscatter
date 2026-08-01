@@ -26,6 +26,8 @@ import pandas as pd
 
 from binscatter import binscatter
 
+logger = logging.getLogger(__name__)
+
 BackendType = Literal["pandas", "pyspark"]
 
 CONTROL_COLUMNS = [
@@ -105,10 +107,10 @@ def _prepare_backend_dataframe(
     df: pd.DataFrame, backend: BackendType
 ) -> tuple[object, object | None]:
     if backend == "pandas":
-        logging.info("Using pandas backend for binscatter input...")
+        logger.info("Using pandas backend for binscatter input...")
         return df, None
 
-    logging.info("Using PySpark backend for binscatter input...")
+    logger.info("Using PySpark backend for binscatter input...")
     try:
         from pyspark.sql import SparkSession
     except ImportError as err:  # pragma: no cover - runtime guard
@@ -138,7 +140,7 @@ def main() -> None:
     logging.getLogger("py4j.clientserver").setLevel(logging.WARNING)
 
     df = make_large_dataframe(num_rows=args.rows)
-    logging.info(
+    logger.info(
         "Generated dataframe with shape %s containing columns: %s",
         df.shape,
         list(df.columns),
@@ -156,15 +158,15 @@ def main() -> None:
         )
     finally:
         if spark_session is not None:
-            logging.info("Stopping Spark session...")
+            logger.info("Stopping Spark session...")
             spark_session.stop()
-            logging.info("Done!")
+            logger.info("Done!")
 
     artifacts_dir = Path("artifacts")
     artifacts_dir.mkdir(exist_ok=True, parents=True)
     output_path = artifacts_dir / f"debug_binscatter_{args.type}.html"
     fig.write_html(output_path, include_plotlyjs="cdn")
-    logging.info("Wrote binscatter output with controls to %s", output_path.resolve())
+    logger.info("Wrote binscatter output with controls to %s", output_path.resolve())
 
 
 if __name__ == "__main__":

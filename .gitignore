@@ -6,6 +6,10 @@ dist/
 wheels/
 *.egg-info
 
+# Lockfile: binscatter is a library, so consumers resolve from the
+# dependency ranges in pyproject.toml and never see this file.
+uv.lock
+
 # Virtual environments
 .venv
 binscatter_ref.pdf

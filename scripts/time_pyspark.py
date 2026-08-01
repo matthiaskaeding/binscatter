@@ -1,11 +1,13 @@
-import polars as pl
-import numpy as np
 import tempfile
-from pathlib import Path
-from pyspark.sql import SparkSession
-from binscatter import binscatter
 import time
 from math import ceil
+from pathlib import Path
+
+import numpy as np
+import polars as pl
+from pyspark.sql import SparkSession
+
+from binscatter import binscatter
 
 N = 100_000_000
 CHUNK_SIZE = 1000_000

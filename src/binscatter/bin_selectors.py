@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import math
-from typing import Tuple
 
 import narwhals as nw
 import numpy as np
@@ -13,7 +12,7 @@ def select_rule_of_thumb_bins(
     df: nw.LazyFrame, x: str, y: str, regression_features: tuple[str, ...]
 ) -> int:
     """Rule-of-thumb selector following Cattaneo et al. (2024) SA-4.1."""
-    data_cols: Tuple[str, ...] = (x, *regression_features)
+    data_cols: tuple[str, ...] = (x, *regression_features)
     stats = _collect_rule_of_thumb_stats(df, data_cols, y)
     n_obs = stats.item(0, "__n")
     if n_obs is None or n_obs <= 1:
@@ -78,7 +77,7 @@ def select_rule_of_thumb_bins(
     prefactor = (2.0 * bias_constant) / variance_constant
     j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
     max_bins = max(2, int(n_obs) // 10)
-    computed_bins = max(2, int(round(j_float)))
+    computed_bins = max(2, round(j_float))
     return min(max_bins, computed_bins)
 
 
@@ -208,10 +207,7 @@ def estimate_dpi_imse_constants(
 
 def _quantile_edges(x_norm: np.ndarray, num_bins: int) -> np.ndarray:
     quantiles = np.linspace(0.0, 1.0, num_bins + 1)
-    try:
-        edges = np.quantile(x_norm, quantiles, method="linear")
-    except TypeError:  # numpy<1.22 compatibility
-        edges = np.quantile(x_norm, quantiles, interpolation="linear")  # type: ignore[call-overload]
+    edges = np.quantile(x_norm, quantiles, method="linear")
     unique_edges = np.unique(edges)
     return unique_edges
 
