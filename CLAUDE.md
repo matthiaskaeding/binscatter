@@ -125,7 +125,3 @@ Purely internal churn — a refactor with no observable effect, a test-only rena
 Write entries so they still make sense months later, without the PR open next to them: say what changed and why it matters, not just which symbol moved. Match the level of detail in the existing sections.
 
 Do not defer this to release time. An empty `## Unreleased` section under a series of merged behaviour changes means the history was lost, and reconstructing it from the commit log afterwards is guesswork.
-
-## Planning
-
-Store the active plan in `PLAN.md`. Keep the current feature plan at the top; archive completed plans below a horizontal rule.
