@@ -635,6 +635,34 @@ def test_binscatter_matches_binsreg_sim_no_controls():
     )
 
 
+@pytest.mark.parametrize(
+    "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
+)
+def test_rule_of_thumb_matches_binsreg_sim(controls):
+    """ROT bin count agrees with binsreg on the reference simulation data."""
+    df = _load_binsreg_sim_data()
+    w = df[controls].to_numpy() if controls else None
+
+    ours = _get_rot_bins(df, "x", "y", controls=controls)
+    theirs = int(binsregselect(df["y"], df["x"], w=w).nbinsrot_regul)
+
+    assert abs(ours - theirs) <= 1
+
+
+@pytest.mark.parametrize(
+    "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
+)
+def test_dpi_matches_binsreg_sim(controls):
+    """DPI bin count agrees with binsreg on the reference simulation data."""
+    df = _load_binsreg_sim_data()
+    w = df[controls].to_numpy() if controls else None
+
+    ours = _get_dpi_bins(df, "x", "y", controls=controls)
+    theirs = int(binsregselect(df["y"], df["x"], w=w).nbinsdpi)
+
+    assert abs(ours - theirs) <= 2
+
+
 def test_binscatter_matches_binsreg_sim_with_controls():
     df = _load_binsreg_sim_data()
     num_bins = 20
