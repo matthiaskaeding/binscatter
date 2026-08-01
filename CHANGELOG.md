@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+- `.github/workflows/publish.yaml`: publishing is driven by GitHub Releases, so cutting a release is the single action that ships a version and pushes to `main` never publish (#72). The release tag is checked against the version in `pyproject.toml` before anything is built, so a release tagged `v0.1.0` cannot ship a `0.4.0` artifact, and upload uses PyPI trusted publishing rather than a stored API token. `workflow_dispatch` runs the same build and `twine check` as a dry run that stops short of publishing.
+
+### Changed
+- Upgraded ruff to 0.16.1 and fixed the 143 findings its newer default rule set reports, rather than staying on a release old enough not to raise them. The version is named in three places that are now kept in step — `ci.yaml`, `.pre-commit-config.yaml`, and `required-version` in `pyproject.toml` — so CI, contributors' hooks and a stray global install cannot lint under different rules; a mismatch fails with one line naming the cause instead of a wall of unreproducible findings. `BLE001` and `S110` are ignored in `pyproject.toml`, since the broad `except` in the optional-backend import guards is the intended behaviour rather than an oversight.
+
+### Removed
+- Stopped committing `uv.lock`; dependency versions are no longer pinned in the repo.
+
+### Fixed
+- `_quantile_edges` (`core.py`, `bin_selectors.py`) no longer carries a `numpy<1.22` fallback passing the `interpolation=` keyword that NumPy removed in 2.0. The project requires `numpy>=2.3`, so the `except TypeError` branch was unreachable and its `type: ignore` was masking a real overload error.
+- The fallback quantile path in `quantiles.py` re-raises with a bare `raise`, preserving the original traceback instead of restarting it at the handler.
+
 ## 0.4.0 - 2026-08-01
 
 ### Added
