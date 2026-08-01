@@ -1,40 +1,40 @@
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable
 
-import polars as pl
-import numpy as np
+import dask.dataframe as dd
+import duckdb
 import narwhals as nw
-from binsreg import binsregselect
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objs as go
+import polars as pl
+import pytest
+import statsmodels.api as sm
 from binsreg import binsreg as binsreg_fit
+from binsreg import binsregselect
+
 from binscatter.core import (
-    add_polynomial_features,
-    binscatter,
-    clean_df,
-    add_regression_features,
-    partial_out_controls,
     Profile,
     _fit_polynomial_line,
-    _select_rule_of_thumb_bins,
     _select_dpi_bins,
+    _select_rule_of_thumb_bins,
+    add_polynomial_features,
+    add_regression_features,
+    binscatter,
+    clean_df,
+    partial_out_controls,
 )
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
 )
-import plotly.graph_objs as go
-import plotly.express as px
-import duckdb
-import pytest
-import pandas as pd
-import dask.dataframe as dd
-import statsmodels.api as sm
-
 from tests.conftest import (
     DF_BACKENDS,
+    SparkSession,
     convert_to_backend,
     to_pandas_native,
-    SparkSession,
 )
 
 if SparkSession is not None:  # pragma: no cover - optional dependency
@@ -59,7 +59,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
     df_clean, is_lazy, numeric_controls, categorical_controls = clean_df(
         df, controls_tuple, x, y
     )
-    df_with_features, regression_features = add_regression_features(
+    df_with_features, regression_features, absorbed_fe = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
@@ -88,6 +88,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
         regression_features=regression_features,
         polynomial_features=polynomial_features,
         x_bounds=(quantiles[0], quantiles[-1]),
+        fe_name=absorbed_fe,
     )
     df_with_bins = configure_add_bins(profile)(df_with_features, quantiles)
     return df_with_bins, profile
@@ -245,12 +246,14 @@ def _get_rot_bins(
         x,
         y,
     )
-    df_with_features, regression_features = add_regression_features(
+    df_with_features, regression_features, absorbed_fe = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
-    return _select_rule_of_thumb_bins(df_with_features, x, y, regression_features)
+    return _select_rule_of_thumb_bins(
+        df_with_features, x, y, regression_features, absorbed_fe
+    )
 
 
 def _get_dpi_bins(
@@ -266,12 +269,12 @@ def _get_dpi_bins(
         x,
         y,
     )
-    df_with_features, regression_features = add_regression_features(
+    df_with_features, regression_features, absorbed_fe = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
-    return _select_dpi_bins(df_with_features, x, y, regression_features)
+    return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fe)
 
 
 @pytest.mark.parametrize(
@@ -315,7 +318,7 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
                 assert isinstance(quant_df, pl.DataFrame)
                 quant_df_pd = quant_df.to_pandas()
             case "duckdb":
-                want = duckdb.duckdb.DuckDBPyRelation
+                want = duckdb.DuckDBPyRelation
                 assert isinstance(quant_df, want), f"{want=}\ngot={type(quant_df)}"
                 quant_df_pd = quant_df.df()
             case "pyspark":
@@ -569,6 +572,40 @@ def test_dpi_works_across_backends(df_type):
     assert result_pd.shape[0] <= n // 5
 
 
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_default_dpi_handles_discrete_x_with_controls(df_type):
+    """The default DPI selector supports controls when x has only two values."""
+    rng = np.random.default_rng(987)
+    x = np.tile([0.0, 1.0], 50)
+    control = rng.normal(size=100)
+    base = pd.DataFrame(
+        {
+            "x0": x,
+            # The steep signal and low noise force the ROT pilot above the two
+            # feasible bins, so DPI has to deduplicate its pilot quantile edges.
+            "y0": 8.0 * x + 1.5 * control + rng.normal(scale=0.05, size=100),
+            "z_ctrl": control,
+        }
+    )
+    assert _get_rot_bins(base, "x0", "y0", controls=["z_ctrl"]) > 2
+    expected_x, expected_y = _manual_binscatter_with_controls(
+        base, 2, control_cols=["z_ctrl"]
+    )
+    native = binscatter(
+        conv(base, df_type),
+        "x0",
+        "y0",
+        controls=["z_ctrl"],
+        return_type="native",
+    )
+    result_pd = to_pandas_native(native).sort_values("bin").reset_index(drop=True)
+
+    assert result_pd.shape[0] == 2
+    assert result_pd["bin"].nunique() == 2
+    np.testing.assert_allclose(result_pd["x0"].to_numpy(), expected_x)
+    np.testing.assert_allclose(result_pd["y0"].to_numpy(), expected_y)
+
+
 def test_dpi_skewed_data():
     """DPI works with skewed distributions."""
     rng = np.random.default_rng(201)
@@ -762,7 +799,7 @@ def test_binscatter_controls_matches_reference(df_type):
     df = pd.DataFrame({"x0": x, "y0": y, "z": z})
     num_bins = 15
 
-    expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
+    _expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
     df_backend = conv(df, df_type)
     result = binscatter(
         df_backend,
@@ -1316,8 +1353,9 @@ def test_non_unique_quantiles_pyspark():
 
 def test_format_dummy_alias():
     """Test the format_dummy_alias helper function."""
-    from binscatter.dummy_builders import format_dummy_alias
     import re
+
+    from binscatter.dummy_builders import format_dummy_alias
 
     # All names should start with __ctrl_{column}_
     result = format_dummy_alias("category", "value1")
@@ -1526,9 +1564,10 @@ def test_dummy_builder_constant_categorical():
 
 def test_build_dummies_pandas_with_empty_controls():
     """Test pandas builder with empty categorical controls."""
-    from binscatter.dummy_builders import build_dummies_pandas
-    import pandas as pd
     import narwhals as nw
+    import pandas as pd
+
+    from binscatter.dummy_builders import build_dummies_pandas
 
     df_pd = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
     df_nw = nw.from_native(df_pd).lazy()
@@ -1541,9 +1580,10 @@ def test_build_dummies_pandas_with_empty_controls():
 
 def test_build_dummies_polars_preserves_lazy():
     """Test that polars builder preserves lazy evaluation."""
-    from binscatter.dummy_builders import build_dummies_polars
-    import polars as pl
     import narwhals as nw
+    import polars as pl
+
+    from binscatter.dummy_builders import build_dummies_polars
 
     # Create a lazy polars dataframe
     df_pl = pl.DataFrame(
@@ -1574,9 +1614,10 @@ def test_build_dummies_polars_preserves_lazy():
 
 def test_build_dummies_polars_with_multiple_categoricals():
     """Test polars builder with multiple categorical columns."""
-    from binscatter.dummy_builders import build_dummies_polars
-    import polars as pl
     import narwhals as nw
+    import polars as pl
+
+    from binscatter.dummy_builders import build_dummies_polars
 
     df_pl = pl.DataFrame(
         {
@@ -1605,9 +1646,10 @@ def test_build_dummies_polars_with_multiple_categoricals():
 
 def test_build_dummies_fallback_with_multiple_categoricals():
     """Test fallback builder with multiple categorical columns."""
-    from binscatter.dummy_builders import build_dummies_fallback
-    import pandas as pd
     import narwhals as nw
+    import pandas as pd
+
+    from binscatter.dummy_builders import build_dummies_fallback
 
     df_pd = pd.DataFrame(
         {
@@ -1636,14 +1678,15 @@ def test_build_dummies_fallback_with_multiple_categoricals():
 
 def test_build_dummies_pandas_single_categorical():
     """Test pandas builder with a single categorical column."""
-    from binscatter.dummy_builders import build_dummies_pandas
-    import pandas as pd
     import narwhals as nw
+    import pandas as pd
+
+    from binscatter.dummy_builders import build_dummies_pandas
 
     df_pd = pd.DataFrame({"x": [1, 2, 3], "cat": ["only_one", "only_one", "only_one"]})
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_result, dummy_cols = build_dummies_pandas(df_nw, ("cat",))
+    _df_result, dummy_cols = build_dummies_pandas(df_nw, ("cat",))
 
     # Single level categorical should create no dummies
     assert len(dummy_cols) == 0
@@ -1651,16 +1694,17 @@ def test_build_dummies_pandas_single_categorical():
 
 def test_build_dummies_polars_single_categorical():
     """Test polars builder with a single categorical column."""
-    from binscatter.dummy_builders import build_dummies_polars
-    import polars as pl
     import narwhals as nw
+    import polars as pl
+
+    from binscatter.dummy_builders import build_dummies_polars
 
     df_pl = pl.DataFrame(
         {"x": [1, 2, 3], "cat": ["only_one", "only_one", "only_one"]}
     ).lazy()
     df_nw = nw.from_native(df_pl)
 
-    df_result, dummy_cols = build_dummies_polars(df_nw, ("cat",))
+    _df_result, dummy_cols = build_dummies_polars(df_nw, ("cat",))
 
     # Single level categorical should create no dummies
     assert len(dummy_cols) == 0
@@ -1668,13 +1712,14 @@ def test_build_dummies_polars_single_categorical():
 
 def test_configure_build_dummies_dispatch():
     """Test that configure_build_dummies returns the right implementation."""
+    from narwhals import Implementation
+
     from binscatter.dummy_builders import (
-        configure_build_dummies,
+        build_dummies_fallback,
         build_dummies_pandas,
         build_dummies_polars,
-        build_dummies_fallback,
+        configure_build_dummies,
     )
-    from narwhals import Implementation
 
     # Pandas should get pandas builder
     builder = configure_build_dummies(Implementation.PANDAS)
@@ -1696,8 +1741,9 @@ def test_configure_build_dummies_dispatch():
 def test_configure_build_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
-    from binscatter.dummy_builders import configure_build_dummies, build_dummies_pyspark
     from narwhals import Implementation
+
+    from binscatter.dummy_builders import build_dummies_pyspark, configure_build_dummies
 
     builder = configure_build_dummies(Implementation.PYSPARK)
     assert builder == build_dummies_pyspark
@@ -1716,14 +1762,14 @@ def test_maybe_add_regression_features_with_categorical():
 
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_with_features, features = add_regression_features(
+    df_with_features, features, absorbed = add_regression_features(
         df_nw,
         numeric_controls=("num_ctrl",),
         categorical_controls=("cat_ctrl",),
     )
 
-    # Should have numeric control + categorical dummies
-    # cat_ctrl has 2 levels -> 1 dummy
+    # cat_ctrl has 2 levels, well under ABSORB_MIN_LEVELS, so it is one-hot encoded.
+    assert absorbed is None
     assert "num_ctrl" in features
     assert len(features) == 2  # num_ctrl + 1 dummy
 
@@ -1753,7 +1799,7 @@ def test_dummy_names_consistent_across_backends(backend):
         y="y",
     )
 
-    df_with_dummies, regression_features = add_regression_features(
+    _df_with_dummies, regression_features, _ = add_regression_features(
         df_clean,
         numeric_controls=(),
         categorical_controls=categorical_controls,
@@ -1789,7 +1835,7 @@ def test_pyspark_dummy_names_match_pandas():
         x="x",
         y="y",
     )
-    _, features_pd = add_regression_features(
+    _, features_pd, _ = add_regression_features(
         df_clean_pd,
         numeric_controls=(),
         categorical_controls=cat_controls_pd,
@@ -1803,7 +1849,7 @@ def test_pyspark_dummy_names_match_pandas():
         x="x",
         y="y",
     )
-    _, features_spark = add_regression_features(
+    _, features_spark, _ = add_regression_features(
         df_clean_spark,
         numeric_controls=(),
         categorical_controls=cat_controls_spark,

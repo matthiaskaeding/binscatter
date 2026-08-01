@@ -5,6 +5,37 @@
 ### Added
 - Benchmark tests comparing binscatter's bin dot values and automatic bin counts (ROT and DPI, with and without controls) directly against the `binsreg` Python package's own reference output, using its canonical simulation dataset (checked in at `data/binsreg_sim.csv`) (#71).
 - Property-based tests in `tests/test_properties.py` using Hypothesis, covering structural invariants (bin count, ordering, range containment), invariance under row permutation and control rescaling, equivariance under affine maps of `x` and `y`, dropping of null/non-finite rows, and label-independence of categorical controls (#53).
+- `.github/workflows/publish.yaml`: publishing is driven by GitHub Releases, so cutting a release is the single action that ships a version and pushes to `main` never publish (#72). The release tag is checked against the version in `pyproject.toml` before anything is built, so a release tagged `v0.1.0` cannot ship a `0.4.0` artifact, and upload uses PyPI trusted publishing rather than a stored API token. `workflow_dispatch` runs the same build and `twine check` as a dry run that stops short of publishing.
+- Cross-backend regression coverage for the default DPI selector with controls on
+  discrete `x`, ensuring duplicate pilot quantile boundaries produce the two
+  feasible bins and the correct control-adjusted estimates (#70).
+
+### Changed
+- Upgraded ruff to 0.16.1 and fixed the 143 findings its newer default rule set reports, rather than staying on a release old enough not to raise them. The version is named in three places that are now kept in step — `ci.yaml`, `.pre-commit-config.yaml`, and `required-version` in `pyproject.toml` — so CI, contributors' hooks and a stray global install cannot lint under different rules; a mismatch fails with one line naming the cause instead of a wall of unreproducible findings. `BLE001` and `S110` are ignored in `pyproject.toml`, since the broad `except` in the optional-backend import guards is the intended behaviour rather than an oversight.
+
+### Removed
+- Stopped committing `uv.lock`; dependency versions are no longer pinned in the repo.
+
+### Fixed
+- `_quantile_edges` (`core.py`, `bin_selectors.py`) no longer carries a `numpy<1.22` fallback passing the `interpolation=` keyword that NumPy removed in 2.0. The project requires `numpy>=2.3`, so the `except TypeError` branch was unreachable and its `type: ignore` was masking a real overload error.
+- The fallback quantile path in `quantiles.py` re-raises with a bare `raise`, preserving the original traceback instead of restarting it at the handler.
+
+## 0.4.0 - 2026-08-01
+
+### Added
+- `categorical=` parameter to treat a control as categorical regardless of dtype. Integer-coded identifiers (`firm_id`, `zip`) were previously classified numeric and silently entered as a single linear term; listing them in `categorical` gives them fixed-effect semantics. It is an override, not a declaration — string columns are still detected automatically. Must be a subset of `controls`; floating-point columns are rejected, since grouping on floats is unreliable.
+- Absorption of high-cardinality categorical controls via the Mundlak / within transform, in the new `fixed_effects.py` module (#69). For any two matrices and the group-dummy matrix `D`, `(M_D A)'(M_D B) = A'B - S_A' N^-1 S_B`, so only group counts, group sums, and the bin-by-group crosstab are needed — two aggregations, independent of the number of levels, with no per-row residuals materialized. A categorical with 50,000 levels previously required ~1.25 billion sum-product aggregations and a dense 50k x 50k solve; it now costs the same as a handful of levels.
+- `tests/test_fixed_effects.py`: equivalence against the one-hot path on every backend, an independent statsmodels oracle, ordering and exotic-label handling, degenerate structure (singleton groups, levels confined to one bin, disconnected bin-group blocks), level recovery, and unit tests for the within algebra itself.
+- `scripts/benchmark_fixed_effects.py` (`make benchmark-fe`): measures absorption against one-hot encoding by cardinality, absorbed scaling in rows, and the cost of the cardinality lookup that routes between the two. Measured on pandas at n=20,000: 50 levels 1.08s one-hot vs 0.03s absorbed; 100 levels 5.92s vs 0.03s; 200 levels 46.35s vs 0.03s; 400 levels exceeded 8 minutes on the one-hot path while absorbed stayed at 0.03s. It is a script rather than a test because it measures rather than asserts — the guard against silently falling back to one-hot is a direct assertion on the routing decision in `test_fixed_effects.py`, which needs no timing.
+
+### Changed
+- `add_regression_features` returns a third element naming the absorbed column, and `Profile` carries `fe_name`.
+- The rule-of-thumb and DPI bin selectors, and the `poly_line` overlay, all apply the within correction so the absorbed control is not silently dropped from bin selection.
+- The pandas dummy builder now passes `columns=` to `pd.get_dummies`, which otherwise silently skips non-object columns and encoded nothing for an integer-coded control.
+
+### Notes
+- Absorption applies at `ABSORB_MIN_LEVELS` (50) or more. Below that the existing one-hot path is kept, so existing results do not move. The threshold exists because the DPI selector's sandwich variance is not invariant to the reparameterization: the one-hot design is full rank (drop_first pins the level) while the within system is rank-deficient by one, so per-bin coefficients — and hence their variances — are identified only up to a shift. Crossing it can therefore change the number of bins the `dpi` selector picks. 50 is where the one-hot path begins costing real time (0.74s at 50 levels, 3.52s at 100, 31s at 200, ~6 min at 400) without yet being unusable.
+- Only one categorical is absorbed, the highest-cardinality one; the rest are one-hot encoded into the control block and ride along at no extra cost. Absorbing two is the two-way fixed effects problem: `D'D` stops being diagonal and the closed form does not exist.
 
 ## 0.3.1 - 2026-01-29
 

@@ -1,22 +1,22 @@
+import dask.dataframe as dd
+import duckdb
 import narwhals as nw
 import numpy as np
 import pandas as pd
-from binscatter.core import (
-    _remove_bad_values,
-    split_columns,
-    partial_out_controls,
-    Profile,
-)
 import polars as pl
-import duckdb
-import dask.dataframe as dd
 import pytest
 
+from binscatter.core import (
+    Profile,
+    _remove_bad_values,
+    partial_out_controls,
+    split_columns,
+)
 from tests.conftest import (
     DF_BACKENDS,
+    SparkSession,
     convert_to_backend,
     to_pandas_native,
-    SparkSession,
 )
 
 DF_TYPE_PARAMS = [
@@ -92,7 +92,7 @@ def _sample_profile(bin_count: int, controls: list[str]) -> Profile:
             pd.DataFrame({"x0": [0], "y0": [0]})
         ).implementation,
         regression_features=tuple(controls),
-        polynomial_features=tuple(),
+        polynomial_features=(),
         x_bounds=(0.0, 1.0),
     )
 

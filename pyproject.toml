@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "binscatter"
-version = "0.3.1"
+version = "0.4.0"
 description = "Cross-backend binscatter plots."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,6 +62,21 @@ ci = [
   "hypothesis>=6.100",
 ]
 
+
+[tool.ruff]
+# Ruff refuses to run under any other version. Its default rule set grows
+# between releases, so a mismatch — from CI, a pre-commit hook or a stray
+# global install — would lint under different rules than the project is
+# configured for. Failing loudly beats findings nobody can reproduce. Keep
+# this in step with .pre-commit-config.yaml and ci.yaml.
+required-version = "==0.16.1"
+
+[tool.ruff.lint]
+# Both rules fire on the guarded imports and probe calls that let the package
+# work without pyspark, duckdb or dask installed — see the lazy-import note in
+# CLAUDE.md. The breadth of the except is the point: any failure to import or
+# construct an optional backend must degrade to "unavailable", not propagate.
+ignore = ["BLE001", "S110"]
 
 [tool.ty.rules]
 unresolved-import = "ignore"

@@ -18,17 +18,17 @@
 # Exactly as in Catteneo et al.
 # %%
 import sys
-from pathlib import Path  # noqa: E402
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-import logging  # noqa: E402
+import logging
 
-import plotly.express as px  # noqa: E402
-import polars as pl  # noqa: E402
+import plotly.express as px
+import polars as pl
 
-from src.binscatter.core import binscatter  # noqa: E402
+from src.binscatter.core import binscatter
 
 proj_dir = ROOT
 log_file = proj_dir / "artifacts" / "binscatter.log"

@@ -1,0 +1,79 @@
+name: Publish
+
+# Publishing is driven by GitHub Releases, so cutting a release is the single
+# deliberate action that ships a version — pushes to main never publish.
+#
+# The tag must match the version in pyproject.toml; the check-version job
+# enforces that, so a release tagged v0.1.0 cannot ship a 0.0.3 artifact.
+on:
+  release:
+    types: [published]
+  # Dry run: builds and uploads the artifacts without publishing anywhere.
+  workflow_dispatch:
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Tag must match the version in pyproject.toml
+        if: github.event_name == 'release'
+        run: |
+          project_version=$(uv run python -c "
+          import tomllib, pathlib
+          print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])
+          ")
+          tag="${GITHUB_REF_NAME#v}"
+          echo "pyproject version: ${project_version}"
+          echo "release tag:       ${GITHUB_REF_NAME} (normalised: ${tag})"
+          if [ "$project_version" != "$tag" ]; then
+            echo "::error::Release tag ${GITHUB_REF_NAME} does not match pyproject version ${project_version}. Bump pyproject.toml, or retag."
+            exit 1
+          fi
+
+  build:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      # twine is a standalone tool rather than a project dependency, so this
+      # runs it directly instead of syncing the dev group — that group pulls in
+      # pyspark, dask and ibis, none of which have anything to do with checking
+      # metadata. Pinned for the same reason ci.yaml pins its tools.
+      - name: Check metadata renders on PyPI
+        run: uv tool run twine@7.0.0 check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    # Only a published release ships; workflow_dispatch stops after build.
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      # Required for PyPI trusted publishing — no API token is stored.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1

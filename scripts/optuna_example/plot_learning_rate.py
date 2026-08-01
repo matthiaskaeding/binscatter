@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from binscatter.core import binscatter  # noqa: E402
+from binscatter.core import binscatter
 
 HYPERPARAM_COLUMNS = [
     "learning_rate",

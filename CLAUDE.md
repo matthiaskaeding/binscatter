@@ -107,6 +107,25 @@ Update the example notebooks when you:
 3. Test that the entire notebook executes without errors: `uv run jupyter nbconvert --to notebook --execute examples/demo.ipynb --output test_output.ipynb`
 4. Include the notebook updates in the same PR as the feature
 
+## Changelog
+
+**IMPORTANT: Update `CHANGELOG.md` on every branch, in the same commit or PR as the change itself.**
+
+Add entries under `## Unreleased`, in the appropriate subsection — `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`. Create the subsection if it is not there yet.
+
+This applies to more than library features. Anything a user or contributor would be surprised to discover on their own belongs here:
+
+- New or changed behaviour in `binscatter()` and its helpers
+- Bug fixes, including ones only reachable on a specific backend
+- Build, packaging and release changes (a new publish workflow, dropping a lockfile)
+- Tooling changes that alter what is enforced (a linter upgrade that changes the rules a contributor must satisfy)
+
+Purely internal churn — a refactor with no observable effect, a test-only rename — does not need an entry.
+
+Write entries so they still make sense months later, without the PR open next to them: say what changed and why it matters, not just which symbol moved. Match the level of detail in the existing sections.
+
+Do not defer this to release time. An empty `## Unreleased` section under a series of merged behaviour changes means the history was lost, and reconstructing it from the commit log afterwards is guesswork.
+
 ## Planning
 
 Store the active plan in `PLAN.md`. Keep the current feature plan at the top; archive completed plans below a horizontal rule.

@@ -27,11 +27,16 @@ jobs:
         uv venv
         uv pip install -e .
 
+    # Pinned to match .pre-commit-config.yaml, and asserted a third time by
+    # `required-version` in pyproject.toml so the three cannot drift apart
+    # quietly. Unpinned, `uv tool run ruff` resolves to the newest release, so
+    # an upstream change to the default rule set breaks CI with no change to
+    # this repo -- and diverges from what contributors' hooks enforce locally.
     - name: Run ruff format
-      run: uv tool run ruff format --check
+      run: uv tool run ruff@0.16.1 format --check
 
     - name: Run ruff lint
-      run: uv tool run ruff check
+      run: uv tool run ruff@0.16.1 check
 
     - name: Run ty
       run: uv tool run ty@latest check src

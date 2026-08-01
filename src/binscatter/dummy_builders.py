@@ -5,7 +5,7 @@ from categorical columns, with optimizations for each supported backend.
 """
 
 import hashlib
-from typing import Any, Tuple
+from typing import Any
 
 import narwhals as nw
 from narwhals import Implementation
@@ -70,7 +70,7 @@ def format_dummy_alias(column: str, value: Any) -> str:
     return f"__ctrl_{column}_{safe_value}_{value_hash}"
 
 
-def build_rename_map(columns, separator: str) -> Tuple[dict[str, str], list[str]]:
+def build_rename_map(columns, separator: str) -> tuple[dict[str, str], list[str]]:
     """Build rename mapping and list of dummy column names.
 
     Args:
@@ -90,7 +90,7 @@ def build_rename_map(columns, separator: str) -> Tuple[dict[str, str], list[str]
     return rename_map, dummy_cols
 
 
-def build_dummies_pandas(df, categorical_controls: Tuple[str, ...]):
+def build_dummies_pandas(df, categorical_controls: tuple[str, ...]):
     """Build dummy variables using native pandas implementation.
 
     Uses pd.get_dummies() for efficient dummy creation.
@@ -110,8 +110,11 @@ def build_dummies_pandas(df, categorical_controls: Tuple[str, ...]):
     native = nw.to_native(df)
     base = native.copy()
     sep = "__binscatter__"
+    # `columns` is required: without it get_dummies silently skips non-object
+    # columns, so an integer-coded control passed via `categorical=` encodes nothing.
     dummies = pd.get_dummies(
         base[list(categorical_controls)],
+        columns=list(categorical_controls),
         prefix={c: c for c in categorical_controls},
         prefix_sep=sep,
         drop_first=True,
@@ -122,7 +125,7 @@ def build_dummies_pandas(df, categorical_controls: Tuple[str, ...]):
     return nw.from_native(base).lazy(), tuple(dummy_cols)
 
 
-def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
+def build_dummies_polars(df, categorical_controls: tuple[str, ...]):
     """Build dummy variables using native polars implementation.
 
     Uses pl.to_dummies() for efficient dummy creation.
@@ -185,7 +188,7 @@ def build_dummies_polars(df, categorical_controls: Tuple[str, ...]):
     return nw.from_native(result_native), tuple(dummy_cols)
 
 
-def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
+def build_dummies_pyspark(df, categorical_controls: tuple[str, ...]):
     """Build dummy variables using PySpark with batched aggregation.
 
     Batches all categorical discovery into a single agg(*collect_set(...)) call
@@ -227,7 +230,7 @@ def build_dummies_pyspark(df, categorical_controls: Tuple[str, ...]):
     return nw.from_native(updated).lazy(), tuple(dummy_cols)
 
 
-def build_dummies_fallback(df, categorical_controls: Tuple[str, ...]):
+def build_dummies_fallback(df, categorical_controls: tuple[str, ...]):
     """Build dummy variables using narwhals expressions.
 
     Fallback for backends without specialized implementations.
@@ -243,12 +246,12 @@ def build_dummies_fallback(df, categorical_controls: Tuple[str, ...]):
     if not categorical_controls:
         return df, ()
 
-    from typing import Any, List
+    from typing import Any
 
     dummy_exprs = []
     dummy_cols: list[str] = []
     for column in categorical_controls:
-        distinct_values: List[Any] = (
+        distinct_values: list[Any] = (
             df.select(column).unique().collect().get_column(column).sort().to_list()
         )
         if len(distinct_values) <= 1:

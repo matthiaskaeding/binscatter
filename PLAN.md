@@ -1,8 +1,125 @@
 # PLAN.md
 
-## Active Plan: None
+_No active feature plan._
 
-All tracked workstreams are complete. Add a new active plan here when another task begins.
+---
+
+## Archived Plan: Resolve PR #80 Merge Conflicts
+
+**Status: Complete.**
+
+Current `main` was merged into `claude/issue-71-binsreg-benchmark`. Both sets of
+changelog entries and test imports were preserved, while `uv.lock` remains deleted
+per current repository policy. Focused benchmark/property tests, the fast suite,
+the affected PySpark tests, formatting, linting, and type checking all pass.
+
+1. Merge current `main` into `claude/issue-71-binsreg-benchmark` in an isolated
+   checkout.
+2. Preserve both changelog histories and all compatible test imports.
+3. Keep `uv.lock` deleted, matching current repository policy.
+4. Run focused tests and repository checks, then push the resolution.
+
+---
+
+## Archived Plan: Verify Default DPI With Controls on Discrete `x` (#70)
+
+**Status: Complete** — closes #70.
+
+### Outcome note
+
+The reported binary/discrete case already passes on `main`: the DPI helper
+deduplicates the ROT pilot's quantile edges, and the public pipeline caps the result
+to the feasible raw-`x` bins. The regression case deliberately makes the ROT pilot
+request more bins than binary `x` can support, supplies a numeric control, omits
+`num_bins` to exercise the public DPI default, and matches both coordinates against
+an independent least-squares reference on pandas, Polars, DuckDB, Dask, and PySpark.
+
+### Objective
+
+Close the coverage gap around the default automatic selector: when `x` has only a
+few distinct values and controls are supplied, DPI must complete successfully,
+collapse duplicate quantile boundaries to the feasible bin count, and return the
+same finite result on every supported dataframe backend.
+
+### Steps
+
+1. Reproduce the issue with discrete `x`, a numeric control, and the implicit
+   `num_bins="dpi"` default; trace both the DPI pilot and final quantile fallback.
+2. Add a cross-backend regression test that exercises the public default rather
+   than calling the selector helper in isolation.
+3. If the regression test exposes a selector or bin-assignment defect, fix the
+   narrowest shared path and add focused edge-case coverage.
+4. Record the user-visible guarantee in `CHANGELOG.md` and run focused tests,
+   formatting, linting, type checking, and the fast suite.
+
+---
+
+## Archived Plan: Absorb Fixed Effects (Mundlak) + `categorical=` Parameter
+
+**Status: Complete, released as 0.4.0** — closes #69. Multi-way absorption is
+tracked separately in #73.
+
+### Outcome note
+
+Absorption turned out **not** to be a free swap at every cardinality. The bin
+estimates are exact either way (equivalence holds to ~5e-15, confirmed against a
+statsmodels oracle), but the DPI selector's sandwich variance is not invariant to
+the reparameterization: the one-hot design is full rank because `drop_first` pins
+the level, while the within system is rank-deficient by one, so `pinv` returns a
+min-norm inverse and the per-bin variances differ (~0.4x on the test panel, moving
+the selected bin count from 24 to 30). Hence `ABSORB_MIN_LEVELS = 50`: small
+categoricals stay on the existing path so no current result moves, and large ones
+get a path that works at all.
+
+The threshold was set from measurement rather than guessed (`make benchmark-fe`).
+One-hot scales roughly cubically in levels — 0.74s at 50, 3.52s at 100, 31s at 200,
+~6 minutes at 400 (pandas, n=20,000) — so 50 sits at the knee: past it users pay
+seconds for an estimator difference they cannot see, before it the existing path is
+genuinely cheap.
+
+### Overview
+
+Categorical controls are one-hot encoded today, so `_ensure_feature_moments` builds
+`k(k+1)/2` sum-product expressions and `partial_out_controls` solves a dense
+`(J+k)x(J+k)` system. At a few thousand levels this dies while building the query
+plan. Replace that with the Mundlak / within projection applied at the moment level:
+
+```
+(M_D A)'(M_D B) = A'B - S_A' N^-1 S_B
+```
+
+which needs only group counts, group sums, and the bin x group crosstab — two extra
+`group_by` calls, independent of level count. Absorb the highest-cardinality
+categorical; one-hot the rest into the existing control block (the correction is
+generic in `W`, so they ride along free). `D'D` is diagonal only for a single
+categorical, so absorbing two is out of scope.
+
+Add `categorical=` so integer-coded IDs (`firm_id`, `zip`) can reach that path at
+all — today they are classified numeric and silently become a single linear term.
+
+### Steps
+
+1. **`categorical=` parameter**: validate (subset of `controls`, not `x`/`y`, no
+   duplicates, reject floats), thread through `clean_df` to override
+   `split_columns`, and keep reclassified columns in the finite/NaN filter.
+2. **`fixed_effects.py`**: `FEMoments` (counts, bin x group crosstab, feature sums,
+   y sums) + `compute_fe_moments()` doing the two aggregations + a generic
+   `within_correct()` helper. Map group labels to positions explicitly — `group_by`
+   order is not stable across backends.
+3. **Absorb selection**: one `n_unique()` pass over categorical controls, absorb the
+   argmax, dummy the rest.
+4. **`partial_out_controls`**: apply the correction to the four blocks, solve with
+   `lstsq` (the within system is rank-deficient by exactly 1), recover the level via
+   `fitted = beta + mean_controls @ gamma + (counts_g @ alpha) / n`.
+5. **Other three consumers** of `regression_features`: `_fit_polynomial_line` and
+   `_select_rule_of_thumb_bins` take the same moment algebra; `_select_dpi_bins`
+   already materializes to pandas so it can demean numerically.
+6. **Tests**: equivalence absorbed vs. one-hot across all backends is the gate; then
+   ordering/label handling, degenerate structure (singletons, single-bin levels,
+   disconnected bin x group), level recovery, statsmodels oracle, interactions with
+   `poly_line`/`rot`/`dpi`, nulls, and a high-cardinality case that would explode
+   today. See #69 for the full plan.
+7. **Release**: version bump, CHANGELOG entry, update `examples/demo.ipynb`.
 
 ---
 

@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-
 from typing import cast
 
 import polars as pl
@@ -39,7 +38,7 @@ def main() -> None:
     ).with_columns(pl.col("statenum", "year").cast(pl.String))
 
     df.write_parquet(parquet_path)
-    print(f"Wrote processed data to {parquet_path}")  # noqa: T201
+    print(f"Wrote processed data to {parquet_path}")
 
 
 if __name__ == "__main__":
