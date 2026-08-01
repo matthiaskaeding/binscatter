@@ -4,7 +4,6 @@
 - Core library lives in `src/binscatter/`, with `core.py` housing the dataframe-agnostic `binscatter` implementation and helper utilities. Public exports are wired through `binscatter/__init__.py`.
 - Automated checks reside under `tests/`, combining integration coverage (cross-backend checks in `tests/test_binscatter.py`) and focused unit helpers.
 - Usage samples and benchmarking scripts live in `examples/`; `examples/time_pyspark.py` demonstrates large-scale Spark execution.
-- Store the plan in PLAN.md. Keep the current feature plan at the top; archive completed plans below a horizontal rule.
 
 ## Build, Test, and Development Commands
 
@@ -137,7 +136,3 @@ Purely internal churn — a refactor with no observable effect, a test-only rena
 Write entries so they still make sense months later, without the PR open next to them: say what changed and why it matters, not just which symbol moved. Match the level of detail in the existing sections.
 
 Do not defer this to release time. An empty `## Unreleased` section under a series of merged behaviour changes means the history was lost, and reconstructing it from the commit log afterwards is guesswork.
-
-## Planning
-
-Store the active plan in `PLAN.md`. Keep the current feature plan at the top; archive completed plans below a horizontal rule.
