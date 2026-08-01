@@ -62,6 +62,13 @@ ci = [
 ]
 
 
+[tool.ruff]
+# Ruff refuses to run under any other version. Its default rule set grows
+# between releases, so a mismatch — from CI, a pre-commit hook or a stray
+# global install — would lint under different rules than the project is
+# configured for. Failing loudly beats findings nobody can reproduce.
+required-version = "==0.15.8"
+
 [tool.ty.rules]
 unresolved-import = "ignore"
 
