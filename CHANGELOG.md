@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Removed
+- Stopped committing `uv.lock`; dependencies are no longer pinned in the repo.
+
+### Fixed
+- Removed a dead numpy<1.22 compatibility fallback in `_quantile_edges` that newer `numpy`/`ty` releases flagged as an invalid overload.
+- Fixed a duckdb test assertion (`duckdb.duckdb.DuckDBPyRelation` -> `duckdb.DuckDBPyRelation`) that only worked by accident under old pinned duckdb versions.
+
 ## 0.3.1 - 2026-01-29
 
 ### Changed

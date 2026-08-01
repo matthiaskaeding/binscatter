@@ -8,6 +8,9 @@ wheels/
 
 # Virtual environments
 .venv
+
+# uv lockfile is not committed in this repo
+uv.lock
 binscatter_ref.pdf
 *.png
 .DS_Store
