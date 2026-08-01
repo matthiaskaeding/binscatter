@@ -1,6 +1,43 @@
 # PLAN.md
 
-## Active Plan: Absorb Fixed Effects (Mundlak) + `categorical=` Parameter
+_No active feature plan._
+
+---
+
+## Archived Plan: Verify Default DPI With Controls on Discrete `x` (#70)
+
+**Status: Complete** — closes #70.
+
+### Outcome note
+
+The reported binary/discrete case already passes on `main`: the DPI helper
+deduplicates the ROT pilot's quantile edges, and the public pipeline caps the result
+to the feasible raw-`x` bins. The regression case deliberately makes the ROT pilot
+request more bins than binary `x` can support, supplies a numeric control, omits
+`num_bins` to exercise the public DPI default, and matches both coordinates against
+an independent least-squares reference on pandas, Polars, DuckDB, Dask, and PySpark.
+
+### Objective
+
+Close the coverage gap around the default automatic selector: when `x` has only a
+few distinct values and controls are supplied, DPI must complete successfully,
+collapse duplicate quantile boundaries to the feasible bin count, and return the
+same finite result on every supported dataframe backend.
+
+### Steps
+
+1. Reproduce the issue with discrete `x`, a numeric control, and the implicit
+   `num_bins="dpi"` default; trace both the DPI pilot and final quantile fallback.
+2. Add a cross-backend regression test that exercises the public default rather
+   than calling the selector helper in isolation.
+3. If the regression test exposes a selector or bin-assignment defect, fix the
+   narrowest shared path and add focused edge-case coverage.
+4. Record the user-visible guarantee in `CHANGELOG.md` and run focused tests,
+   formatting, linting, type checking, and the fast suite.
+
+---
+
+## Archived Plan: Absorb Fixed Effects (Mundlak) + `categorical=` Parameter
 
 **Status: Complete, released as 0.4.0** — closes #69. Multi-way absorption is
 tracked separately in #73.
