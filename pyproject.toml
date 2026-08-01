@@ -46,6 +46,7 @@ dev = [
   "prek>=0.2.24",
   "nbstripout>=0.8.2",
   "scikit-learn>=1.8.0",
+  "hypothesis>=6.100",
 ]
 ci = [
   "pytest>=8.3.5",
@@ -58,6 +59,7 @@ ci = [
   "dask>=2025.7.0",
   "statsmodels>=0.14.6",
   "binsreg==2.1.7",
+  "hypothesis>=6.100",
 ]
 
 
