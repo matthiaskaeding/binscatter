@@ -1,0 +1,90 @@
+name: Generate demo notebook
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "examples/demo.ipynb"
+      - "src/**"
+      - "pyproject.toml"
+      - ".github/workflows/generate-notebook.yaml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: generated-demo-notebook
+  cancel-in-progress: true
+
+jobs:
+  generate-notebook:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Check whether notebook inputs changed
+        id: inputs
+        run: |
+          fingerprint=$(git ls-files -s -- \
+            examples/demo.ipynb \
+            src \
+            pyproject.toml \
+            .github/workflows/generate-notebook.yaml \
+            | sha256sum | cut -d ' ' -f 1)
+          echo "fingerprint=$fingerprint" >>"$GITHUB_OUTPUT"
+
+          if git ls-remote --exit-code --heads origin notebooks >/dev/null 2>&1; then
+            git fetch --depth=1 origin notebooks
+            published_fingerprint=$(git show FETCH_HEAD:source.sha256 2>/dev/null || true)
+            if [ "$published_fingerprint" = "$fingerprint" ]; then
+              echo "changed=false" >>"$GITHUB_OUTPUT"
+              echo "Notebook inputs are already published."
+              exit 0
+            fi
+          fi
+
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+
+      - name: Install uv
+        if: steps.inputs.outputs.changed == 'true'
+        uses: astral-sh/setup-uv@v4
+        with:
+          version: "latest"
+
+      - name: Set up Python
+        if: steps.inputs.outputs.changed == 'true'
+        run: uv python install 3.11
+
+      - name: Execute demo notebook
+        if: steps.inputs.outputs.changed == 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/generated-notebook"
+          uv run --with nbconvert jupyter nbconvert \
+            --to notebook \
+            --execute examples/demo.ipynb \
+            --output "$RUNNER_TEMP/generated-notebook/demo.ipynb" \
+            --ExecutePreprocessor.timeout=600 \
+            --ExecutePreprocessor.record_timing=False
+
+          jq -e \
+            '[.cells[].outputs? // []] | flatten | length > 0' \
+            "$RUNNER_TEMP/generated-notebook/demo.ipynb" >/dev/null
+
+      - name: Deploy to orphan notebooks branch
+        if: steps.inputs.outputs.changed == 'true'
+        run: |
+          set -euxo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout --orphan notebooks-publish
+          git rm -rf .
+          git clean -fdx
+          cp "$RUNNER_TEMP/generated-notebook/demo.ipynb" demo.ipynb
+          echo "${{ steps.inputs.outputs.fingerprint }}" >source.sha256
+
+          git add demo.ipynb source.sha256
+          git commit -m "Render demo notebook for ${GITHUB_SHA}"
+          git push origin notebooks-publish:notebooks --force

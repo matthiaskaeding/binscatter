@@ -107,8 +107,8 @@ Update the example notebooks when you:
 
 1. Add a new cell demonstrating the feature with clear explanatory text
 2. Use readily available datasets (preferably from `plotly.express.data`)
-3. Test that the entire notebook executes without errors: `uv run jupyter nbconvert --to notebook --execute examples/demo.ipynb --output test_output.ipynb`
-4. Include the notebook updates in the same PR as the feature
+3. Test that the entire notebook executes without errors: `make make-nb`. The rendered copy is written under `artifacts/notebooks/`.
+4. Include the output-free notebook source in the same PR as the feature. Do not commit rendered outputs; after the PR reaches `main`, GitHub Actions publishes them to the orphan `notebooks` branch.
 
 ## Commit & Pull Request Guidelines
 
