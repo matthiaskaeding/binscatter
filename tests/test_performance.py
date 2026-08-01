@@ -8,17 +8,17 @@ specifically:
 """
 
 import time
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from binscatter.core import (
+    add_regression_features,
     binscatter,
     clean_df,
-    add_regression_features,
 )
 from tests.conftest import convert_to_backend
 
@@ -239,7 +239,7 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
         y="y",
     )
 
-    df_with_dummies, regression_features, absorbed = add_regression_features(
+    df_with_dummies, _regression_features, absorbed = add_regression_features(
         df_clean,
         numeric_controls=(),
         categorical_controls=categorical_controls,
@@ -385,7 +385,7 @@ def test_backend_dummy_creation_time(backend: str) -> None:
     )
 
     with timer() as result:
-        df_with_dummies, features, _ = add_regression_features(
+        df_with_dummies, _features, _ = add_regression_features(
             df_clean,
             numeric_controls=(),
             categorical_controls=categorical_controls,

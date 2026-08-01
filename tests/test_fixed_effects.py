@@ -12,9 +12,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import binscatter.core as core
-from binscatter import binscatter
 import binscatter.fixed_effects as fe_mod
+from binscatter import binscatter, core
 from binscatter.fixed_effects import demean_within, group_codes, within_correct
 from tests.conftest import DF_BACKENDS, convert_to_backend
 

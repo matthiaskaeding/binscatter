@@ -1,38 +1,38 @@
 import uuid
-from typing import Iterable
+from collections.abc import Iterable
 
-import polars as pl
-import numpy as np
+import dask.dataframe as dd
+import duckdb
 import narwhals as nw
+import numpy as np
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objs as go
+import polars as pl
+import pytest
+import statsmodels.api as sm
 from binsreg import binsregselect
+
 from binscatter.core import (
-    add_polynomial_features,
-    binscatter,
-    clean_df,
-    add_regression_features,
-    partial_out_controls,
     Profile,
     _fit_polynomial_line,
-    _select_rule_of_thumb_bins,
     _select_dpi_bins,
+    _select_rule_of_thumb_bins,
+    add_polynomial_features,
+    add_regression_features,
+    binscatter,
+    clean_df,
+    partial_out_controls,
 )
 from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
 )
-import plotly.graph_objs as go
-import plotly.express as px
-import duckdb
-import pytest
-import pandas as pd
-import dask.dataframe as dd
-import statsmodels.api as sm
-
 from tests.conftest import (
     DF_BACKENDS,
+    SparkSession,
     convert_to_backend,
     to_pandas_native,
-    SparkSession,
 )
 
 if SparkSession is not None:  # pragma: no cover - optional dependency
@@ -679,7 +679,7 @@ def test_binscatter_controls_matches_reference(df_type):
     df = pd.DataFrame({"x0": x, "y0": y, "z": z})
     num_bins = 15
 
-    expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
+    _expected_x, expected_y = _manual_binscatter_with_controls(df, num_bins)
     df_backend = conv(df, df_type)
     result = binscatter(
         df_backend,
@@ -1233,8 +1233,9 @@ def test_non_unique_quantiles_pyspark():
 
 def test_format_dummy_alias():
     """Test the format_dummy_alias helper function."""
-    from binscatter.dummy_builders import format_dummy_alias
     import re
+
+    from binscatter.dummy_builders import format_dummy_alias
 
     # All names should start with __ctrl_{column}_
     result = format_dummy_alias("category", "value1")
@@ -1443,9 +1444,10 @@ def test_dummy_builder_constant_categorical():
 
 def test_build_dummies_pandas_with_empty_controls():
     """Test pandas builder with empty categorical controls."""
-    from binscatter.dummy_builders import build_dummies_pandas
-    import pandas as pd
     import narwhals as nw
+    import pandas as pd
+
+    from binscatter.dummy_builders import build_dummies_pandas
 
     df_pd = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
     df_nw = nw.from_native(df_pd).lazy()
@@ -1458,9 +1460,10 @@ def test_build_dummies_pandas_with_empty_controls():
 
 def test_build_dummies_polars_preserves_lazy():
     """Test that polars builder preserves lazy evaluation."""
-    from binscatter.dummy_builders import build_dummies_polars
-    import polars as pl
     import narwhals as nw
+    import polars as pl
+
+    from binscatter.dummy_builders import build_dummies_polars
 
     # Create a lazy polars dataframe
     df_pl = pl.DataFrame(
@@ -1491,9 +1494,10 @@ def test_build_dummies_polars_preserves_lazy():
 
 def test_build_dummies_polars_with_multiple_categoricals():
     """Test polars builder with multiple categorical columns."""
-    from binscatter.dummy_builders import build_dummies_polars
-    import polars as pl
     import narwhals as nw
+    import polars as pl
+
+    from binscatter.dummy_builders import build_dummies_polars
 
     df_pl = pl.DataFrame(
         {
@@ -1522,9 +1526,10 @@ def test_build_dummies_polars_with_multiple_categoricals():
 
 def test_build_dummies_fallback_with_multiple_categoricals():
     """Test fallback builder with multiple categorical columns."""
-    from binscatter.dummy_builders import build_dummies_fallback
-    import pandas as pd
     import narwhals as nw
+    import pandas as pd
+
+    from binscatter.dummy_builders import build_dummies_fallback
 
     df_pd = pd.DataFrame(
         {
@@ -1553,14 +1558,15 @@ def test_build_dummies_fallback_with_multiple_categoricals():
 
 def test_build_dummies_pandas_single_categorical():
     """Test pandas builder with a single categorical column."""
-    from binscatter.dummy_builders import build_dummies_pandas
-    import pandas as pd
     import narwhals as nw
+    import pandas as pd
+
+    from binscatter.dummy_builders import build_dummies_pandas
 
     df_pd = pd.DataFrame({"x": [1, 2, 3], "cat": ["only_one", "only_one", "only_one"]})
     df_nw = nw.from_native(df_pd).lazy()
 
-    df_result, dummy_cols = build_dummies_pandas(df_nw, ("cat",))
+    _df_result, dummy_cols = build_dummies_pandas(df_nw, ("cat",))
 
     # Single level categorical should create no dummies
     assert len(dummy_cols) == 0
@@ -1568,16 +1574,17 @@ def test_build_dummies_pandas_single_categorical():
 
 def test_build_dummies_polars_single_categorical():
     """Test polars builder with a single categorical column."""
-    from binscatter.dummy_builders import build_dummies_polars
-    import polars as pl
     import narwhals as nw
+    import polars as pl
+
+    from binscatter.dummy_builders import build_dummies_polars
 
     df_pl = pl.DataFrame(
         {"x": [1, 2, 3], "cat": ["only_one", "only_one", "only_one"]}
     ).lazy()
     df_nw = nw.from_native(df_pl)
 
-    df_result, dummy_cols = build_dummies_polars(df_nw, ("cat",))
+    _df_result, dummy_cols = build_dummies_polars(df_nw, ("cat",))
 
     # Single level categorical should create no dummies
     assert len(dummy_cols) == 0
@@ -1585,13 +1592,14 @@ def test_build_dummies_polars_single_categorical():
 
 def test_configure_build_dummies_dispatch():
     """Test that configure_build_dummies returns the right implementation."""
+    from narwhals import Implementation
+
     from binscatter.dummy_builders import (
-        configure_build_dummies,
+        build_dummies_fallback,
         build_dummies_pandas,
         build_dummies_polars,
-        build_dummies_fallback,
+        configure_build_dummies,
     )
-    from narwhals import Implementation
 
     # Pandas should get pandas builder
     builder = configure_build_dummies(Implementation.PANDAS)
@@ -1613,8 +1621,9 @@ def test_configure_build_dummies_dispatch():
 def test_configure_build_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
-    from binscatter.dummy_builders import configure_build_dummies, build_dummies_pyspark
     from narwhals import Implementation
+
+    from binscatter.dummy_builders import build_dummies_pyspark, configure_build_dummies
 
     builder = configure_build_dummies(Implementation.PYSPARK)
     assert builder == build_dummies_pyspark
@@ -1670,7 +1679,7 @@ def test_dummy_names_consistent_across_backends(backend):
         y="y",
     )
 
-    df_with_dummies, regression_features, _ = add_regression_features(
+    _df_with_dummies, regression_features, _ = add_regression_features(
         df_clean,
         numeric_controls=(),
         categorical_controls=categorical_controls,

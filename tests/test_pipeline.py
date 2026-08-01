@@ -1,9 +1,8 @@
-import pytest
-import pandas as pd
-
 import narwhals as nw
+import pandas as pd
+import pytest
 
-from binscatter.core import _clean_controls, clean_df, add_regression_features
+from binscatter.core import _clean_controls, add_regression_features, clean_df
 from tests.conftest import DF_BACKENDS, convert_to_backend
 
 DF_TYPE_PARAMS = [

@@ -18,9 +18,8 @@ import narwhals as nw
 import numpy as np
 import pandas as pd
 
-import binscatter.core as core
 import binscatter.fixed_effects as fe_mod
-from binscatter import binscatter
+from binscatter import binscatter, core
 
 warnings.filterwarnings("ignore")
 

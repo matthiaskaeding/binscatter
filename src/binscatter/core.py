@@ -4,14 +4,13 @@ import operator
 import time
 import uuid
 import warnings
+from collections.abc import Iterable
 from functools import reduce, wraps
 from typing import (
     Any,
-    Iterable,
-    List,
     Literal,
     NamedTuple,
-    Tuple,
+    cast,
     overload,
 )
 
@@ -338,9 +337,9 @@ class Profile(NamedTuple):
     distinct_suffix: str
     is_lazy_input: bool
     implementation: Implementation
-    regression_features: Tuple[str, ...]
-    polynomial_features: Tuple[str, ...]
-    x_bounds: Tuple[float, float]
+    regression_features: tuple[str, ...]
+    polynomial_features: tuple[str, ...]
+    x_bounds: tuple[float, float]
     fe_name: str | None = None
 
     @property
@@ -378,7 +377,7 @@ def _ensure_moments(
 
 def _ensure_feature_moments(
     df: nw.LazyFrame,
-    feature_names: Tuple[str, ...],
+    feature_names: tuple[str, ...],
     y_expr: nw.Expr,
     cache: dict[str, float],
 ) -> None:
@@ -398,7 +397,7 @@ def _ensure_feature_moments(
 
 
 def _build_feature_normal_equations(
-    feature_names: Tuple[str, ...], cache: dict[str, float]
+    feature_names: tuple[str, ...], cache: dict[str, float]
 ) -> tuple[np.ndarray, np.ndarray]:
     if not feature_names:
         return np.zeros((0, 0), dtype=float), np.zeros(0, dtype=float)
@@ -719,12 +718,12 @@ def make_plot_plotly(
         "template": "simple_white",
         "color_discrete_sequence": ["black"],
     }
-    for k in kwargs_binscatter:
+    for k, v in kwargs_binscatter.items():
         if k in ("x", "y", "range_x", "range_y"):
             msg = f"px.scatter will ignore keyword argument '{k}'"
             warnings.warn(msg)
             continue
-        scatter_args[k] = kwargs_binscatter[k]
+        scatter_args[k] = v
 
     figure = px.scatter(**scatter_args)
     if "size" not in kwargs_binscatter:
@@ -771,12 +770,12 @@ def _remove_bad_values(
 
 def split_columns(
     frame: nw.LazyFrame | nw.DataFrame,
-) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """Return tuples of numeric and categorical column names for a narwhals frame."""
 
-    def _safe_columns(selection: Any) -> Tuple[str, ...]:
+    def _safe_columns(selection: Any) -> tuple[str, ...]:
         if selection is None:
-            return tuple()
+            return ()
         if hasattr(selection, "collect_schema"):
             try:
                 schema = selection.collect_schema()
@@ -790,15 +789,15 @@ def split_columns(
                             return tuple(names)
                     if isinstance(schema, dict):
                         return tuple(schema.keys())
-        columns: Tuple[str, ...] = tuple()
+        columns: tuple[str, ...] = ()
         if hasattr(selection, "columns"):
             try:
                 columns = tuple(selection.columns)
             except Exception:  # pragma: no cover - backend quirk
-                columns = tuple()
+                columns = ()
         if columns:
             return columns
-        return tuple()
+        return ()
 
     numeric_cols = _safe_columns(frame.select(ncs.numeric()))
     frame_columns = _safe_columns(frame)
@@ -807,7 +806,7 @@ def split_columns(
     return numeric_cols, categorical_cols
 
 
-def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
+def _clean_controls(controls: Iterable[str] | str | None) -> tuple[str, ...]:
     if not controls:
         return ()
     if isinstance(controls, str):
@@ -828,11 +827,11 @@ def _clean_controls(controls: Iterable[str] | str | None) -> Tuple[str, ...]:
 @timed
 def clean_df(
     df_in: IntoDataFrame,
-    controls: Tuple[str, ...],
+    controls: tuple[str, ...],
     x: str,
     y: str,
-    categorical: Tuple[str, ...] = (),
-) -> Tuple[nw.LazyFrame, bool, Tuple[str, ...], Tuple[str, ...]]:
+    categorical: tuple[str, ...] = (),
+) -> tuple[nw.LazyFrame, bool, tuple[str, ...], tuple[str, ...]]:
     """Normalize the input dataframe and split controls by type.
 
     Returns a lazy narwhals frame containing only the requested columns, whether
@@ -842,11 +841,11 @@ def clean_df(
     their dtype is numeric.
     """
     # Try cheap column access for non-lazy inputs
-    cols: List[str] | None = None
+    cols: list[str] | None = None
     if hasattr(df_in, "collect_schema"):
         pass  # lazy frame, defer to narwhals
     elif hasattr(df_in, "columns"):
-        cols = list(getattr(df_in, "columns"))
+        cols = list(cast(Any, df_in).columns)
 
     dfn: nw.DataFrame | nw.LazyFrame = nw.from_native(df_in)
 
@@ -915,11 +914,11 @@ def _select_rule_of_thumb_bins(
     df: nw.LazyFrame,
     x: str,
     y: str,
-    regression_features: Tuple[str, ...],
+    regression_features: tuple[str, ...],
     fe_name: str | None = None,
 ) -> int:
     """Implement the SA-4.1 rule-of-thumb selector (currently for p=0, v=0)."""
-    data_cols: Tuple[str, ...] = (x, *regression_features)
+    data_cols: tuple[str, ...] = (x, *regression_features)
     stats = _collect_rule_of_thumb_stats(df, data_cols, y)
     n_obs = stats.item(0, "__n")
     if n_obs is None or n_obs <= 1:
@@ -1027,7 +1026,7 @@ def _select_rule_of_thumb_bins(
     j_float = prefactor ** (1.0 / 3.0) * n_obs_f ** (1.0 / 3.0)
     # Cap at ~10 observations per bin to avoid noisy estimates
     max_bins = max(2, int(n_obs) // 10)
-    computed_bins = max(2, int(round(j_float)))
+    computed_bins = max(2, round(j_float))
     return min(max_bins, computed_bins)
 
 
@@ -1036,7 +1035,7 @@ def _select_dpi_bins(
     df: nw.LazyFrame,
     x: str,
     y: str,
-    regression_features: Tuple[str, ...],
+    regression_features: tuple[str, ...],
     fe_name: str | None = None,
 ) -> int:
     """Implement the SA-4.2 direct plug-in selector (for p=0, s=0, v=0)."""
@@ -1371,7 +1370,7 @@ def _compute_dpi_variance_constant(
 
 
 def _collect_rule_of_thumb_stats(
-    df: nw.LazyFrame, data_cols: Tuple[str, ...], y: str
+    df: nw.LazyFrame, data_cols: tuple[str, ...], y: str
 ) -> nw.DataFrame:
     """Gather the global cross-moments needed by the rule-of-thumb selector."""
     y_expr = nw.col(y)
@@ -1446,9 +1445,9 @@ def compute_bin_means(df: nw.LazyFrame, profile: Profile) -> nw.LazyFrame:
 @timed
 def add_regression_features(
     df: nw.LazyFrame,
-    numeric_controls: Tuple[str, ...],
-    categorical_controls: Tuple[str, ...],
-) -> Tuple[nw.LazyFrame, Tuple[str, ...], str | None]:
+    numeric_controls: tuple[str, ...],
+    categorical_controls: tuple[str, ...],
+) -> tuple[nw.LazyFrame, tuple[str, ...], str | None]:
     """Inject numeric controls and one-hot categorical controls when requested.
 
     The highest-cardinality categorical is absorbed rather than encoded, so it is
@@ -1482,7 +1481,7 @@ def add_polynomial_features(
     x_name: str,
     degree: int,
     distinct_suffix: str,
-) -> Tuple[nw.LazyFrame, Tuple[str, ...]]:
+) -> tuple[nw.LazyFrame, tuple[str, ...]]:
     """Append polynomial columns in x up to the requested degree."""
     exprs: list[nw.Expr] = []
     names: list[str] = []

@@ -22,8 +22,9 @@ incidence blocks and there is no closed form (the two-way fixed effects problem)
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Sequence, Tuple
+from typing import Any
 
 import narwhals as nw
 import numpy as np
@@ -50,7 +51,7 @@ class FEMoments:
     inv_counts: np.ndarray
     bin_counts: np.ndarray
     feature_sums: np.ndarray
-    response_sums: Dict[str, np.ndarray]
+    response_sums: dict[str, np.ndarray]
     total_count: float
 
 
@@ -69,7 +70,7 @@ def within_correct(
     return raw - weighted.T @ group_sums_b
 
 
-def group_codes(groups: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def group_codes(groups: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(codes, counts)`` for ``groups``, where codes index into counts."""
     _, codes = np.unique(groups, return_inverse=True)
     return codes, np.bincount(codes).astype(float)
@@ -111,7 +112,7 @@ ABSORB_MIN_LEVELS = 50
 
 
 def select_absorbed(
-    df: nw.LazyFrame, categorical_controls: Tuple[str, ...]
+    df: nw.LazyFrame, categorical_controls: tuple[str, ...]
 ) -> str | None:
     """Pick the categorical control to absorb: the one with the most levels.
 
@@ -147,7 +148,7 @@ def compute_fe_moments(
     df: nw.LazyFrame,
     *,
     fe_name: str,
-    feature_names: Tuple[str, ...],
+    feature_names: tuple[str, ...],
     response_exprs: Mapping[str, nw.Expr],
     bin_name: str | None = None,
     bin_labels: Sequence[Any] | None = None,

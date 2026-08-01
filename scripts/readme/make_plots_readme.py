@@ -25,6 +25,7 @@ from pathlib import Path
 
 import plotly.express as px
 import polars as pl
+
 from binscatter import binscatter
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -67,7 +68,7 @@ def _require_artifact(path: Path) -> Path:
 def _write_fig(fig, filename: str, **write_kwargs) -> None:
     target = IMAGES / filename
     fig.write_image(str(target), scale=write_kwargs.pop("scale", 2), **write_kwargs)
-    print(f"Wrote {target}")  # noqa: T201
+    print(f"Wrote {target}")
 
 
 def _load_state_df() -> pl.DataFrame:
@@ -190,13 +191,13 @@ def main() -> None:
         try:
             builder()
         except Exception as e:
-            print(f"ERROR [{name}]: {e}")  # noqa: T201
+            print(f"ERROR [{name}]: {e}")
             failed.append(name)
 
     if failed:
-        print(f"\nSkipped {len(failed)} dataset(s): {', '.join(failed)}")  # noqa: T201
+        print(f"\nSkipped {len(failed)} dataset(s): {', '.join(failed)}")
     else:
-        print("\nAll plots generated successfully.")  # noqa: T201
+        print("\nAll plots generated successfully.")
 
     missing = [name for name in REQUIRED_README_IMAGES if not (IMAGES / name).exists()]
     if missing:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
+import dask.dataframe as dd
+import duckdb
 import pandas as pd
 import polars as pl
-import duckdb
-import dask.dataframe as dd
 import pytest
 
 try:  # pragma: no cover - optional dependency
