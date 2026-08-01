@@ -7,6 +7,7 @@ help:
 	@echo "  make ok                   # Run linting/formatting and type checks"
 	@echo "  make ftest                # Run fast pytest suite (no PySpark)"
 	@echo "  make test                 # Run full pytest suite with --run-pyspark"
+	@echo "  make benchmark-fe         # Benchmark fixed-effect absorption vs one-hot"
 	@echo "  make make-nb              # Execute notebooks/try_binscatter.ipynb in place"
 	@echo "  make setup-krnl           # Install the binscatter ipykernel"
 	@echo "  make install-hooks        # Install pre-commit hooks via prek"
@@ -33,6 +34,9 @@ ftest:
 
 test:
 	uv run pytest --run-pyspark tests
+
+benchmark-fe:
+	uv run scripts/benchmark_fixed_effects.py
 
 make-nb:
 	uv tool run --from jupyter-core jupyter nbconvert --execute --inplace --to notebook --ExecutePreprocessor.kernel_name="binscatter" notebooks/try_binscatter.ipynb

@@ -110,8 +110,11 @@ def build_dummies_pandas(df, categorical_controls: Tuple[str, ...]):
     native = nw.to_native(df)
     base = native.copy()
     sep = "__binscatter__"
+    # `columns` is required: without it get_dummies silently skips non-object
+    # columns, so an integer-coded control passed via `categorical=` encodes nothing.
     dummies = pd.get_dummies(
         base[list(categorical_controls)],
+        columns=list(categorical_controls),
         prefix={c: c for c in categorical_controls},
         prefix_sep=sep,
         drop_first=True,

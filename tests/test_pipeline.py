@@ -42,13 +42,44 @@ def test_clean_df_splits_controls(controls, expected, df_type):
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_maybe_add_regression_features_creates_dummies(df_type):
+    """Low-cardinality categoricals stay on the one-hot path (see ABSORB_MIN_LEVELS)."""
     df_pd = pd.DataFrame({"x": [0, 1, 2], "cat": ["a", "b", "a"]})
     df_native = convert_to_backend(df_pd, df_type)
     df = nw.from_native(df_native).lazy()
-    df_augmented, features = add_regression_features(
+    df_augmented, features, absorbed = add_regression_features(
         df, numeric_controls=(), categorical_controls=("cat",)
     )
     collected = df_augmented.collect()
     dummy_cols = [c for c in collected.columns if c.startswith("__ctrl")]
+    assert absorbed is None
     assert dummy_cols
     assert features == tuple(dummy_cols)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_high_cardinality_categorical_is_absorbed(df_type, monkeypatch):
+    """At or above the threshold the categorical is absorbed instead of encoded."""
+    import binscatter.fixed_effects as fe_mod
+
+    monkeypatch.setattr(fe_mod, "ABSORB_MIN_LEVELS", 3)
+    df_pd = pd.DataFrame(
+        {
+            "x": [0, 1, 2, 3, 4, 5],
+            "cat_hi": ["a", "b", "c", "d", "a", "b"],
+            "cat_lo": ["p", "q", "p", "q", "p", "q"],
+        }
+    )
+    df_native = convert_to_backend(df_pd, df_type)
+    df = nw.from_native(df_native).lazy()
+    df_augmented, features, absorbed = add_regression_features(
+        df, numeric_controls=(), categorical_controls=("cat_hi", "cat_lo")
+    )
+    collected = df_augmented.collect()
+    dummy_cols = [c for c in collected.columns if c.startswith("__ctrl")]
+
+    assert absorbed == "cat_hi", "the highest-cardinality column should be absorbed"
+    assert dummy_cols, "the non-absorbed categorical should still be encoded"
+    assert features == tuple(dummy_cols)
+    assert not any("cat_hi" in c for c in dummy_cols), (
+        "absorbed column leaked into dummies"
+    )
