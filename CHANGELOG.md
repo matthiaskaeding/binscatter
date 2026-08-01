@@ -12,6 +12,7 @@
 - Stopped committing `uv.lock`; dependency versions are no longer pinned in the repo.
 
 ### Fixed
+- DPI automatic bin selection is now invariant to whether a categorical control is one-hot encoded or absorbed, and to which category is used as the omitted dummy. Controls and fixed effects are evaluated at their sample-average levels, so crossing the absorption threshold no longer changes the selected bin count for the same model.
 - `_quantile_edges` (`core.py`, `bin_selectors.py`) no longer carries a `numpy<1.22` fallback passing the `interpolation=` keyword that NumPy removed in 2.0. The project requires `numpy>=2.3`, so the `except TypeError` branch was unreachable and its `type: ignore` was masking a real overload error.
 - The fallback quantile path in `quantiles.py` re-raises with a bare `raise`, preserving the original traceback instead of restarting it at the handler.
 

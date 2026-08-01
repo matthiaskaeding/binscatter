@@ -14,7 +14,12 @@ import pytest
 
 import binscatter.fixed_effects as fe_mod
 from binscatter import binscatter, core
-from binscatter.fixed_effects import demean_within, group_codes, within_correct
+from binscatter.fixed_effects import (
+    demean_centered,
+    demean_within,
+    group_codes,
+    within_correct,
+)
 from tests.conftest import DF_BACKENDS, convert_to_backend
 
 DF_TYPE_PARAMS = [
@@ -307,30 +312,73 @@ def test_rot_selector_matches_one_hot(monkeypatch, force_absorption):
     )
 
 
-def test_dpi_selector_uses_the_fixed_effect(force_absorption):
-    """The DPI selector must not silently ignore the absorbed column.
-
-    Unlike ROT this is not compared against the one-hot path. The DPI variance
-    constant comes from a sandwich estimator, which is not invariant to the
-    reparameterization: the one-hot design is full rank while the within system is
-    rank-deficient by one, so the per-bin coefficients are only identified up to a
-    shift and their variances differ. Production avoids the discrepancy by only
-    absorbing at ABSORB_MIN_LEVELS or more, where the one-hot path is not viable
-    anyway. What must hold is that the fixed effect is actually used.
-    """
+def test_dpi_selector_matches_one_hot(monkeypatch, force_absorption):
+    """DPI is invariant to representing the same categorical by dummies or absorption."""
     df = make_panel(n=2000, n_groups=15, seed=31)
-    with_fe = binscatter(
+    absorbed = binscatter(
         df, "x", "y", controls=["age", "grp"], num_bins="dpi", return_type="native"
     )
-    without_fe = binscatter(
-        df, "x", "y", controls=["age"], num_bins="dpi", return_type="native"
+    without_absorption(monkeypatch)
+    one_hot = binscatter(
+        df, "x", "y", controls=["age", "grp"], num_bins="dpi", return_type="native"
     )
-    assert len(with_fe) >= 2
-    assert np.all(np.isfinite(with_fe["y"].to_numpy()))
-    assert len(with_fe) != len(without_fe), (
-        "DPI selection is identical with and without the fixed effect, "
-        "which suggests it is being ignored"
+    assert len(absorbed) == len(one_hot)
+    np.testing.assert_allclose(
+        absorbed.sort_values("bin")["y"].to_numpy(),
+        one_hot.sort_values("bin")["y"].to_numpy(),
+        rtol=1e-8,
+        atol=1e-8,
     )
+
+
+def test_dpi_variance_matches_centered_dummy_oracle():
+    """The absorbed sandwich equals explicit centered fixed-effect dummies."""
+    df = make_panel(n=1800, n_groups=12, seed=67)
+    num_bins = 9
+    edges = np.quantile(df["x"], np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(
+        np.searchsorted(edges, df["x"], side="right") - 1, 0, num_bins - 1
+    )
+    bin_counts = np.bincount(bin_idx, minlength=num_bins)
+    y = df["y"].to_numpy()
+    age = df["age"].to_numpy()
+
+    dummies = pd.get_dummies(df["grp"], drop_first=True).to_numpy(dtype=float)
+    explicit_controls = np.column_stack([age, dummies])
+    explicit_controls -= explicit_controls.mean(axis=0)
+    expected = core._compute_dpi_variance_constant(
+        y, explicit_controls, bin_idx, bin_counts
+    )
+
+    codes, counts = group_codes(df["grp"].to_numpy())
+    absorbed_y = demean_centered(y, codes, counts)
+    centered_age = age - age.mean()
+    absorbed_controls = demean_centered(centered_age, codes, counts)[:, None]
+    actual = core._compute_dpi_variance_constant(
+        absorbed_y,
+        absorbed_controls,
+        bin_idx,
+        bin_counts,
+        codes,
+        counts,
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
+
+
+def test_dpi_one_hot_is_invariant_to_reference_label(monkeypatch):
+    """Relabeling categories cannot change DPI by changing the omitted dummy."""
+    without_absorption(monkeypatch)
+    df = make_panel(n=1800, n_groups=15, seed=71)
+    relabeled = df.copy()
+    labels = sorted(df["grp"].unique())
+    relabeled["grp"] = relabeled["grp"].map(
+        dict(zip(labels, reversed(labels), strict=True))
+    )
+
+    original = run_native(df, controls=["age", "grp"], num_bins="dpi")
+    changed_reference = run_native(relabeled, controls=["age", "grp"], num_bins="dpi")
+    np.testing.assert_allclose(original, changed_reference, rtol=1e-10, atol=1e-10)
 
 
 def test_absorption_threshold_preserves_existing_behaviour(monkeypatch):
@@ -441,3 +489,16 @@ def test_demean_within_zeroes_group_means():
     out = demean_within(values, codes, counts)
     sums = np.bincount(codes, weights=out, minlength=counts.size)
     np.testing.assert_allclose(sums, 0.0, atol=1e-10)
+
+
+def test_demean_centered_preserves_mean_and_equalizes_group_means():
+    values = np.array([1.0, 3.0, 7.0, 9.0, 11.0])
+    codes = np.array([0, 0, 1, 1, 1])
+    counts = np.bincount(codes)
+
+    result = demean_centered(values, codes, counts)
+
+    expected_mean = values.mean()
+    assert result.mean() == pytest.approx(expected_mean)
+    for group in range(counts.size):
+        assert result[codes == group].mean() == pytest.approx(expected_mean)

@@ -1,21 +1,60 @@
 # PLAN.md
 
-## Active Plan: Absorb Fixed Effects (Mundlak) + `categorical=` Parameter
+## Active Plan: Parameterization-Invariant DPI With Fixed Effects
+
+**Status: Complete**
+
+### Problem
+
+The DPI selector currently uses the covariance of raw bin coefficients. With
+reference-coded categorical controls that system is full rank, while the absorbed
+fixed-effect path fully demeans the bin basis and then uses a pseudoinverse of a
+rank-deficient system. The plotted point estimates agree, but their DPI variance
+constants can differ solely because cardinality routed the same model through a
+different parameterization.
+
+### Design
+
+Evaluate the nonparametric component at the sample mean of every control, matching
+the plotted curve:
+
+1. Center all ordinary regression controls before the DPI pilot regressions.
+2. For an absorbed fixed effect, project onto the **centered** group-effect
+   subspace: `a - mean(a | group) + mean(a)`. Unlike full demeaning, this retains
+   the intercept and leaves the bin basis full rank.
+3. Apply the same centered projection to `y`, the spline basis, bin indicators and
+   controls. Extend the HC1 sandwich blocks to the centered bin basis without
+   materializing an `n x J` matrix.
+4. Compute the DPI variance from the resulting bin-coefficient covariance, which
+   now represents the actual mean-adjusted curve under either dummy encoding or
+   absorption.
+
+### Verification
+
+1. Force the one-hot and absorbed paths on the same panels and require identical
+   DPI constants, selected bin counts and final plotted values.
+2. Check invariance to the omitted categorical reference level and category label
+   ordering.
+3. Retain the existing `binsreg` DPI comparisons for models with and without
+   numeric controls.
+4. Run the fixed-effect and DPI suites across backends, then `make ok`, the fast
+   suite, and the example notebook.
+
+---
+
+## Archived Plan: Absorb Fixed Effects (Mundlak) + `categorical=` Parameter
 
 **Status: Complete, released as 0.4.0** — closes #69. Multi-way absorption is
 tracked separately in #73.
 
 ### Outcome note
 
-Absorption turned out **not** to be a free swap at every cardinality. The bin
-estimates are exact either way (equivalence holds to ~5e-15, confirmed against a
-statsmodels oracle), but the DPI selector's sandwich variance is not invariant to
-the reparameterization: the one-hot design is full rank because `drop_first` pins
-the level, while the within system is rank-deficient by one, so `pinv` returns a
-min-norm inverse and the per-bin variances differ (~0.4x on the test panel, moving
-the selected bin count from 24 to 30). Hence `ABSORB_MIN_LEVELS = 50`: small
-categoricals stay on the existing path so no current result moves, and large ones
-get a path that works at all.
+Absorption turned out **not** to be a free swap at every cardinality in the initial
+implementation. The bin estimates were exact either way (equivalence holds to
+~5e-15, confirmed against a statsmodels oracle), but the DPI selector's sandwich
+variance depended on the parameterization. Hence `ABSORB_MIN_LEVELS = 50` initially
+kept small categoricals on the existing path. The active plan above supersedes that
+limitation by evaluating both parameterizations at the same centered target.
 
 The threshold was set from measurement rather than guessed (`make benchmark-fe`).
 One-hot scales roughly cubically in levels — 0.74s at 50, 3.52s at 100, 31s at 200,
