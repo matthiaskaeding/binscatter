@@ -88,14 +88,23 @@ def demean_within(
     return values - (sums / counts)[codes]
 
 
-#: Below this many levels the one-hot path is kept, so existing results do not move.
-#:
-#: Absorbing is exact for the bin estimates, but the DPI selector's sandwich variance
-#: is not invariant to the reparameterization: the one-hot design is full rank
-#: (drop_first pins the level) while the within system is rank-deficient by one, so
-#: the individual bin coefficients -- and hence their variances -- are identified
-#: only up to a shift. Crossing the threshold can therefore shift the selected bin
-#: count, which is why small categoricals stay where they are.
+def demean_centered(
+    values: np.ndarray, codes: np.ndarray, counts: np.ndarray
+) -> np.ndarray:
+    """Remove centered group effects while preserving the overall mean.
+
+    This projects onto the orthogonal complement of group indicators constrained to
+    have a count-weighted mean of zero. Unlike :func:`demean_within`, the intercept
+    survives, which keeps the DPI bin basis full rank and makes its coefficients the
+    curve evaluated at the sample-average fixed-effect level.
+    """
+    sums = np.bincount(codes, weights=values, minlength=counts.size)
+    return values - (sums / counts)[codes] + float(np.mean(values))
+
+
+#: Below this many levels the one-hot path is kept because it remains inexpensive.
+#: The DPI selector uses a centered fixed-effect parameterization, so crossing this
+#: threshold changes only the computational route, not the statistical target.
 #:
 #: 50 is where the one-hot path starts costing real time without yet being
 #: unusable. Measured on pandas at n=20,000, num_bins=10 (`make benchmark-fe`):

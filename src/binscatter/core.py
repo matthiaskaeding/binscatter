@@ -26,7 +26,7 @@ from binscatter.dummy_builders import configure_build_dummies
 from binscatter.fixed_effects import (
     FEMoments,
     compute_fe_moments,
-    demean_within,
+    demean_centered,
     group_codes,
     recover_levels,
     select_absorbed,
@@ -1075,19 +1075,25 @@ def _select_dpi_bins(
     if n_obs < 5:
         return pilot_bins
 
+    # The plotted curve evaluates controls at their sample means. Centering them
+    # makes the bin coefficients represent that same curve and makes their
+    # covariance invariant to dummy reference coding.
+    if controls is not None:
+        controls = controls - controls.mean(axis=0)
+
     fe_codes: np.ndarray | None = None
     fe_counts: np.ndarray | None = None
     if raw_groups is not None:
-        # Already materialized here, so absorb by demeaning directly rather than via
-        # the moment correction. y and the controls are residualized within group;
-        # x stays raw because bins are formed on the original scale. Demeaning runs
-        # after the finite mask so group means reflect the rows actually used.
+        # Project out centered group effects rather than the full group-indicator
+        # space. This preserves the intercept, so the DPI bin coefficients stay on
+        # the sample-average outcome level instead of becoming rank-deficient.
+        # x stays raw because bins are formed on the original scale.
         fe_codes, fe_counts = group_codes(raw_groups)
-        y_values = demean_within(y_values, fe_codes, fe_counts)
+        y_values = demean_centered(y_values, fe_codes, fe_counts)
         if controls is not None:
             controls = np.column_stack(
                 [
-                    demean_within(controls[:, j], fe_codes, fe_counts)
+                    demean_centered(controls[:, j], fe_codes, fe_counts)
                     for j in range(controls.shape[1])
                 ]
             )
@@ -1127,9 +1133,10 @@ def _estimate_dpi_imse_constants(
 ) -> tuple[float, float] | None:
     """Compute the IMSE bias/variance constants for the DPI selector.
 
-    When ``fe_codes`` is given the caller has already demeaned ``y_values`` and
-    ``controls``; the spline design and the bin dummies are within-transformed here
-    so the whole system stays consistent with Frisch-Waugh-Lovell.
+    When ``fe_codes`` is given the caller has already removed centered fixed effects
+    from ``y_values`` and ``controls``. The spline design and bin dummies receive the
+    same projection here so the whole system stays consistent with
+    Frisch-Waugh-Lovell while retaining the intercept.
     """
     n_obs = x_values.size
     if n_obs == 0:
@@ -1156,12 +1163,11 @@ def _estimate_dpi_imse_constants(
     spline_design = _linear_spline_design(x_norm, interior_knots)
     fit_design = spline_design
     if fe_codes is not None and fe_counts is not None:
-        # Within-transform the basis so the fitted coefficients are the within
-        # estimates. The intercept column collapses to zero; lstsq handles the
-        # resulting rank deficiency and the derivative only reads columns 1 onward.
+        # Remove centered group effects from the basis. In particular, the intercept
+        # remains one rather than collapsing to zero.
         fit_design = np.column_stack(
             [
-                demean_within(spline_design[:, j], fe_codes, fe_counts)
+                demean_centered(spline_design[:, j], fe_codes, fe_counts)
                 for j in range(spline_design.shape[1])
             ]
         )
@@ -1272,24 +1278,28 @@ def _compute_dpi_variance_constant(
     q = 0 if controls is None else controls.shape[1]
     size = num_bins + q
 
-    # Under absorption the bin dummies become e_b - shares[g], where shares[g] is
-    # group g's distribution across bins. Everything below is expressible from the
-    # (group, bin) cell aggregates, so the n x J demeaned design is never formed.
+    # Under centered absorption the bin dummies become
+    # e_b - shares[g] + global_shares. Everything below is expressible from the
+    # (group, bin) cell aggregates, so the n x J projected design is never formed.
     shares: np.ndarray | None = None
+    global_shares: np.ndarray | None = None
     if fe_codes is not None and fe_counts is not None:
         cell_counts = np.zeros((fe_counts.size, num_bins), dtype=float)
         np.add.at(cell_counts, (fe_codes, bin_idx), 1.0)
         shares = cell_counts / fe_counts[:, None]
+        global_shares = bin_counts / y_values.size
 
     XtX = np.zeros((size, size), dtype=float)
     XtY = np.zeros(size, dtype=float)
     bin_block = np.diag(bin_counts)
     bin_y = np.bincount(bin_idx, weights=y_values, minlength=num_bins)
     if shares is not None:
-        assert fe_codes is not None and fe_counts is not None
-        group_y = np.bincount(fe_codes, weights=y_values, minlength=fe_counts.size)
-        bin_block = bin_block - shares.T @ (fe_counts[:, None] * shares)
-        bin_y = bin_y - shares.T @ group_y
+        assert fe_counts is not None and global_shares is not None
+        bin_block = (
+            bin_block
+            - shares.T @ (fe_counts[:, None] * shares)
+            + y_values.size * np.outer(global_shares, global_shares)
+        )
     XtX[:num_bins, :num_bins] = bin_block
     XtY[:num_bins] = bin_y
 
@@ -1298,12 +1308,6 @@ def _compute_dpi_variance_constant(
         sum_controls = np.zeros((num_bins, q), dtype=float)
         for idx in range(q):
             np.add.at(sum_controls[:, idx], bin_idx, controls[:, idx])
-        if shares is not None:
-            assert fe_codes is not None and fe_counts is not None
-            group_controls = np.zeros((fe_counts.size, q), dtype=float)
-            for idx in range(q):
-                np.add.at(group_controls[:, idx], fe_codes, controls[:, idx])
-            sum_controls = sum_controls - shares.T @ group_controls
         XtX[:num_bins, num_bins:] = sum_controls
         XtX[num_bins:, :num_bins] = sum_controls.T
         XtX[num_bins:, num_bins:] = controls.T @ controls
@@ -1318,8 +1322,10 @@ def _compute_dpi_variance_constant(
 
     fitted = beta_bins[bin_idx]
     if shares is not None:
-        assert fe_codes is not None
-        fitted = fitted - (shares @ beta_bins)[fe_codes]
+        assert fe_codes is not None and global_shares is not None
+        fitted = (
+            fitted - (shares @ beta_bins)[fe_codes] + float(global_shares @ beta_bins)
+        )
     if q:
         assert controls is not None  # type narrowing for checker
         fitted = fitted + controls @ gamma
@@ -1329,15 +1335,23 @@ def _compute_dpi_variance_constant(
     XtUX = np.zeros_like(XtX)
     bin_meat = np.diag(np.bincount(bin_idx, weights=u_sq, minlength=num_bins))
     if shares is not None:
-        assert fe_codes is not None and fe_counts is not None
+        assert (
+            fe_codes is not None and fe_counts is not None and global_shares is not None
+        )
         cell_u = np.zeros((fe_counts.size, num_bins), dtype=float)
         np.add.at(cell_u, (fe_codes, bin_idx), u_sq)
         group_u = cell_u.sum(axis=1)
+        residualized_u_sums = (
+            np.bincount(bin_idx, weights=u_sq, minlength=num_bins) - shares.T @ group_u
+        )
         bin_meat = (
             bin_meat
             - cell_u.T @ shares
             - shares.T @ cell_u
             + shares.T @ (group_u[:, None] * shares)
+            + np.outer(residualized_u_sums, global_shares)
+            + np.outer(global_shares, residualized_u_sums)
+            + float(u_sq.sum()) * np.outer(global_shares, global_shares)
         )
     XtUX[:num_bins, :num_bins] = bin_meat
     if q:
@@ -1346,11 +1360,18 @@ def _compute_dpi_variance_constant(
         for idx in range(q):
             np.add.at(cross[:, idx], bin_idx, controls[:, idx] * u_sq)
         if shares is not None:
-            assert fe_codes is not None and fe_counts is not None
+            assert (
+                fe_codes is not None
+                and fe_counts is not None
+                and global_shares is not None
+            )
             group_cross = np.zeros((fe_counts.size, q), dtype=float)
             for idx in range(q):
                 np.add.at(group_cross[:, idx], fe_codes, controls[:, idx] * u_sq)
-            cross = cross - shares.T @ group_cross
+            total_cross = (controls * u_sq[:, None]).sum(axis=0)
+            cross = (
+                cross - shares.T @ group_cross + np.outer(global_shares, total_cross)
+            )
         XtUX[:num_bins, num_bins:] = cross
         XtUX[num_bins:, :num_bins] = cross.T
         XtUX[num_bins:, num_bins:] = controls.T @ (controls * u_sq[:, None])
