@@ -22,9 +22,6 @@ from binscatter.core import (
 )
 from tests.conftest import convert_to_backend
 
-# Skip PySpark tests by default
-pytest.importorskip("pyspark", reason="PySpark benchmarks require --run-pyspark")
-
 
 @contextmanager
 def timer() -> Generator[dict, None, None]:
@@ -214,6 +211,7 @@ def test_pyspark_polynomial_overlay_performance() -> None:
     print(f"\n  Binscatter + poly_line=3: {elapsed:.3f}s")
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 def test_dummy_variable_naming_consistency(backend: str) -> None:
     """Test that dummy variable names are consistent across backends.

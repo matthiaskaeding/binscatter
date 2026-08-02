@@ -199,17 +199,20 @@ def df_constant_categorical():
 
 
 fixt_dat = [
-    ("df_good", False),
-    ("df_x_num", False),
-    ("df_missing_column", True),
-    ("df_nulls", True),
-    ("df_duplicates", True),
+    ("df_good", None, None),
+    ("df_x_num", None, None),
     (
-        "df_with_edge_cases",
-        True,
-    ),  # Should error - only 4 valid rows after filtering, not enough for 20 bins
-    ("df_all_invalid", True),  # Should error - no valid rows remain
-    ("df_constant_categorical", False),  # Should handle constant categorical gracefully
+        "df_missing_column",
+        TypeError,
+        "Input dataframe must have at least 2 columns",
+    ),
+    ("df_nulls", ValueError, "Could not produce at least 2 bins"),
+    ("df_duplicates", ValueError, "Could not produce at least 2 bins"),
+    ("df_with_edge_cases", ValueError, "Could not produce at least 2 bins"),
+    ("df_all_invalid", ValueError, "Could not produce at least 2 bins"),
+    # The column is deliberately unused here; dedicated controlled tests below verify
+    # that a constant categorical is a no-op on every backend.
+    ("df_constant_categorical", None, None),
 ]
 
 BASE_DF_TYPES = [name for name in DF_BACKENDS if name != "pyspark"]
@@ -228,11 +231,18 @@ EXACT_QUANTILE_DF_TYPE_PARAMS = [
 fix_data_types = []
 for df_type in BASE_DF_TYPES:
     for pair in fixt_dat:
-        fix_data_types.append(pytest.param(*pair, df_type))
+        fix_data_types.append(pytest.param(*pair, df_type, id=f"{pair[0]}-{df_type}"))
 
 if HAS_PYSPARK:
     for pair in fixt_dat:
-        fix_data_types.append(pytest.param(*pair, "pyspark", marks=pytest.mark.pyspark))
+        fix_data_types.append(
+            pytest.param(
+                *pair,
+                "pyspark",
+                marks=pytest.mark.pyspark,
+                id=f"{pair[0]}-pyspark",
+            )
+        )
 
 
 def conv(df: pd.DataFrame, df_type):
@@ -284,20 +294,16 @@ def _get_dpi_bins(
 
 
 @pytest.mark.parametrize(
-    "df_fixture,expect_error,df_type",
+    "df_fixture,expected_exception,expected_message,df_type",
     fix_data_types,
 )
-def test_binscatter(df_fixture, expect_error, df_type, request):
+def test_binscatter(df_fixture, expected_exception, expected_message, df_type, request):
     df = request.getfixturevalue(df_fixture)
     df_to_type = conv(df, df_type)
     num_bins = 20
-    if expect_error:
-        try:
+    if expected_exception is not None:
+        with pytest.raises(expected_exception, match=expected_message):
             binscatter(df_to_type, "x0", "y0", num_bins=num_bins)
-        except Exception:
-            pass
-        else:
-            assert False, """Expected an error but binscatter ran successfully"""
     else:
         p = binscatter(df_to_type, "x0", "y0", num_bins=num_bins)
         assert isinstance(p, go.Figure)
@@ -359,6 +365,37 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         np.testing.assert_allclose(
             lhs["y0"].to_numpy(), rhs["y0"].to_numpy(), rtol=rtol, atol=atol
         )
+
+
+@pytest.mark.parametrize("role", ["x", "y"])
+def test_reserved_output_bin_name_has_a_clear_input_error(role):
+    """An x/y name that collides with the public bin column fails deliberately."""
+    rng = np.random.default_rng(17)
+    frame = pd.DataFrame(
+        {
+            "x": rng.normal(size=200),
+            "y": rng.normal(size=200),
+        }
+    ).rename(columns={role: "bin"})
+    x_name = "bin" if role == "x" else "x"
+    y_name = "bin" if role == "y" else "y"
+    with pytest.raises(ValueError, match="bin.*reserved|reserved.*bin"):
+        binscatter(frame, x_name, y_name, return_type="native")
+
+
+def test_control_named_bin_is_not_treated_as_the_output_column():
+    """The reserved output label does not unnecessarily reserve control names."""
+    rng = np.random.default_rng(18)
+    frame = pd.DataFrame(
+        {
+            "x": rng.normal(size=1200),
+            "y": rng.normal(size=1200),
+            "z": rng.normal(size=1200),
+        }
+    )
+    expected = _public_controlled_dots(frame, ["z"])
+    actual = _public_controlled_dots(frame.rename(columns={"z": "bin"}), ["bin"])
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -661,30 +698,97 @@ def test_dpi_small_sample():
 
 
 @pytest.mark.quick
-@pytest.mark.parametrize("df_type", EXACT_QUANTILE_DF_TYPE_PARAMS)
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 @pytest.mark.parametrize(
-    "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
+    "scenario", ["canonical", "numeric_control", "tied_two_way_fe"]
 )
-def test_binscatter_matches_binsreg_sim(df_type, controls):
+def test_binscatter_matches_binsreg_sim(df_type, scenario):
     df = _load_binsreg_sim_data()
-    num_bins = 20
-    w = df[controls].to_numpy() if controls else None
+    if scenario == "canonical":
+        x_name = "x"
+        controls = None
+        categorical = None
+        num_bins = 20
+        w = None
+        reference_kwargs = {}
+    elif scenario == "numeric_control":
+        x_name = "x"
+        controls = ["w"]
+        categorical = None
+        num_bins = 20
+        w = df[["w"]].to_numpy()
+        reference_kwargs = {}
+    else:
+        # One compact adversarial case: tied integer x, a numeric control, and two
+        # production-size integer-coded fixed effects.  The explicit dummy matrix is
+        # the authors package's representation of the same estimator.
+        df = df.assign(
+            x_tied=np.floor(10.0 * df["x"]),
+            period=np.arange(len(df)) % 50,
+        )
+        x_name = "x_tied"
+        controls = ["w", "id", "period"]
+        categorical = ["id", "period"]
+        num_bins = 5
+        w = np.column_stack(
+            [
+                df["w"].to_numpy(),
+                pd.get_dummies(df["id"], drop_first=True, dtype=float).to_numpy(),
+                pd.get_dummies(df["period"], drop_first=True, dtype=float).to_numpy(),
+            ]
+        )
+        reference_kwargs = {"masspoints": "off"}
 
-    reference = binsreg_fit(df["y"], df["x"], w=w, nbins=num_bins, noplot=True)
+    backend_frame = conv(df, df_type)
+    if df_type == "pyspark":
+        backend_frame = backend_frame.repartition(3)
+    reference_nbins = num_bins
+    if df_type in ("dask", "pyspark"):
+        # Distributed engines deliberately use approximate quantiles. Give those
+        # exact backend knots to the authors' estimator so this remains a comparison
+        # of estimators, rather than a comparison of two different partitions.
+        cleaned, *_ = clean_df(
+            backend_frame,
+            tuple(controls or ()),
+            x_name,
+            "y",
+            tuple(categorical or ()),
+        )
+        quantiles = configure_compute_quantiles(num_bins, cleaned.implementation)(
+            cleaned, x_name
+        )
+        q_min, q_max = quantiles[0], quantiles[-1]
+        knots = sorted(
+            {float(value) for value in quantiles[1:-1] if q_min < value < q_max}
+        )
+        reference_kwargs["binspos"] = np.asarray(knots)
+        reference_nbins = None
+
+    reference = binsreg_fit(
+        df["y"],
+        df[x_name],
+        w=w,
+        nbins=reference_nbins,
+        noplot=True,
+        **reference_kwargs,
+    )
     ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
 
+    if scenario != "canonical" and df_type == "polars":
+        backend_frame = backend_frame.lazy()
     result = binscatter(
-        conv(df, df_type),
-        "x",
+        backend_frame,
+        x_name,
         "y",
         controls=controls,
+        categorical=categorical,
         num_bins=num_bins,
         return_type="native",
     )
-    result = to_pandas_native(result).sort_values("x").reset_index(drop=True)
+    result = to_pandas_native(result).sort_values(x_name).reset_index(drop=True)
 
     np.testing.assert_allclose(
-        result["x"].to_numpy(), ref_dots["x"].to_numpy(), rtol=1e-6, atol=1e-6
+        result[x_name].to_numpy(), ref_dots["x"].to_numpy(), rtol=1e-6, atol=1e-6
     )
     np.testing.assert_allclose(
         result["y"].to_numpy(), ref_dots["fit"].to_numpy(), rtol=1e-6, atol=1e-6
@@ -726,6 +830,13 @@ def test_binscatter_rejects_unknown_num_bins_string(df_good, df_type):
     df = conv(df_good, df_type)
     with pytest.raises(ValueError):
         binscatter(df, "x0", "y0", num_bins="unknown-option")
+
+
+@pytest.mark.parametrize("num_bins", [2.1, 2.9, 3.0])
+def test_binscatter_rejects_non_integer_explicit_bin_counts(df_good, num_bins):
+    """Explicit bin counts are integers, not floats that happen to truncate."""
+    with pytest.raises((TypeError, ValueError), match="integer"):
+        binscatter(df_good, "x0", "y0", num_bins=num_bins)
 
 
 def _manual_binscatter_with_controls(
@@ -810,14 +921,40 @@ def test_binscatter_controls_matches_reference(df_type):
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
-    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
+    # This helper forms its reference with pandas quantiles, so distributed
+    # backends may legitimately place boundary rows in different bins.
     if df_type in ("dask", "pyspark"):
         rtol, atol = 0.1, 0.15
     else:
-        rtol, atol = 1e-6, 1e-6
+        rtol = atol = 1e-6
     np.testing.assert_allclose(
         result_pd["y0"].to_numpy(), expected_y, rtol=rtol, atol=atol
     )
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_controlled_native_output_preserves_input_backend(df_type):
+    """Numeric-control output stays in the caller's dataframe ecosystem."""
+    rng = np.random.default_rng(124)
+    frame = pd.DataFrame(
+        {
+            "x": rng.normal(size=500),
+            "y": rng.normal(size=500),
+            "z": rng.normal(size=500),
+        }
+    )
+    native = conv(frame, df_type)
+    if df_type == "pyspark":
+        native = native.repartition(3)
+    result = binscatter(
+        native,
+        "x",
+        "y",
+        controls=["z"],
+        num_bins=5,
+        return_type="native",
+    )
+    assert isinstance(result, type(native))
 
 
 def test_binscatter_controls_lazy_polars():
@@ -839,6 +976,8 @@ def test_binscatter_controls_lazy_polars():
         num_bins=num_bins,
         return_type="native",
     )
+    # Native output preserves the Polars backend, but results are materialized.
+    assert isinstance(result, pl.DataFrame)
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
     np.testing.assert_allclose(
         result_pd["x0"].to_numpy(), expected_x, rtol=1e-6, atol=1e-6
@@ -846,6 +985,498 @@ def test_binscatter_controls_lazy_polars():
     np.testing.assert_allclose(
         result_pd["y0"].to_numpy(), expected_y, rtol=1e-6, atol=1e-6
     )
+
+
+def _public_controlled_dots(frame, controls, *, categorical=(), num_bins=10):
+    result = binscatter(
+        frame,
+        "x",
+        "y",
+        controls=controls,
+        categorical=categorical,
+        num_bins=num_bins,
+        return_type="native",
+    )
+    return to_pandas_native(result).sort_values("bin")["y"].to_numpy(dtype=float)
+
+
+def _centered_dense_dots_from_bins(y, controls, idx, *, num_bins):
+    """Independent, scale-safe OLS oracle once bin membership is fixed."""
+    bins = np.eye(num_bins)[idx]
+    centered = np.asarray(controls, dtype=float).copy()
+    centered -= centered.mean(axis=0)
+    maxima = np.max(np.abs(centered), axis=0)
+    for column, maximum in enumerate(maxima):
+        if maximum > 0.0:
+            centered[:, column] /= maximum
+            norm = np.linalg.norm(centered[:, column])
+            if norm > 0.0:
+                centered[:, column] /= norm
+    y_float = np.asarray(y, dtype=float)
+    mean_y = y_float.mean()
+    theta = np.linalg.lstsq(
+        np.column_stack([bins, centered]), y_float - mean_y, rcond=None
+    )[0]
+    return theta[:num_bins] + mean_y
+
+
+def _backend_dense_dots(frame, df_type, controls, *, num_bins=10):
+    """Dense OLS oracle using the selected backend's actual bin assignments."""
+    prepared, profile = _prepare_dataframe(
+        conv(frame, df_type), "x", "y", controls, num_bins
+    )
+    binned = _collect_lazyframe_to_pandas(prepared)
+    idx = binned[profile.bin_name].to_numpy(dtype=int)
+    control_values = binned[list(profile.regression_features)].to_numpy(dtype=float)
+    return _centered_dense_dots_from_bins(
+        binned[profile.y_name].to_numpy(dtype=float),
+        control_values,
+        idx,
+        num_bins=profile.num_bins,
+    )
+
+
+def _adversarial_panel():
+    rng = np.random.default_rng(91)
+    n = 5000
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    firm = rng.integers(0, 60, size=n)
+    year = rng.integers(0, 55, size=n)
+    y = (
+        1.2 * x
+        + 0.8 * z
+        + rng.normal(size=60)[firm]
+        + rng.normal(size=55)[year]
+        + rng.normal(scale=0.2, size=n)
+    )
+    return pd.DataFrame(
+        {
+            "x": x,
+            "y": y,
+            "z": z,
+            "firm": firm.astype(str),
+            "year": year.astype(str),
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "controls",
+    [
+        pytest.param(["z"], id="no_fe"),
+        pytest.param(["z", "firm"], id="one_fe"),
+        pytest.param(["z", "firm", "year"], id="two_fe"),
+    ],
+)
+def test_control_translation_is_invariant_across_fe_routes(controls):
+    """Adding a constant to a control cannot change the sample-average curve."""
+    panel = _adversarial_panel()
+    baseline = _public_controlled_dots(panel, controls)
+    shifted = _public_controlled_dots(
+        panel.assign(z=panel["z"] + 1_000_000_000.0), controls
+    )
+    np.testing.assert_allclose(shifted, baseline, rtol=1e-7, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("column", "expected_shift"),
+    [
+        pytest.param("x", 0.0, id="x_location"),
+        pytest.param("y", 1_000_000_000.0, id="y_location"),
+    ],
+)
+def test_multiway_dots_are_stable_at_large_x_y_locations(column, expected_shift):
+    """Large predictor/response locations preserve contrasts and response level."""
+    panel = _adversarial_panel()
+    controls = ["z", "firm", "year"]
+    baseline = _public_controlled_dots(panel, controls)
+    shifted = _public_controlled_dots(
+        panel.assign(**{column: panel[column] + 1_000_000_000.0}), controls
+    )
+    np.testing.assert_allclose(shifted - expected_shift, baseline, rtol=1e-7, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("selector", "controls"),
+    [
+        pytest.param("rot", ["z", "firm", "year"], id="rot_two_fe"),
+        pytest.param("dpi", ["z", "firm"], id="dpi_one_fe"),
+    ],
+)
+@pytest.mark.parametrize("shift_kind", ["control", "x_and_y"])
+def test_automatic_selectors_are_location_invariant(selector, controls, shift_kind):
+    """Selector output is invariant to affine locations that leave the model intact."""
+    panel = _adversarial_panel()
+    selector_fn = _get_rot_bins if selector == "rot" else _get_dpi_bins
+    baseline = selector_fn(panel, "x", "y", controls=controls)
+    if shift_kind == "control":
+        shifted = panel.assign(z=panel["z"] + 1_000_000_000.0)
+    else:
+        shifted = panel.assign(
+            x=panel["x"] + 1_000_000_000.0,
+            y=panel["y"] + 1_000_000_000.0,
+        )
+    assert selector_fn(shifted, "x", "y", controls=controls) == baseline
+
+
+def _dpi_scale_case() -> pd.DataFrame:
+    rng = np.random.default_rng(123)
+    n = 800
+    x = rng.normal(size=n)
+    u = rng.normal(size=n)
+    y = 1.5 * x + 2.0 * u + rng.normal(scale=0.4, size=n)
+    return pd.DataFrame({"x": x, "y": y, "u": u})
+
+
+def _dpi_redundancy_case() -> pd.DataFrame:
+    """A deterministic case where nominal, rather than rank, df changes DPI."""
+    rng = np.random.default_rng(48)
+    n = 800
+    x = rng.normal(size=n)
+    u = rng.normal(size=n)
+    y = np.sin(x) + 0.5 * u + rng.normal(scale=0.8, size=n)
+    return pd.DataFrame({"x": x, "y": y, "u": u})
+
+
+def test_dpi_selector_is_invariant_to_control_units():
+    """Changing a control's units cannot change the IMSE-optimal bin count."""
+    frame = _dpi_scale_case()
+    baseline = _get_dpi_bins(frame, "x", "y", controls=["u"])
+    rescaled = _get_dpi_bins(
+        frame.assign(u=frame["u"] * 10_000_000.0), "x", "y", controls=["u"]
+    )
+    assert rescaled == baseline
+
+
+def test_dpi_selector_caps_bins_for_the_sample_size():
+    """A numerically unstable selector must not trigger an enormous quantile request."""
+    frame = _dpi_scale_case()
+    selected = _get_dpi_bins(
+        frame.assign(u=frame["u"] * 10_000_000.0), "x", "y", controls=["u"]
+    )
+    assert 2 <= selected <= len(frame) // 5
+
+
+@pytest.mark.parametrize("redundancy", ["duplicate", "constant"])
+def test_dpi_selector_ignores_redundant_controls(redundancy):
+    """Rank-zero additions do not change the selector degrees of freedom."""
+    frame = _dpi_redundancy_case()
+    baseline = _get_dpi_bins(frame, "x", "y", controls=["u"])
+    if redundancy == "duplicate":
+        changed = frame.assign(redundant=frame["u"])
+    else:
+        changed = frame.assign(redundant=1.0)
+    assert _get_dpi_bins(changed, "x", "y", controls=["u", "redundant"]) == baseline
+
+
+@pytest.mark.parametrize(
+    "controls",
+    [
+        pytest.param(["z"], id="no_fe"),
+        pytest.param(["z", "firm"], id="one_fe"),
+        pytest.param(["z", "firm", "year"], id="two_fe"),
+    ],
+)
+@pytest.mark.parametrize("shift_kind", ["control", "x_and_y"])
+def test_polynomial_line_is_location_invariant(controls, shift_kind):
+    """The displayed polynomial is a function of variation, not raw locations."""
+    panel = _adversarial_panel()
+    baseline = np.asarray(
+        binscatter(
+            panel,
+            "x",
+            "y",
+            controls=controls,
+            num_bins=10,
+            poly_line=2,
+        )
+        .data[1]
+        .y,
+        dtype=float,
+    )
+    if shift_kind == "control":
+        shifted_frame = panel.assign(z=panel["z"] + 1_000_000_000.0)
+        expected_shift = 0.0
+    else:
+        shifted_frame = panel.assign(
+            x=panel["x"] + 1_000_000_000.0,
+            y=panel["y"] + 1_000_000_000.0,
+        )
+        expected_shift = 1_000_000_000.0
+    shifted = np.asarray(
+        binscatter(
+            shifted_frame,
+            "x",
+            "y",
+            controls=controls,
+            num_bins=10,
+            poly_line=2,
+        )
+        .data[1]
+        .y,
+        dtype=float,
+    )
+    np.testing.assert_allclose(shifted - expected_shift, baseline, rtol=1e-7, atol=1e-6)
+
+
+def test_polynomial_grid_does_not_collapse_at_large_x_location():
+    """A visible x spread remains visible even when its location is much larger."""
+    centered_x = np.linspace(-1.0, 1.0, 1200)
+    y = 0.5 + 2.0 * centered_x + 0.3 * centered_x**2
+    centered = pd.DataFrame({"x": centered_x, "y": y})
+    shifted = pd.DataFrame(
+        {
+            "x": 10_000_000_000.0 + centered_x,
+            "y": y,
+        }
+    )
+    baseline_figure = binscatter(centered, "x", "y", num_bins=10, poly_line=2)
+    shifted_figure = binscatter(shifted, "x", "y", num_bins=10, poly_line=2)
+    baseline_x = np.asarray(baseline_figure.data[1].x, dtype=float)
+    shifted_x = np.asarray(shifted_figure.data[1].x, dtype=float)
+    baseline_y = np.asarray(baseline_figure.data[1].y, dtype=float)
+    shifted_y = np.asarray(shifted_figure.data[1].y, dtype=float)
+    assert baseline_x.size > 1
+    assert shifted_x.size == baseline_x.size
+    np.testing.assert_allclose(
+        shifted_x - 10_000_000_000.0,
+        baseline_x,
+        rtol=0.0,
+        atol=3e-6,
+    )
+    np.testing.assert_allclose(shifted_y, baseline_y, rtol=1e-7, atol=1e-7)
+
+
+def test_polynomial_line_handles_extreme_but_finite_x_values():
+    """Stable fitting must not form raw powers that overflow for finite inputs."""
+    scaled_x = np.linspace(-1.0, 1.0, 1200)
+    frame = pd.DataFrame(
+        {
+            "x": 1e150 + 1e140 * scaled_x,
+            "y": 1.0 - 0.7 * scaled_x + 0.2 * scaled_x**2 - 0.05 * scaled_x**3,
+        }
+    )
+    figure = binscatter(frame, "x", "y", num_bins=10, poly_line=3)
+    line_x = np.asarray(figure.data[1].x, dtype=float)
+    line_y = np.asarray(figure.data[1].y, dtype=float)
+    normalized_x = (line_x - 1e150) / 1e140
+    expected_y = (
+        1.0 - 0.7 * normalized_x + 0.2 * normalized_x**2 - 0.05 * normalized_x**3
+    )
+    assert line_x.size > 1
+    assert np.ptp(normalized_x) > 1.9
+    assert np.all(np.isfinite(line_y))
+    np.testing.assert_allclose(line_y, expected_y, rtol=1e-6, atol=1e-6)
+
+
+def _interval_case() -> pd.DataFrame:
+    rng = np.random.default_rng(2026)
+    n = 1200
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = 1.2 * x + 0.8 * z + rng.normal(scale=0.5, size=n)
+    return pd.DataFrame({"x": x, "y": y, "z": z})
+
+
+def _interval_values(frame: pd.DataFrame, controls, kind: str) -> np.ndarray:
+    result = binscatter(
+        frame,
+        "x",
+        "y",
+        controls=controls,
+        num_bins=10,
+        ci=kind,
+        return_type="native",
+    )
+    columns = ["y", "ci_lower", "ci_upper", "ci_std_error"]
+    return to_pandas_native(result).sort_values("bin")[columns].to_numpy(dtype=float)
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "rbc"])
+@pytest.mark.parametrize("shift_kind", ["control", "x_and_y"])
+def test_intervals_are_location_invariant(kind, shift_kind):
+    """Centres, bounds, and standard errors obey the model's affine invariances."""
+    frame = _interval_case()
+    baseline = _interval_values(frame, ["z"], kind)
+    if shift_kind == "control":
+        shifted_frame = frame.assign(z=frame["z"] + 1_000_000_000.0)
+        expected_shift = 0.0
+    else:
+        shifted_frame = frame.assign(
+            x=frame["x"] + 1_000_000_000.0,
+            y=frame["y"] + 1_000_000_000.0,
+        )
+        expected_shift = 1_000_000_000.0
+    shifted = _interval_values(shifted_frame, ["z"], kind)
+    shifted[:, :3] -= expected_shift
+    np.testing.assert_allclose(shifted, baseline, rtol=1e-7, atol=1e-6)
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "rbc"])
+def test_intervals_are_invariant_to_control_units(kind):
+    """Rescaling a control changes its coefficient, not its covariance contribution."""
+    frame = _interval_case()
+    baseline = _interval_values(frame, ["z"], kind)
+    scaled = _interval_values(frame.assign(z=frame["z"] * 10_000_000.0), ["z"], kind)
+    np.testing.assert_allclose(scaled, baseline, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "rbc"])
+@pytest.mark.parametrize("redundancy", ["duplicate", "constant"])
+def test_intervals_ignore_redundant_controls(kind, redundancy):
+    """HC1 degrees of freedom use design rank, not nominal duplicate columns."""
+    frame = _interval_case()
+    baseline = _interval_values(frame, ["z"], kind)
+    if redundancy == "duplicate":
+        changed = frame.assign(redundant=frame["z"])
+    else:
+        changed = frame.assign(redundant=1.0)
+    actual = _interval_values(changed, ["z", "redundant"], kind)
+    np.testing.assert_allclose(actual, baseline, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_large_int64_control_products_match_dense_ols(df_type):
+    """Control squares beyond int64 range must be cast before aggregation."""
+    rng = np.random.default_rng(101)
+    x = rng.normal(size=1200)
+    z = rng.integers(-5_000_000_000, 5_000_000_000, size=x.size, dtype=np.int64)
+    y = 2.0 * x + 1e-9 * z + rng.normal(scale=0.1, size=x.size)
+    frame = pd.DataFrame({"x": x, "y": y, "z": z})
+    actual = _public_controlled_dots(conv(frame, df_type), ["z"])
+    expected = _backend_dense_dots(frame, df_type, ["z"])
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_large_int64_response_sums_match_dense_ols(df_type):
+    """Large individual integers are valid even when their aggregate exceeds int64."""
+    rng = np.random.default_rng(102)
+    x = rng.normal(size=1200)
+    z = rng.integers(-1000, 1000, size=x.size, dtype=np.int64)
+    y = 8_000_000_000_000_000 + np.rint(1000.0 * x + 3.0 * z).astype(np.int64)
+    frame = pd.DataFrame({"x": x, "y": y, "z": z})
+    actual = _public_controlled_dots(conv(frame, df_type), ["z"])
+    expected = _backend_dense_dots(frame, df_type, ["z"])
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=4.0)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+@pytest.mark.parametrize("scale", [1e-170, 1e200], ids=["tiny", "huge"])
+def test_extreme_control_scales_match_dense_ols(df_type, scale):
+    """Finite controls must not disappear through underflow or overflow."""
+    rng = np.random.default_rng(103)
+    x = rng.normal(size=1200)
+    latent = rng.normal(size=x.size)
+    z = scale * latent
+    y = 2.0 * x + 3.0 * latent + rng.normal(scale=0.1, size=x.size)
+    frame = pd.DataFrame({"x": x, "y": y, "z": z})
+    actual = _public_controlled_dots(conv(frame, df_type), ["z"])
+    expected = _backend_dense_dots(frame, df_type, ["z"])
+    np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_near_collinear_controls_match_dense_ols(df_type):
+    """A tiny but estimable control direction must survive the normal equations."""
+    rng = np.random.default_rng(3)
+    x = rng.normal(size=1200)
+    z1 = rng.normal(size=1200)
+    noise = rng.normal(size=1200)
+    z2 = z1 + 1e-8 * noise
+    y = 2.0 * x + 3.0 * z1 + 0.2 * noise + rng.normal(scale=0.1, size=1200)
+    frame = pd.DataFrame({"x": x, "y": y, "z1": z1, "z2": z2})
+    actual = _public_controlled_dots(conv(frame, df_type), ["z1", "z2"])
+    expected = _backend_dense_dots(frame, df_type, ["z1", "z2"])
+    np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.parametrize("redundancy", ["duplicate", "constant"])
+def test_redundant_numeric_controls_do_not_move_dots(redundancy):
+    """Redundancy entirely inside the controls leaves the fitted curve estimable."""
+    rng = np.random.default_rng(104)
+    x = rng.normal(size=1200)
+    z = rng.normal(size=1200)
+    y = 1.5 * x + 0.8 * z + rng.normal(scale=0.2, size=1200)
+    frame = pd.DataFrame({"x": x, "y": y, "z": z})
+    baseline = _public_controlled_dots(frame, ["z"])
+    changed = frame.assign(redundant=frame["z"] if redundancy == "duplicate" else 1e12)
+    actual = _public_controlled_dots(changed, ["z", "redundant"])
+    np.testing.assert_allclose(actual, baseline, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_extension_dtypes_match_explicit_dense_encoding(df_type):
+    """Nullable integers, booleans, categories, and rare levels share one model."""
+    rng = np.random.default_rng(105)
+    n = 1200
+    nullable_int = pd.Series(rng.integers(-50, 50, n), dtype="Int64")
+    flag = pd.Series(rng.random(n) < 0.3, dtype="boolean")
+    group = pd.Series(
+        rng.choice(["common", "uncommon", "rare"], n, p=[0.90, 0.09, 0.01]),
+        dtype="category",
+    )
+    x = rng.normal(size=n)
+    group_effect = group.map({"common": 0.0, "uncommon": 2.0, "rare": -3.0}).to_numpy(
+        dtype=float
+    )
+    y = (
+        0.7 * x
+        + 0.04 * nullable_int.to_numpy(dtype=float)
+        + 1.3 * flag.to_numpy(dtype=float)
+        + group_effect
+        + rng.normal(scale=0.2, size=n)
+    )
+    frame = pd.DataFrame(
+        {
+            "x": x,
+            "y": y,
+            "nullable_int": nullable_int,
+            "flag": flag,
+            "group": group,
+        }
+    )
+    control_names = ["nullable_int", "flag", "group"]
+    actual = _public_controlled_dots(conv(frame, df_type), control_names)
+
+    # Fix this backend's own bin assignment, then encode its original columns by
+    # hand. This keeps approximate distributed quantiles out of the estimator
+    # comparison without sharing the library's dummy columns with the oracle.
+    prepared, profile = _prepare_dataframe(
+        conv(frame, df_type), "x", "y", control_names, 10
+    )
+    binned = _collect_lazyframe_to_pandas(prepared)
+    controls = np.column_stack(
+        [
+            binned["nullable_int"].to_numpy(dtype=float),
+            pd.get_dummies(binned["flag"], drop_first=True, dtype=float).to_numpy(),
+            pd.get_dummies(binned["group"], drop_first=True, dtype=float).to_numpy(),
+        ]
+    )
+    expected = _centered_dense_dots_from_bins(
+        binned["y"].to_numpy(dtype=float),
+        controls,
+        binned[profile.bin_name].to_numpy(dtype=int),
+        num_bins=10,
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize("scale", [1.0, 1e-9], ids=["ordinary", "tiny_units"])
+def test_control_collinear_with_bins_is_rejected_at_any_scale(scale):
+    """The curve at average controls is not estimable when W reproduces the bins."""
+    rng = np.random.default_rng(106)
+    x = rng.normal(size=1200)
+    y = 1.2 * x + rng.normal(scale=0.2, size=x.size)
+    probabilities = [i / 10 for i in range(11)]
+    edges = pd.Series(x).quantile(probabilities).to_numpy(dtype=float)
+    bin_idx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, 9)
+    frame = pd.DataFrame({"x": x, "y": y, "bin_control": scale * bin_idx.astype(float)})
+    with pytest.raises(
+        ValueError, match="not identified|collinear with the bin indicators"
+    ):
+        _public_controlled_dots(frame, ["bin_control"])
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -916,11 +1547,10 @@ def test_binscatter_categorical_controls_only(df_type):
         return_type="native",
     )
     result_pd = to_pandas_native(result).sort_values("bin").reset_index(drop=True)
-    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
     if df_type in ("dask", "pyspark"):
         rtol, atol = 0.1, 0.15
     else:
-        rtol, atol = 1e-6, 1e-6
+        rtol = atol = 1e-6
     np.testing.assert_allclose(
         result_pd["x0"].to_numpy(), expected_x, rtol=rtol, atol=atol
     )
@@ -994,11 +1624,9 @@ def test_partial_out_controls_matches_statsmodels(df_type):
         .mean()
         .sort_index()
     )
-    # Use looser tolerance for distributed backends (approximate quantiles cause bin differences)
-    if df_type in ("dask", "pyspark"):
-        rtol, atol = 0.1, 0.15
-    else:
-        rtol, atol = 1e-6, 1e-6
+    # The oracle below uses this backend's already-assigned bins, so approximate
+    # boundaries are shared rather than a reason to loosen estimator correctness.
+    rtol = atol = 1e-6
     np.testing.assert_allclose(
         result[profile.x_name].to_numpy(),
         bin_means.to_numpy(),
@@ -1226,8 +1854,6 @@ def test_poly_line_does_not_change_y_axis_range():
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_configure_compute_quantiles_returns_correct_length(df_type):
     """Quantiles should have num_bins + 1 elements (including min and max)."""
-    if df_type == "pyspark":
-        pytest.skip("PySpark not enabled")
     rng = np.random.default_rng(111)
     df_pd = pd.DataFrame({"x": rng.normal(size=500)})
     df = convert_to_backend(df_pd, df_type)
@@ -1244,8 +1870,6 @@ def test_configure_compute_quantiles_returns_correct_length(df_type):
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_configure_compute_quantiles_min_max(df_type):
     """First quantile should be min, last should be max."""
-    if df_type == "pyspark":
-        pytest.skip("PySpark not enabled")
     rng = np.random.default_rng(222)
     x = rng.normal(size=500)
     df_pd = pd.DataFrame({"x": x})
@@ -1262,8 +1886,6 @@ def test_configure_compute_quantiles_min_max(df_type):
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_configure_compute_quantiles_monotonic(df_type):
     """Quantiles should be monotonically non-decreasing."""
-    if df_type == "pyspark":
-        pytest.skip("PySpark not enabled")
     rng = np.random.default_rng(333)
     df_pd = pd.DataFrame({"x": rng.normal(size=500)})
     df = convert_to_backend(df_pd, df_type)
@@ -1294,8 +1916,6 @@ def test_configure_compute_quantiles_single_bin_raises(df_type):
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_non_unique_quantiles_produce_unique_bins_binary(df_type):
     """Binary data should produce 2 unique bins even when quantiles collapse."""
-    if df_type == "pyspark":
-        pytest.skip("PySpark not enabled")
     base = pd.DataFrame(
         {
             "x0": np.tile([0.0, 1.0], 50),
@@ -1314,8 +1934,6 @@ def test_non_unique_quantiles_produce_unique_bins_binary(df_type):
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_non_unique_quantiles_produce_unique_bins_ternary(df_type):
     """Ternary data should produce at least 2 unique bins."""
-    if df_type == "pyspark":
-        pytest.skip("PySpark not enabled")
     base = pd.DataFrame(
         {
             "x0": np.tile([0.0, 1.0, 2.0], 33),
@@ -1329,24 +1947,6 @@ def test_non_unique_quantiles_produce_unique_bins_ternary(df_type):
     # Should have at least 2 unique bins for ternary data
     assert result_pd["bin"].nunique() >= 2
     assert result_pd["x0"].nunique() >= 2
-
-
-def test_non_unique_quantiles_pyspark():
-    """PySpark-specific test for non-unique quantiles."""
-    pytest.importorskip("pyspark")
-    base = pd.DataFrame(
-        {
-            "x0": np.tile([0.0, 1.0], 50),
-            "y0": np.random.default_rng(45).normal(size=100),
-        }
-    )
-    df = convert_to_backend(base, "pyspark")
-    # Use rule-of-thumb to allow automatic bin reduction
-    result = binscatter(df, "x0", "y0", num_bins="rule-of-thumb", return_type="native")
-    result_pd = to_pandas_native(result)
-    # Should have exactly 2 unique bins for binary data
-    assert result_pd["bin"].nunique() == 2
-    assert result_pd["x0"].nunique() == 2
 
 
 # =============================================================================
@@ -1452,6 +2052,7 @@ def testbuild_dummies_pandas_polars(backend):
         ]
 
 
+@pytest.mark.pyspark
 def testbuild_dummies_pyspark():
     """Test that PySpark dummy builder works correctly."""
     pytest.importorskip("pyspark")
@@ -1485,6 +2086,7 @@ def testbuild_dummies_pyspark():
         assert set(result[col].unique()) <= {0.0, 1.0}
 
 
+@pytest.mark.pyspark
 def test_dummy_builder_pyspark_handles_nulls():
     """Test that PySpark dummy builder correctly handles null values."""
     pytest.importorskip("pyspark")
@@ -1741,6 +2343,7 @@ def test_configure_build_dummies_dispatch():
     assert builder == build_dummies_fallback
 
 
+@pytest.mark.pyspark
 def test_configure_build_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
@@ -1819,6 +2422,7 @@ def test_dummy_names_consistent_across_backends(backend):
         )
 
 
+@pytest.mark.pyspark
 def test_pyspark_dummy_names_match_pandas():
     """Test that PySpark dummy names exactly match pandas dummy names."""
     pytest.importorskip("pyspark")
@@ -1866,6 +2470,7 @@ def test_pyspark_dummy_names_match_pandas():
     )
 
 
+@pytest.mark.pyspark
 def test_binscatter_with_pyspark_caching():
     """Integration test: full binscatter with PySpark should use caching."""
     pytest.importorskip("pyspark")

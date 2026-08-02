@@ -25,7 +25,12 @@ import binscatter.fixed_effects as fe_mod
 import binscatter.sparse_fe as sparse_mod
 from binscatter import binscatter, core
 from tests.conftest import DF_BACKENDS, convert_to_backend
-from tests.test_fixed_effects import run_native, tolerances, without_absorption
+from tests.test_fixed_effects import (
+    assert_complete_case_rows,
+    run_native,
+    tolerances,
+    without_absorption,
+)
 
 pytest.importorskip("scipy")
 
@@ -116,6 +121,120 @@ def make_call_panel(n=1200, seed=0):
     return df
 
 
+def make_bridge_panel(*, bridge_count: int):
+    """Two dense panel components joined by zero, one, or two factor-axis bridges.
+
+    One cross-component row makes the ordinary incidence graph connected but leaves
+    a nonconstant bin contrast aliased with the two factor blocks. A second bridge
+    through the other factor removes that last harmful null direction.
+    """
+    if bridge_count not in (0, 1, 2):
+        raise ValueError("bridge_count must be zero, one, or two")
+    rng = np.random.default_rng(20260803)
+    n, num_bins = 1000, 4
+    x = np.linspace(-2.0, 2.0, n)
+    edges = pd.Series(x).quantile([idx / num_bins for idx in range(num_bins + 1)])
+    bin_idx = np.clip(
+        np.searchsorted(edges.to_numpy(), x, side="right") - 1, 0, num_bins - 1
+    )
+    low = np.flatnonzero(bin_idx < 2)
+    high = np.flatnonzero(bin_idx >= 2)
+
+    firm = np.empty(n, dtype=int)
+    year = np.empty(n, dtype=int)
+    firm[low] = rng.integers(0, 30, low.size)
+    year[low] = rng.integers(0, 27, low.size)
+    firm[high] = rng.integers(30, 60, high.size)
+    year[high] = rng.integers(27, 55, high.size)
+    # Guarantee every level is represented before inserting the bridges.
+    firm[low[:30]] = np.arange(30)
+    year[low[30:57]] = np.arange(27)
+    firm[high[:30]] = 30 + np.arange(30)
+    year[high[30:58]] = 27 + np.arange(28)
+
+    if bridge_count >= 1:
+        # This joins the incidence graph through ``firm`` but does not identify the
+        # remaining low-versus-high bin contrast in the full additive design.
+        firm[high[100]] = 0
+    if bridge_count == 2:
+        year[low[100]] = 27
+
+    bin_effect = np.array([-2.0, -0.5, 1.0, 3.0])
+    firm_effect = rng.normal(scale=2.0, size=60)
+    year_effect = rng.normal(scale=1.0, size=55)
+    y = bin_effect[bin_idx] + firm_effect[firm] + year_effect[year]
+    expected = bin_effect + firm_effect[firm].mean() + year_effect[year].mean()
+    frame = pd.DataFrame(
+        {
+            "x": x,
+            "y": y,
+            "firm": [f"f{value:02d}" for value in firm],
+            "year": [f"y{value:02d}" for value in year],
+            "bin_control": bin_idx.astype(float),
+        }
+    )
+    return frame, expected
+
+
+def make_known_dgp(route: str):
+    """Noiseless, imbalanced DGP with a known sample-average adjusted curve."""
+    rng = np.random.default_rng(20260802)
+    n, num_bins = 6000, 8
+    firm_prob = np.r_[0.82, np.repeat(0.18 / 59.0, 59)]
+    year_prob = np.r_[0.55, np.repeat(0.45 / 54.0, 54)]
+    firm = rng.choice(60, n, p=firm_prob)
+    year = rng.choice(55, n, p=year_prob)
+    firm[:60] = np.arange(60)
+    year[60:115] = np.arange(55)
+
+    firm_effect = rng.normal(scale=3.0, size=60)
+    year_effect = rng.normal(scale=2.0, size=55)
+    z = 0.7 * firm_effect[firm] - 0.4 * year_effect[year] + rng.normal(size=n)
+    x = 0.8 * firm_effect[firm] + 0.5 * year_effect[year] + 0.6 * z + rng.normal(size=n)
+    edges = np.quantile(x, np.linspace(0.0, 1.0, num_bins + 1))
+    bin_idx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    bin_effect = np.array([-2.0, -1.3, -0.5, 0.1, 0.8, 1.7, 2.9, 4.2])
+
+    y = bin_effect[bin_idx] + 1.75 * z
+    expected = bin_effect + 1.75 * z.mean()
+    if route in ("one_way", "two_way"):
+        y = y + firm_effect[firm]
+        expected = expected + firm_effect[firm].mean()
+    if route == "two_way":
+        y = y + year_effect[year]
+        expected = expected + year_effect[year].mean()
+
+    options = {
+        "no_fe": (["z"], []),
+        "one_way": (["z", "firm"], ["firm"]),
+        "two_way": (["z", "firm", "year"], ["firm", "year"]),
+    }
+    if route not in options:
+        raise ValueError(f"unknown DGP route: {route}")
+    controls, categorical = options[route]
+    frame = pd.DataFrame({"x": x, "y": y, "z": z, "firm": firm, "year": year})
+    return frame, expected, controls, categorical, num_bins
+
+
+def production_oracle_case(factors: int):
+    """A production-threshold panel and its numeric/categorical control metadata."""
+    if factors == 2:
+        return (
+            make_two_way(g1=60, g2=55),
+            ["age", "firm", "year"],
+            ("age",),
+            ("firm", "year"),
+        )
+    if factors == 3:
+        return (
+            make_three_way(g1=60, g2=55, g3=50),
+            THREE_WAY_CONTROLS,
+            ("age",),
+            THREE_WAY_CATS,
+        )
+    raise ValueError(f"unsupported factor count: {factors}")
+
+
 @pytest.fixture
 def force_multiway(monkeypatch):
     """Absorb even tiny categoricals, so equivalence runs on small data.
@@ -201,6 +320,8 @@ def test_matches_one_hot_on_every_backend(df_type, monkeypatch, force_multiway):
     any cardinality. The oracle tests keep realistic ones -- they never encode.
     """
     native = convert_to_backend(make_two_way(n=1200, g1=10, g2=5), df_type)
+    if df_type == "pyspark":
+        native = native.repartition(3)
 
     rtol, atol = tolerances(df_type)
     assert_matches_one_hot(
@@ -214,22 +335,87 @@ def test_matches_one_hot_on_every_backend(df_type, monkeypatch, force_multiway):
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_nulls_in_factor_columns_are_dropped(df_type, force_multiway):
-    """A null in either factor drops the row from both crosstabs, not just its own."""
+def test_integer_coded_factors_match_one_hot_on_every_backend(
+    df_type, monkeypatch, force_multiway
+):
+    """Explicit integer factor declarations are backend-independent."""
+    frame = make_two_way(n=1200, g1=10, g2=5, seed=12)
+    frame["firm_id"] = pd.factorize(frame["firm"], sort=True)[0]
+    frame["year_id"] = pd.factorize(frame["year"], sort=True)[0]
+    native = convert_to_backend(frame, df_type)
+    if df_type == "pyspark":
+        native = native.repartition(3)
+    rtol, atol = tolerances(df_type)
+    assert_matches_one_hot(
+        native,
+        monkeypatch,
+        rtol=rtol,
+        atol=atol,
+        controls=["age", "firm_id", "year_id"],
+        categorical=["firm_id", "year_id"],
+        num_bins=8,
+    )
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_multiway_native_output_preserves_input_backend(df_type, force_multiway):
+    """Multiway controlled output stays native to the input dataframe backend."""
+    native = convert_to_backend(make_two_way(n=1200, g1=10, g2=5, seed=14), df_type)
+    if df_type == "pyspark":
+        native = native.repartition(3)
+    result = binscatter(
+        native,
+        "x",
+        "y",
+        controls=["age", "firm", "year"],
+        num_bins=8,
+        return_type="native",
+    )
+    assert isinstance(result, type(native))
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+@pytest.mark.parametrize(
+    "invalid_column",
+    ["x", "y", "age", "firm", "year"],
+    ids=[
+        "x_nan",
+        "y_infinity",
+        "control_infinity",
+        "first_factor_null",
+        "second_factor_null",
+    ],
+)
+def test_invalid_rows_are_dropped_before_multiway_absorption(
+    df_type, invalid_column, monkeypatch, force_multiway
+):
+    """Exactly the complete cases, not merely similar dots, reach absorption."""
     df = make_two_way(n=1200, g1=15, g2=6, seed=41)
-    df.loc[:39, "firm"] = None
-    df.loc[60:99, "year"] = None
-    clean = df.dropna(subset=["firm", "year"])
-
-    with_nulls = run_native(
-        convert_to_backend(df, df_type), controls=["firm", "year"], num_bins=5
+    invalid_value = None if invalid_column in ("firm", "year") else np.inf
+    if invalid_column == "x":
+        invalid_value = np.nan
+    df.loc[:39, invalid_column] = invalid_value
+    clean = (
+        df.replace([np.inf, -np.inf], np.nan)
+        .dropna(subset=["x", "y", "age", "firm", "year"])
+        .reset_index(drop=True)
     )
-    dropped = run_native(
-        convert_to_backend(clean, df_type), controls=["firm", "year"], num_bins=5
-    )
 
-    rtol, atol = tolerances(df_type, reshaped_input=True)
-    np.testing.assert_allclose(with_nulls, dropped, rtol=rtol, atol=atol)
+    seen: list[int] = []
+    original = core.partial_out_controls
+
+    def checked_partial_out(frame, profile, *args, **kwargs):
+        assert_complete_case_rows(frame, clean, ("x", "y", "age", "firm", "year"))
+        seen.append(len(clean))
+        return original(frame, profile, *args, **kwargs)
+
+    monkeypatch.setattr(core, "partial_out_controls", checked_partial_out)
+    run_native(
+        convert_to_backend(df, df_type),
+        controls=["age", "firm", "year"],
+        num_bins=5,
+    )
+    assert seen == [len(clean)]
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -256,27 +442,226 @@ def test_row_order_does_not_change_result(df_type, force_multiway):
 
 
 @pytest.mark.quick
+@pytest.mark.parametrize(
+    "route", ["no_fe", "one_way", "two_way"], ids=["no_fe", "one_fe", "two_fe"]
+)
+def test_known_dgp_recovers_sample_average_curve(route):
+    """Exact ground truth under severe imbalance and control/x confounding.
+
+    Parametrizing the routes makes the non-FE, one-FE, and two-FE specifications
+    report independently instead of the first failure hiding the others.
+    """
+    df, expected, controls, categorical, num_bins = make_known_dgp(route)
+    actual = run_native(
+        df, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("route", ["one_way", "two_way"], ids=["one_fe", "two_fe"])
+def test_known_dgp_is_invariant_to_control_order(route):
+    """Control and factor order is not part of the statistical specification."""
+    df, _, controls, categorical, num_bins = make_known_dgp(route)
+    baseline = run_native(
+        df, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    permuted = run_native(
+        df,
+        controls=list(reversed(controls)),
+        categorical=list(reversed(categorical)),
+        num_bins=num_bins,
+    )
+    np.testing.assert_allclose(permuted, baseline, rtol=1e-10, atol=1e-10)
+
+
+def test_known_two_way_dgp_is_invariant_to_row_replication():
+    """Duplicating every observation changes weights by a common factor only."""
+    df, _, controls, categorical, num_bins = make_known_dgp("two_way")
+    baseline = run_native(
+        df, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    replicated = run_native(
+        pd.concat([df, df], ignore_index=True),
+        controls=controls,
+        categorical=categorical,
+        num_bins=num_bins,
+    )
+    np.testing.assert_allclose(replicated, baseline, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("route", ["one_way", "two_way"], ids=["one_fe", "two_fe"])
+@pytest.mark.parametrize("scale", [1e-170, 1e200], ids=["tiny", "huge"])
+def test_fixed_effect_dgp_is_invariant_to_numeric_control_units(route, scale):
+    """Absorbed estimators remain the same under extreme finite control units."""
+    frame, expected, controls, categorical, num_bins = make_known_dgp(route)
+    frame["z"] = scale * frame["z"]
+    actual = run_native(
+        frame, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.parametrize("route", ["one_way", "two_way"], ids=["one_fe", "two_fe"])
+def test_fixed_effect_dgp_handles_near_collinear_numeric_controls(route):
+    """A small identified control direction survives one- and multiway absorption."""
+    frame, expected, controls, categorical, num_bins = make_known_dgp(route)
+    noise = np.random.default_rng(20260804).normal(size=len(frame))
+    frame["z2"] = frame["z"] + 1e-8 * noise
+    frame["y"] = frame["y"] + 0.2 * noise
+    controls = ["z", "z2", *controls[1:]]
+    actual = run_native(
+        frame, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    np.testing.assert_allclose(
+        actual, expected + 0.2 * noise.mean(), rtol=1e-7, atol=1e-7
+    )
+
+
+@pytest.mark.parametrize("route", ["one_way", "two_way"], ids=["one_fe", "two_fe"])
+def test_fixed_effect_dgp_handles_large_int64_control_products(route):
+    """FE moment aggregation casts integer cross-products before they overflow."""
+    frame, expected, controls, categorical, num_bins = make_known_dgp(route)
+    large_int = np.random.default_rng(20260805).integers(
+        -5_000_000_000,
+        5_000_000_000,
+        size=len(frame),
+        dtype=np.int64,
+    )
+    frame["large_int"] = large_int
+    frame["y"] = frame["y"] + 1e-9 * large_int
+    controls = ["z", "large_int", *controls[1:]]
+    actual = run_native(
+        frame, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    np.testing.assert_allclose(
+        actual, expected + 1e-9 * large_int.mean(), rtol=1e-8, atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("route", ["one_way", "two_way"], ids=["one_fe", "two_fe"])
+def test_fixed_effect_dgp_handles_large_int64_response_sums(route):
+    """FE response aggregates may exceed int64 even when every row is valid."""
+    frame, _, controls, categorical, num_bins = make_known_dgp(route)
+    rng = np.random.default_rng(20260806)
+    z = rng.integers(-1000, 1000, size=len(frame), dtype=np.int64)
+    edges = (
+        frame["x"].quantile([idx / num_bins for idx in range(num_bins + 1)]).to_numpy()
+    )
+    bin_idx = np.clip(
+        np.searchsorted(edges, frame["x"], side="right") - 1,
+        0,
+        num_bins - 1,
+    )
+    bin_effect = 1000 * np.array([-2, -1, 0, 1, 2, 3, 5, 8], dtype=np.int64)
+    firm_effect = rng.integers(-1000, 1000, size=60, dtype=np.int64)
+    year_effect = rng.integers(-1000, 1000, size=55, dtype=np.int64)
+    firm = frame["firm"].to_numpy(dtype=int)
+    year = frame["year"].to_numpy(dtype=int)
+
+    base = 8_000_000_000_000_000
+    y = base + bin_effect[bin_idx] + 3 * z
+    expected = base + bin_effect.astype(float) + 3.0 * z.mean()
+    if route in ("one_way", "two_way"):
+        y = y + firm_effect[firm]
+        expected = expected + firm_effect[firm].mean()
+    if route == "two_way":
+        y = y + year_effect[year]
+        expected = expected + year_effect[year].mean()
+
+    frame["z"] = z
+    frame["y"] = y.astype(np.int64)
+    actual = run_native(
+        frame, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    np.testing.assert_allclose(actual, expected, rtol=0.0, atol=4.0)
+
+
+@pytest.mark.parametrize("route", ["one_way", "two_way"], ids=["one_fe", "two_fe"])
+@pytest.mark.parametrize("redundancy", ["duplicate", "constant", "fe_span"])
+def test_fixed_effect_dgp_ignores_harmless_control_rank_deficiency(route, redundancy):
+    """Only rank loss that aliases the bin curve is an identification failure."""
+    frame, expected, controls, categorical, num_bins = make_known_dgp(route)
+    if redundancy == "duplicate":
+        frame["redundant"] = frame["z"]
+    elif redundancy == "constant":
+        frame["redundant"] = 1.0
+    else:
+        # This numeric column is already exactly spanned by the firm effects.
+        frame["redundant"] = pd.factorize(frame["firm"], sort=True)[0]
+    controls = ["z", "redundant", *controls[1:]]
+    actual = run_native(
+        frame, controls=controls, categorical=categorical, num_bins=num_bins
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", EXACT_QUANTILE_BACKENDS)
 @pytest.mark.parametrize("factors", [2, 3], ids=["two_way", "three_way"])
-def test_matches_dense_ols(df_type, factors, force_multiway):
+def test_matches_dense_ols(df_type, factors):
     """A one-hot design built and solved with numpy, not the library's machinery.
 
     Three factors as well as two because the pairwise crosstabs grow quadratically in
     the number of absorbed columns -- three factors mean three crosstabs, not one.
     """
-    if factors == 2:
-        df = make_two_way()
-        controls, numeric, cats = ["age", "firm", "year"], ("age",), ("firm", "year")
-    else:
-        df = make_three_way()
-        controls, numeric, cats = THREE_WAY_CONTROLS, ("age",), THREE_WAY_CATS
-
+    df, controls, numeric, cats = production_oracle_case(factors)
     absorbed = run_native(
         convert_to_backend(df, df_type), controls=controls, num_bins=8
     )
     expected = dense_reference(df, 8, numeric, cats)
 
     np.testing.assert_allclose(absorbed, expected, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize(
+    ("original_name", "control_name"),
+    [("firm", "__mfe_resp_0"), ("year", "__mfe_count")],
+    ids=["response_alias", "count_alias"],
+)
+def test_multiway_temporary_aliases_do_not_shadow_control_columns(
+    original_name, control_name
+):
+    """Multiway aggregation temporaries cannot reserve valid user column names."""
+    df, controls, _, _ = production_oracle_case(2)
+    expected = run_native(df, controls=controls, num_bins=8)
+    renamed = df.rename(columns={original_name: control_name})
+    renamed_controls = [
+        control_name if name == original_name else name for name in controls
+    ]
+    actual = run_native(
+        renamed,
+        controls=renamed_controls,
+        num_bins=8,
+    )
+    np.testing.assert_allclose(actual, expected, rtol=1e-9, atol=1e-9)
+
+
+@pytest.mark.parametrize("df_type", EXACT_QUANTILE_BACKENDS)
+@pytest.mark.parametrize("factors", [2, 3], ids=["two_way", "three_way"])
+def test_additive_factor_shifts_recover_their_sample_average(df_type, factors):
+    """Changing FE levels moves every dot by the count-weighted average shift."""
+    df, controls, _, cats = production_oracle_case(factors)
+    baseline = run_native(
+        convert_to_backend(df, df_type), controls=controls, num_bins=8
+    )
+    # Arbitrary additive effects in every absorbed factor must change only the
+    # count-weighted overall level.  This catches a solve that gets within-bin
+    # contrasts right but forgets (or misweights) fixed-effect level recovery.
+    shifted = df.copy()
+    total_shift = np.zeros(len(df), dtype=float)
+    for factor_idx, name in enumerate(cats, start=1):
+        codes, _ = pd.factorize(df[name], sort=True)
+        total_shift += np.sin((codes + 1) * factor_idx) * (3.0 + factor_idx)
+    shifted["y"] = shifted["y"] + total_shift
+    shifted_dots = run_native(
+        convert_to_backend(shifted, df_type), controls=controls, num_bins=8
+    )
+    np.testing.assert_allclose(
+        shifted_dots,
+        baseline + total_shift.mean(),
+        rtol=1e-8,
+        atol=1e-8,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -513,8 +898,48 @@ def test_rot_absorbs_every_factor(monkeypatch, force_multiway):
 # --------------------------------------------------------------------------
 
 
-def test_crosstab_budget_names_the_offending_columns():
-    """The worker-x-firm regime must fail with an explanation, not an allocation."""
+def test_multiway_rejects_disconnected_bin_factor_components():
+    """No normalization can identify relative dots across disconnected components."""
+    disconnected, _ = make_bridge_panel(bridge_count=0)
+    with pytest.raises(ValueError, match="not identif|collinear with .*bin indicators"):
+        run_native(disconnected, controls=["firm", "year"], num_bins=4)
+
+
+def test_multiway_rejects_connected_but_unidentified_design():
+    """Graph connectivity alone is insufficient with bins plus two FE blocks."""
+    one_bridge, _ = make_bridge_panel(bridge_count=1)
+    with pytest.raises(ValueError, match="not identif|collinear with .*bin indicators"):
+        run_native(one_bridge, controls=["firm", "year"], num_bins=4)
+
+
+def test_independently_bridged_multiway_dgp_recovers_known_curve():
+    """Two factor-axis bridges identify the noiseless sample-average curve."""
+    identified, expected = make_bridge_panel(bridge_count=2)
+    actual = run_native(identified, controls=["firm", "year"], num_bins=4)
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+
+
+def test_independently_bridged_multiway_design_matches_dense_ols():
+    """The boundary identified case also agrees with an explicit dummy design."""
+    identified, _ = make_bridge_panel(bridge_count=2)
+    actual = run_native(identified, controls=["firm", "year"], num_bins=4)
+    expected = dense_reference(identified, 4, (), ("firm", "year"))
+    np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-10)
+
+
+def test_multiway_rejects_numeric_control_collinear_with_bins():
+    """Dots at average controls are not estimable when a control reproduces bins."""
+    identified, _ = make_bridge_panel(bridge_count=2)
+    with pytest.raises(ValueError, match="not identif|collinear with .*bin indicators"):
+        run_native(
+            identified,
+            controls=["bin_control", "firm", "year"],
+            num_bins=4,
+        )
+
+
+def test_crosstab_budget_error_explains_the_limit():
+    """The worker-by-firm regime fails before attempting an oversized allocation."""
     with pytest.raises(ValueError, match="crosstab entries"):
         sparse_mod._check_crosstab_budget(
             ("worker", "firm"),
@@ -523,6 +948,9 @@ def test_crosstab_budget_names_the_offending_columns():
             total_count=50_000_000.0,
         )
 
+
+def test_crosstab_budget_error_names_the_offending_columns():
+    """The remediation message identifies the high-cardinality factor pair."""
     with pytest.raises(ValueError, match=r"worker \(1,000,000 levels\)"):
         sparse_mod._check_crosstab_budget(
             ("worker", "firm"),
@@ -535,8 +963,8 @@ def test_crosstab_budget_names_the_offending_columns():
 def test_crosstab_budget_reaches_the_caller(monkeypatch, force_multiway):
     """The budget has to stop a real call, not just answer when asked directly.
 
-    :func:`test_crosstab_budget_names_the_offending_columns` pins the arithmetic and
-    the message; this pins that the check is still wired into the path a user takes.
+    The direct guard tests pin the arithmetic and message; this pins that the check
+    is still wired into the path a user takes.
     """
     monkeypatch.setattr(sparse_mod, "MAX_CROSSTAB_ENTRIES", 10)
     df = make_two_way(n=500, g1=20, g2=10)
@@ -638,8 +1066,13 @@ def test_multi_fe_moments_rejects_a_single_factor():
 # --------------------------------------------------------------------------
 
 
-def test_collected_moments_reproduce_the_dense_blocks():
-    """D'D, D'W and D'y must equal what a dense dummy matrix would give."""
+@pytest.mark.parametrize(
+    "block",
+    ["counts", "dtd", "dtw", "dty"],
+    ids=["level_counts", "factor_cross_product", "control_sums", "response_sums"],
+)
+def test_collected_moment_block_matches_dense_design(block):
+    """Every collected normal-equation block is an independent dense oracle."""
     df = make_two_way(n=600, g1=8, g2=5, seed=2)
     lazy, _, _, _ = core.clean_df(df, ("age", "firm", "year"), "x", "y")
 
@@ -663,16 +1096,35 @@ def test_collected_moments_reproduce_the_dense_blocks():
     # sorting each factor's block back onto the factorize order.
     order = _level_order(moments, ("firm", "year"), lazy, (firm_levels, year_levels))
 
-    np.testing.assert_allclose(moments.counts[order], dense.sum(axis=0))
-    np.testing.assert_allclose(
-        moments.dtd.toarray()[np.ix_(order, order)], dense.T @ dense
+    if block == "counts":
+        np.testing.assert_allclose(moments.counts[order], dense.sum(axis=0))
+    elif block == "dtd":
+        np.testing.assert_allclose(
+            moments.dtd.toarray()[np.ix_(order, order)], dense.T @ dense
+        )
+    elif block == "dtw":
+        np.testing.assert_allclose(
+            moments.dtw[order, 0], dense.T @ df["age"].to_numpy(dtype=float)
+        )
+    else:
+        np.testing.assert_allclose(
+            moments.response_sums["y"][order],
+            dense.T @ df["y"].to_numpy(dtype=float),
+        )
+
+
+def test_collected_moment_metadata_matches_dense_design():
+    """Moment metadata reports the observation count and both factor cardinalities."""
+    df = make_two_way(n=600, g1=8, g2=5, seed=2)
+    lazy, _, _, _ = core.clean_df(df, ("age", "firm", "year"), "x", "y")
+    moments = sparse_mod.collect_multi_fe_moments(
+        lazy,
+        fe_names=("firm", "year"),
+        feature_names=("age",),
+        response_exprs={"y": nw.col("y")},
     )
-    np.testing.assert_allclose(
-        moments.dtw[order, 0], dense.T @ df["age"].to_numpy(dtype=float)
-    )
-    np.testing.assert_allclose(
-        moments.response_sums["y"][order], dense.T @ df["y"].to_numpy(dtype=float)
-    )
+    firm_levels = pd.unique(df["firm"])
+    year_levels = pd.unique(df["year"])
     assert moments.total_count == len(df)
     assert moments.cardinalities == (firm_levels.size, year_levels.size)
 

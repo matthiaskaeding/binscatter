@@ -39,7 +39,43 @@ def convert_to_backend(df: pd.DataFrame, backend: str):
             # pandas>=3 stores strings in the "str" dtype, whose missing value
             # createDataFrame turns into the literal string "NaN". Round-trip
             # through object dtype so nulls stay null on the Spark side.
-            return spark.createDataFrame(df.astype(object).where(df.notna(), None))
+            cleaned = df.astype(object).where(df.notna(), None)
+            if not df.isna().all().any():
+                return spark.createDataFrame(cleaned)
+
+            # Spark cannot infer a type for a column containing only nulls. Build
+            # just enough schema from the pandas dtypes so tests of all-null inputs
+            # reach binscatter itself instead of failing in the test converter.
+            from pandas.api.types import (
+                is_bool_dtype,
+                is_datetime64_any_dtype,
+                is_integer_dtype,
+                is_numeric_dtype,
+            )
+            from pyspark.sql.types import (
+                BooleanType,
+                DoubleType,
+                LongType,
+                StringType,
+                StructField,
+                StructType,
+                TimestampType,
+            )
+
+            fields = []
+            for name, dtype in df.dtypes.items():
+                if is_bool_dtype(dtype):
+                    spark_type = BooleanType()
+                elif is_integer_dtype(dtype):
+                    spark_type = LongType()
+                elif is_numeric_dtype(dtype):
+                    spark_type = DoubleType()
+                elif is_datetime64_any_dtype(dtype):
+                    spark_type = TimestampType()
+                else:
+                    spark_type = StringType()
+                fields.append(StructField(str(name), spark_type, nullable=True))
+            return spark.createDataFrame(cleaned, schema=StructType(fields))
         case _:
             raise ValueError(f"Unknown backend '{backend}'")
 
@@ -111,8 +147,10 @@ def pytest_collection_modifyitems(
     # when someone adds a backend.
     selected, deselected = [], []
     for item in items:
-        backend = getattr(item, "callspec", None)
-        backend = backend.params.get("df_type") if backend else None
+        callspec = getattr(item, "callspec", None)
+        backend = None
+        if callspec:
+            backend = callspec.params.get("df_type", callspec.params.get("backend"))
         keep = "quick" in item.keywords and (
             backend is None or backend in QUICK_BACKENDS
         )

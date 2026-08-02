@@ -239,7 +239,8 @@ def _encoded_design(
     Independently of the library, so it can be used to ask whether a drawn frame
     identifies the coefficients at all before asserting anything about them.
     """
-    edges = np.unique(np.quantile(df["x"], np.linspace(0.0, 1.0, num_bins + 1)))
+    probabilities = [i / num_bins for i in range(num_bins + 1)]
+    edges = np.unique(df["x"].quantile(probabilities).to_numpy(dtype=float))
     width = edges.size - 1
     idx = np.clip(np.searchsorted(edges, df["x"], side="right") - 1, 0, width - 1)
 
@@ -350,15 +351,18 @@ def test_row_order_does_not_affect_result(case, seed):
 @PROPERTY_SETTINGS
 @given(
     frames(with_control=True),
-    st.floats(min_value=-1e3, max_value=1e3),
+    st.one_of(
+        st.floats(min_value=-1e3, max_value=1e3),
+        st.sampled_from([-1e9, -1e6, 1e6, 1e9]),
+    ),
     st.floats(min_value=0.01, max_value=100.0),
 )
 def test_control_is_invariant_to_its_own_affine_rescaling(case, shift, scale):
     """Shifting or scaling a control leaves the partialled-out fit unchanged.
 
-    The control enters only through ``beta + mean(W) @ gamma``; an affine
-    change to ``W`` moves ``beta``, ``gamma`` and ``mean(W)`` so that the
-    fitted values cancel out exactly.
+    Controls are evaluated at their sample means. An affine recoding therefore
+    cannot change the curve, even when the location is large enough to expose
+    cancellation in raw normal-equation moments.
     """
     df, num_bins = case
     expected = _run(df, num_bins, controls=["z"])
@@ -589,15 +593,37 @@ def test_constant_categorical_control_is_a_no_op(case):
 @pytest.mark.quick
 @PROPERTY_SETTINGS
 @given(mixed_frames(), control_subsets())
-def test_any_mix_of_control_dtypes_produces_a_well_formed_result(case, controls):
-    """Whatever the mix, the frame that comes back is still a binscatter."""
+def test_any_mix_of_control_dtypes_matches_centered_dense_ols(case, controls):
+    """Every inferred numeric/dummy mixture agrees with an independent OLS."""
     df, num_bins, _ = case
+    assume_identified(df, num_bins, controls)
     out = _run(df, num_bins, controls=controls)
 
-    assert out.shape[0] == num_bins
-    np.testing.assert_array_equal(np.sort(out["bin"].to_numpy()), np.arange(num_bins))
-    assert np.all(np.diff(out["x"].to_numpy()) > 0)
-    assert np.all(np.isfinite(out["y"].to_numpy()))
+    design = _encoded_design(df, num_bins, controls)
+    control_block = design[:, num_bins:].copy()
+    control_block -= control_block.mean(axis=0)
+    norms = np.linalg.norm(control_block, axis=0)
+    control_block[:, norms > 0.0] /= norms[norms > 0.0]
+    stable_design = np.column_stack([design[:, :num_bins], control_block])
+    y = df["y"].to_numpy(dtype=float)
+    mean_y = y.mean()
+    theta = np.linalg.lstsq(stable_design, y - mean_y, rcond=None)[0]
+    expected_y = theta[:num_bins] + mean_y
+
+    probabilities = [i / num_bins for i in range(num_bins + 1)]
+    edges = df["x"].quantile(probabilities).to_numpy(dtype=float)
+    bin_idx = np.clip(
+        np.searchsorted(edges, df["x"], side="right") - 1, 0, num_bins - 1
+    )
+    expected_x = (
+        df.assign(__bin=bin_idx)
+        .groupby("__bin", observed=True)["x"]
+        .mean()
+        .sort_index()
+        .to_numpy()
+    )
+    np.testing.assert_allclose(out["x"], expected_x, rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(out["y"], expected_y, rtol=1e-6, atol=1e-6)
 
 
 @PROPERTY_SETTINGS

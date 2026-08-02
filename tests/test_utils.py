@@ -171,13 +171,10 @@ def test_partial_out_controls_matches_closed_form(df_type):
     mean_controls = control_matrix.mean(axis=0)
     y_reference = beta + mean_controls @ gamma
 
-    # Use looser tolerance for distributed backends
-    if df_type in ("dask", "pyspark"):
-        rtol, atol = 1e-3, 1e-2
-    else:
-        rtol, atol = 1e-6, 1e-6
-
     np.testing.assert_allclose(
-        x_means, df_pandas.groupby("bin")["x0"].mean().to_numpy(), rtol=rtol, atol=atol
+        x_means,
+        df_pandas.groupby("bin")["x0"].mean().to_numpy(),
+        rtol=1e-10,
+        atol=1e-10,
     )
-    np.testing.assert_allclose(y_estimated, y_reference, rtol=rtol, atol=atol)
+    np.testing.assert_allclose(y_estimated, y_reference, rtol=1e-10, atol=1e-10)
