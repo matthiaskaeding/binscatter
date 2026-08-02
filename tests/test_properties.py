@@ -131,7 +131,146 @@ def categorical_frames(draw):
     return pd.DataFrame({"x": x, "y": y, "g": g}), num_bins, levels
 
 
-def _run(df: pd.DataFrame, num_bins: int, controls=None) -> pd.DataFrame:
+#: Control columns offered by :func:`mixed_frames`, grouped by dtype.
+#:
+#: Three string columns rather than one, because a single categorical only ever
+#: produces one block of dummies. With three, the encoded design carries several
+#: blocks that each drop a reference level against a shared intercept, which is
+#: where a relabelling can start to matter and where two controls can silently
+#: describe the same partition.
+#:
+#: ``rank_i`` is deliberately low-cardinality: it is the integer column that stands
+#: in for an identifier, so it can be handed to ``categorical=`` without generating
+#: a dummy per row.
+INT_CONTROLS = ("count_i", "rank_i")
+FLOAT_CONTROLS = ("age_f", "score_f")
+STRING_CONTROLS = ("firm_s", "year_s", "region_s")
+
+#: Levels for the integer identifier, small enough to keep the encoded design
+#: comfortably full rank at the row counts these strategies draw.
+RANK_LEVELS = 3
+
+
+@st.composite
+def mixed_frames(draw):
+    """Draw a frame whose controls span integers, floats and strings.
+
+    Enough rows per (bin, level) cell that the one-hot design stays full rank:
+    every string control multiplies the number of cells, so three of them need
+    noticeably more data than the single-column strategy above.
+    """
+    num_bins = draw(st.integers(min_value=2, max_value=5))
+    num_levels = draw(st.integers(min_value=2, max_value=3))
+    n = draw(st.integers(min_value=num_bins * 30, max_value=num_bins * 45))
+
+    start = draw(st.floats(min_value=-1e3, max_value=1e3))
+    gaps = draw(
+        st.lists(
+            st.floats(min_value=0.01, max_value=100.0),
+            min_size=n - 1,
+            max_size=n - 1,
+        )
+    )
+    data: dict[str, np.ndarray] = {
+        "x": np.concatenate([[start], start + np.cumsum(gaps)]),
+        "y": np.asarray(draw(st.lists(finite_y, min_size=n, max_size=n)), dtype=float),
+    }
+
+    data["count_i"] = np.asarray(
+        draw(
+            st.lists(
+                st.integers(min_value=-1000, max_value=1000), min_size=n, max_size=n
+            )
+        ),
+        dtype=np.int64,
+    )
+    data["rank_i"] = np.asarray(
+        draw(
+            st.lists(
+                st.integers(min_value=0, max_value=RANK_LEVELS - 1),
+                min_size=n,
+                max_size=n,
+            )
+        ),
+        dtype=np.int64,
+    )
+    for column in FLOAT_CONTROLS:
+        data[column] = np.asarray(
+            draw(st.lists(finite_y, min_size=n, max_size=n)), dtype=float
+        )
+
+    levels = LABELS[:num_levels]
+    for column in STRING_CONTROLS:
+        values = draw(st.lists(st.sampled_from(levels), min_size=n, max_size=n))
+        # Every level must appear, or relabelling stops being a bijection on the
+        # observed data and a dropped reference category is not comparable.
+        assume(len(set(values)) == num_levels)
+        data[column] = np.asarray(values, dtype=object)
+    assume(len(set(data["rank_i"].tolist())) == RANK_LEVELS)
+
+    return pd.DataFrame(data), num_bins, levels
+
+
+def control_subsets(max_strings: int = 3):
+    """Non-empty selections of controls, drawn independently per dtype.
+
+    Drawing per dtype rather than from one flat pool is what makes the *combination*
+    the thing under test: integers alone, three strings alone, and every mixture in
+    between are all reachable, instead of whatever a uniform subset happens to hit.
+    """
+    return (
+        st.tuples(
+            st.lists(st.sampled_from(INT_CONTROLS), unique=True, max_size=2),
+            st.lists(st.sampled_from(FLOAT_CONTROLS), unique=True, max_size=2),
+            st.lists(
+                st.sampled_from(STRING_CONTROLS), unique=True, max_size=max_strings
+            ),
+        )
+        .map(lambda groups: [column for group in groups for column in group])
+        .filter(bool)
+    )
+
+
+def _encoded_design(
+    df: pd.DataFrame, num_bins: int, controls, categorical=()
+) -> np.ndarray:
+    """Rebuild the one-hot design ``binscatter`` fits, bins included.
+
+    Independently of the library, so it can be used to ask whether a drawn frame
+    identifies the coefficients at all before asserting anything about them.
+    """
+    edges = np.unique(np.quantile(df["x"], np.linspace(0.0, 1.0, num_bins + 1)))
+    width = edges.size - 1
+    idx = np.clip(np.searchsorted(edges, df["x"], side="right") - 1, 0, width - 1)
+
+    blocks = [np.eye(width)[idx]]
+    for column in controls:
+        values = df[column]
+        # Not ``dtype == object``: with pyarrow installed pandas backs string columns
+        # with ``string[pyarrow]``, which is neither object nor numeric.
+        if column in categorical or not pd.api.types.is_numeric_dtype(values):
+            codes, levels = pd.factorize(values, sort=True)
+            blocks.append(np.eye(len(levels))[codes][:, 1:])
+        else:
+            blocks.append(values.to_numpy(dtype=float).reshape(-1, 1))
+    return np.column_stack(blocks)
+
+
+def assume_identified(df: pd.DataFrame, num_bins: int, controls, categorical=()):
+    """Reject draws whose design does not pin the coefficients down.
+
+    Drawing three string columns independently means Hypothesis will sometimes give
+    two of them the same partition, and a partition repeated is a singular design:
+    ``beta`` and ``gamma`` stop being unique, so which reference level each block
+    drops genuinely moves the reported value. Every invariance below is a statement
+    about an identified fit, and says nothing about an unidentified one -- so the
+    precondition belongs in the test rather than in a widened tolerance.
+    """
+    design = _encoded_design(df, num_bins, controls, categorical)
+    assume(np.linalg.matrix_rank(design) == design.shape[1])
+
+
+def _run(df: pd.DataFrame, num_bins: int, controls=None, **kwargs) -> pd.DataFrame:
     result = binscatter(
         df,
         "x",
@@ -139,6 +278,7 @@ def _run(df: pd.DataFrame, num_bins: int, controls=None) -> pd.DataFrame:
         num_bins=num_bins,
         controls=controls,
         return_type="native",
+        **kwargs,
     )
     return result.sort_values("bin").reset_index(drop=True)
 
@@ -434,4 +574,117 @@ def test_constant_categorical_control_is_a_no_op(case):
 
     np.testing.assert_allclose(
         actual["y"].to_numpy(), expected["y"].to_numpy(), rtol=1e-7, atol=1e-7
+    )
+
+
+# --------------------------------------------------------------------------
+# Mixed-dtype controls
+# --------------------------------------------------------------------------
+# Controls arrive as integers, floats and strings, and the split between them is
+# decided by dtype rather than by anything the caller says -- so which column ends
+# up a linear term and which a block of dummies is inferred, and every mixture of
+# the three has to work. These draw the combination as well as the data.
+
+
+@PROPERTY_SETTINGS
+@given(mixed_frames(), control_subsets())
+def test_any_mix_of_control_dtypes_produces_a_well_formed_result(case, controls):
+    """Whatever the mix, the frame that comes back is still a binscatter."""
+    df, num_bins, _ = case
+    out = _run(df, num_bins, controls=controls)
+
+    assert out.shape[0] == num_bins
+    np.testing.assert_array_equal(np.sort(out["bin"].to_numpy()), np.arange(num_bins))
+    assert np.all(np.diff(out["x"].to_numpy()) > 0)
+    assert np.all(np.isfinite(out["y"].to_numpy()))
+
+
+@PROPERTY_SETTINGS
+@given(
+    mixed_frames(),
+    control_subsets(),
+    st.integers(min_value=0, max_value=2**32 - 1),
+)
+def test_any_mix_of_control_dtypes_is_invariant_to_row_order(case, controls, seed):
+    """Row order is not information, whichever dtypes the controls happen to be."""
+    df, num_bins, _ = case
+    assume_identified(df, num_bins, controls)
+    shuffled = df.sample(frac=1.0, random_state=seed % (2**31)).reset_index(drop=True)
+
+    expected = _run(df, num_bins, controls=controls)
+    actual = _run(shuffled, num_bins, controls=controls)
+
+    np.testing.assert_allclose(
+        actual["y"].to_numpy(), expected["y"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+
+
+@PROPERTY_SETTINGS
+@given(mixed_frames(), st.integers(min_value=0, max_value=2**32 - 1))
+def test_relabelling_every_string_control_leaves_the_fit_alone(case, seed):
+    """Three string controls at once: still only the partitions matter.
+
+    Relabelling changes which level sorts first in each column, and therefore which
+    dummy each block drops as its reference. With one column that is one arbitrary
+    choice; with three it is three at once, interacting through a shared intercept.
+    """
+    df, num_bins, levels = case
+    assume_identified(df, num_bins, STRING_CONTROLS)
+    rng = np.random.default_rng(seed)
+
+    renamed = df.copy()
+    for column in STRING_CONTROLS:
+        replacements = list(LABELS[-len(levels) :])
+        rng.shuffle(replacements)
+        renamed[column] = df[column].map(dict(zip(levels, replacements)))
+
+    controls = list(STRING_CONTROLS)
+    expected = _run(df, num_bins, controls=controls)
+    actual = _run(renamed, num_bins, controls=controls)
+
+    np.testing.assert_allclose(
+        actual["y"].to_numpy(), expected["y"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+
+
+@PROPERTY_SETTINGS
+@given(mixed_frames(), control_subsets())
+def test_integer_controls_match_their_float_copies(case, controls):
+    """An integer control is a numeric control; storing it as float changes nothing.
+
+    Dtype decides the *route* a column takes -- integers are the columns that could
+    plausibly be identifiers -- so this pins that the route does not leak into the
+    answer for the ones treated as numbers.
+    """
+    df, num_bins, _ = case
+    assume_identified(df, num_bins, controls)
+    widened = df.astype({column: float for column in INT_CONTROLS})
+
+    expected = _run(df, num_bins, controls=controls)
+    actual = _run(widened, num_bins, controls=controls)
+
+    np.testing.assert_allclose(
+        actual["y"].to_numpy(), expected["y"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+
+
+@PROPERTY_SETTINGS
+@given(mixed_frames(), control_subsets(max_strings=2))
+def test_integer_ids_via_categorical_match_string_labels(case, controls):
+    """``categorical=`` on an integer column must mean what string labels mean.
+
+    The same partition reached two ways: an integer identifier named in
+    ``categorical=``, and the identical column written out as strings and detected
+    by dtype. Same partition, so the same dots.
+    """
+    df, num_bins, _ = case
+    labelled = df.assign(rank_i=["L" + str(v) for v in df["rank_i"]])
+    controls = [column for column in controls if column != "rank_i"] + ["rank_i"]
+    assume_identified(df, num_bins, controls, categorical=("rank_i",))
+
+    as_integers = _run(df, num_bins, controls=controls, categorical=["rank_i"])
+    as_strings = _run(labelled, num_bins, controls=controls)
+
+    np.testing.assert_allclose(
+        as_integers["y"].to_numpy(), as_strings["y"].to_numpy(), rtol=1e-6, atol=1e-6
     )
