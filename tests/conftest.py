@@ -58,10 +58,11 @@ def to_pandas_native(df_native):
     raise TypeError(f"Unsupported dataframe type: {type(df_native)}")
 
 
-#: Backends kept under ``--quick``. Both are in-process and cost milliseconds per
-#: call; duckdb, dask and PySpark are what make a full backend sweep expensive, and
-#: a smoke run is not the place to find an engine-specific bug.
-QUICK_BACKENDS = frozenset({"pandas", "polars"})
+#: Backends kept under ``--quick``. These cover eager row-oriented, eager columnar,
+#: and lazy SQL inputs while retaining exact quantiles for comparison with external
+#: references. Dask and PySpark are distributed, use approximate quantiles, and stay
+#: in the full suite.
+QUICK_BACKENDS = frozenset({"pandas", "polars", "duckdb"})
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

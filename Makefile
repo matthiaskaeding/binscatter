@@ -1,13 +1,11 @@
-.PHONY: help lint ty ok qtest ftest test make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
+.PHONY: help lint ty ok test make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
 
 help:
 	@echo "Developer commands:"
 	@echo "  make lint                 # Format python files and fix lint with ruff"
 	@echo "  make ty                   # Type-check src/ with ty"
 	@echo "  make ok                   # Run linting/formatting and type checks"
-	@echo "  make qtest                # Run a representative sample of tests (~12s)"
-	@echo "  make ftest                # Run the test suite, minus PySpark (~95s)"
-	@echo "  make test                 # Run the test suite including PySpark"
+	@echo "  make test                 # Run tests; pass pytest options with ARGS=..."
 	@echo "  make benchmark-fe         # Benchmark fixed-effect absorption vs one-hot"
 	@echo "  make make-nb              # Render examples/demo.ipynb under artifacts/"
 	@echo "  make setup-krnl           # Install the binscatter ipykernel"
@@ -30,14 +28,8 @@ ok:
 	@echo ""
 	@$(MAKE) ty
 
-qtest:
-	uv run pytest tests --quick
-
-ftest:
-	uv run pytest tests
-
 test:
-	uv run pytest --run-pyspark tests
+	uv run pytest tests $(ARGS)
 
 benchmark-fe:
 	uv run scripts/benchmark_fixed_effects.py

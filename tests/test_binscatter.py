@@ -219,6 +219,12 @@ DF_TYPE_PARAMS = [pytest.param(df_type) for df_type in BASE_DF_TYPES]
 if HAS_PYSPARK:
     DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
 
+EXACT_QUANTILE_DF_TYPE_PARAMS = [
+    pytest.param(df_type)
+    for df_type in BASE_DF_TYPES
+    if df_type not in ("dask", "pyspark")
+]
+
 fix_data_types = []
 for df_type in BASE_DF_TYPES:
     for pair in fixt_dat:
@@ -277,7 +283,6 @@ def _get_dpi_bins(
     return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fes)
 
 
-@pytest.mark.quick
 @pytest.mark.parametrize(
     "df_fixture,expect_error,df_type",
     fix_data_types,
@@ -356,7 +361,6 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         )
 
 
-@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_rule_of_thumb_matches_helper(df_good, df_type):
     df = conv(df_good, df_type)
@@ -524,7 +528,6 @@ def test_dpi_handles_gapminder():
     assert dpi_bins >= rot_bins - 2
 
 
-@pytest.mark.quick
 def test_dpi_matches_helper(df_good):
     """DPI num_bins='dpi' matches direct helper call."""
     expected_bins = _get_dpi_bins(df_good, "x0", "y0")
@@ -657,15 +660,28 @@ def test_dpi_small_sample():
 # --------------------------------------------------------------------------
 
 
-def test_binscatter_matches_binsreg_sim_no_controls():
+@pytest.mark.quick
+@pytest.mark.parametrize("df_type", EXACT_QUANTILE_DF_TYPE_PARAMS)
+@pytest.mark.parametrize(
+    "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
+)
+def test_binscatter_matches_binsreg_sim(df_type, controls):
     df = _load_binsreg_sim_data()
     num_bins = 20
+    w = df[controls].to_numpy() if controls else None
 
-    reference = binsreg_fit(df["y"], df["x"], nbins=num_bins, noplot=True)
+    reference = binsreg_fit(df["y"], df["x"], w=w, nbins=num_bins, noplot=True)
     ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
 
-    result = binscatter(df, "x", "y", num_bins=num_bins, return_type="native")
-    result = result.sort_values("x").reset_index(drop=True)
+    result = binscatter(
+        conv(df, df_type),
+        "x",
+        "y",
+        controls=controls,
+        num_bins=num_bins,
+        return_type="native",
+    )
+    result = to_pandas_native(result).sort_values("x").reset_index(drop=True)
 
     np.testing.assert_allclose(
         result["x"].to_numpy(), ref_dots["x"].to_numpy(), rtol=1e-6, atol=1e-6
@@ -678,6 +694,7 @@ def test_binscatter_matches_binsreg_sim_no_controls():
 @pytest.mark.parametrize(
     "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
 )
+@pytest.mark.quick
 def test_rule_of_thumb_matches_binsreg_sim(controls):
     """ROT bin count agrees with binsreg on the reference simulation data."""
     df = _load_binsreg_sim_data()
@@ -692,6 +709,7 @@ def test_rule_of_thumb_matches_binsreg_sim(controls):
 @pytest.mark.parametrize(
     "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
 )
+@pytest.mark.quick
 def test_dpi_matches_binsreg_sim(controls):
     """DPI bin count agrees with binsreg on the reference simulation data."""
     df = _load_binsreg_sim_data()
@@ -701,28 +719,6 @@ def test_dpi_matches_binsreg_sim(controls):
     theirs = int(binsregselect(df["y"], df["x"], w=w).nbinsdpi)
 
     assert abs(ours - theirs) <= 2
-
-
-def test_binscatter_matches_binsreg_sim_with_controls():
-    df = _load_binsreg_sim_data()
-    num_bins = 20
-
-    reference = binsreg_fit(
-        df["y"], df["x"], w=df[["w"]].to_numpy(), nbins=num_bins, noplot=True
-    )
-    ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
-
-    result = binscatter(
-        df, "x", "y", controls=["w"], num_bins=num_bins, return_type="native"
-    )
-    result = result.sort_values("x").reset_index(drop=True)
-
-    np.testing.assert_allclose(
-        result["x"].to_numpy(), ref_dots["x"].to_numpy(), rtol=1e-6, atol=1e-6
-    )
-    np.testing.assert_allclose(
-        result["y"].to_numpy(), ref_dots["fit"].to_numpy(), rtol=1e-6, atol=1e-6
-    )
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)

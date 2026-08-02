@@ -59,6 +59,6 @@ See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/b
 
 ## Tests
 
-- Run the full backend matrix, including PySpark: `make test`
-- Run the suite without PySpark: `make ftest`
-- Run a representative sample while iterating: `make qtest`
+- Run the suite without PySpark: `make test`
+- Run the full backend matrix: `make test ARGS=--run-pyspark`
+- Run a representative sample while iterating: `make test ARGS=--quick`
