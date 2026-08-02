@@ -656,13 +656,20 @@ def test_dpi_small_sample():
 
 @pytest.mark.quick
 def test_binscatter_matches_binsreg_sim_no_controls():
+    """Dots and ``ci="rbc"`` bounds both agree with binsreg at the same configuration.
+
+    See https://github.com/matthiaskaeding/binscatter/issues/98: the point-estimate
+    check used to run without ``ci=``, so a CI regression scoped to this exact
+    ``num_bins`` / controls combination had no test that would catch it.
+    """
     df = _load_binsreg_sim_data()
     num_bins = 20
 
-    reference = binsreg_fit(df["y"], df["x"], nbins=num_bins, noplot=True)
+    reference = binsreg_fit(df["y"], df["x"], nbins=num_bins, ci=(1, 1), noplot=True)
     ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
+    ref_ci = reference.data_plot[0].ci.sort_values("x").reset_index(drop=True)
 
-    result = binscatter(df, "x", "y", num_bins=num_bins, return_type="native")
+    result = binscatter(df, "x", "y", num_bins=num_bins, ci="rbc", return_type="native")
     result = result.sort_values("x").reset_index(drop=True)
 
     np.testing.assert_allclose(
@@ -670,6 +677,12 @@ def test_binscatter_matches_binsreg_sim_no_controls():
     )
     np.testing.assert_allclose(
         result["y"].to_numpy(), ref_dots["fit"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result["ci_lower"].to_numpy(), ref_ci["ci_l"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result["ci_upper"].to_numpy(), ref_ci["ci_r"].to_numpy(), rtol=1e-6, atol=1e-6
     )
 
 
@@ -705,16 +718,34 @@ def test_dpi_matches_binsreg_sim(controls):
 
 @pytest.mark.quick
 def test_binscatter_matches_binsreg_sim_with_controls():
+    """Dots and ``ci="rbc"`` bounds both agree with binsreg at the same configuration.
+
+    See https://github.com/matthiaskaeding/binscatter/issues/98: the point-estimate
+    check used to run without ``ci=``, so a CI regression scoped to this exact
+    ``num_bins`` / controls combination had no test that would catch it.
+    """
     df = _load_binsreg_sim_data()
     num_bins = 20
 
     reference = binsreg_fit(
-        df["y"], df["x"], w=df[["w"]].to_numpy(), nbins=num_bins, noplot=True
+        df["y"],
+        df["x"],
+        w=df[["w"]].to_numpy(),
+        nbins=num_bins,
+        ci=(1, 1),
+        noplot=True,
     )
     ref_dots = reference.data_plot[0].dots.sort_values("x").reset_index(drop=True)
+    ref_ci = reference.data_plot[0].ci.sort_values("x").reset_index(drop=True)
 
     result = binscatter(
-        df, "x", "y", controls=["w"], num_bins=num_bins, return_type="native"
+        df,
+        "x",
+        "y",
+        controls=["w"],
+        num_bins=num_bins,
+        ci="rbc",
+        return_type="native",
     )
     result = result.sort_values("x").reset_index(drop=True)
 
@@ -723,6 +754,12 @@ def test_binscatter_matches_binsreg_sim_with_controls():
     )
     np.testing.assert_allclose(
         result["y"].to_numpy(), ref_dots["fit"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result["ci_lower"].to_numpy(), ref_ci["ci_l"].to_numpy(), rtol=1e-6, atol=1e-6
+    )
+    np.testing.assert_allclose(
+        result["ci_upper"].to_numpy(), ref_ci["ci_r"].to_numpy(), rtol=1e-6, atol=1e-6
     )
 
 
