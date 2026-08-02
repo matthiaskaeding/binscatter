@@ -113,6 +113,7 @@ QUICK_BACKENDS = frozenset({"pandas", "polars", "duckdb"})
 #: brackets covers exactly one. Both were confirmed to fail deterministically.
 KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
     "#95 group 1: normal equations are built from raw uncentered moments": (
+        "tests/test_properties.py::test_control_is_invariant_to_its_own_affine_rescaling",
         "tests/test_binscatter.py::test_automatic_selectors_are_location_invariant",
         "tests/test_binscatter.py::test_control_translation_is_invariant_across_fe_routes",
         "tests/test_binscatter.py::test_dpi_selector_caps_bins_for_the_sample_size",
@@ -153,9 +154,7 @@ KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
         "tests/test_sparse_fe.py::test_fixed_effect_dgp_is_invariant_to_numeric_control_units",
     ),
     "#95 group 2: the design is accepted where a refusal is specified": (
-        "tests/test_binscatter.py::test_binscatter_rejects_non_integer_explicit_bin_counts",
         "tests/test_binscatter.py::test_control_collinear_with_bins_is_rejected_at_any_scale",
-        "tests/test_binscatter.py::test_reserved_output_bin_name_has_a_clear_input_error",
         "tests/test_fixed_effects.py::test_disconnected_bin_group_structure_is_rejected",
         "tests/test_fixed_effects.py::test_one_way_rejects_numeric_control_collinear_with_bins",
         "tests/test_sparse_fe.py::test_multiway_rejects_connected_but_unidentified_design",

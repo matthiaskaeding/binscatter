@@ -49,6 +49,16 @@ PySpark tests are skipped by default. Use `--run-pyspark` flag to include them.
 DuckDB but skips the distributed Dask and PySpark parametrizations. Plain
 `make test` is the gate.
 
+`tests/test_fe_contract.py` is the portable half of the fixed-effect tests: what any
+implementation must satisfy, judged only through `binscatter()` against a dense OLS
+oracle built with numpy. It imports nothing private, patches nothing, and asserts
+nothing about which route was taken -- so it stays valid when the fixed-effect
+machinery is replaced. `test_fixed_effects.py` and `test_sparse_fe.py` are the other
+kind: they force the absorbed and one-hot routes and compare them, which catches
+regressions in the current design and would have to be rewritten alongside a new one.
+Put a new fixed-effect guarantee in the contract file unless it is genuinely about
+how this implementation works.
+
 Some tests specify behaviour binscatter does not have yet. They are listed in
 `KNOWN_FAILURES` in `tests/conftest.py` and marked `xfail(strict=True)`, so the
 suite stays green while the gap stays visible. That list is a work queue, not a
