@@ -147,6 +147,7 @@ SPECIFICATIONS = [
 ]
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(("levels", "numeric", "num_bins", "options"), SPECIFICATIONS)
 def test_dots_match_binsreg(levels, numeric, num_bins, options):
     """The dots must be binsreg's, whatever route was taken to reach them."""
@@ -301,6 +302,7 @@ def test_nulls_in_a_factor_drop_their_rows():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 def test_high_cardinality_is_not_quadratic():
     """Cost is the whole point, so it is part of the contract.
 

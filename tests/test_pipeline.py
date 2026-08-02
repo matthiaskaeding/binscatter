@@ -55,6 +55,7 @@ def test_maybe_add_regression_features_creates_dummies(df_type):
     assert features == tuple(dummy_cols)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_high_cardinality_categorical_is_absorbed(df_type, monkeypatch):
     """At or above the threshold the categorical is absorbed instead of encoded."""
