@@ -1,10 +1,11 @@
-.PHONY: help lint ty ok ftest test make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
+.PHONY: help lint ty ok qtest ftest test make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
 
 help:
 	@echo "Developer commands:"
 	@echo "  make lint                 # Format python files and fix lint with ruff"
 	@echo "  make ty                   # Type-check src/ with ty"
 	@echo "  make ok                   # Run linting/formatting and type checks"
+	@echo "  make qtest                # Run a representative sample of tests (~10x faster)"
 	@echo "  make ftest                # Run fast pytest suite (no PySpark)"
 	@echo "  make test                 # Run full pytest suite with --run-pyspark"
 	@echo "  make benchmark-fe         # Benchmark fixed-effect absorption vs one-hot"
@@ -28,6 +29,9 @@ ok:
 	@$(MAKE) lint
 	@echo ""
 	@$(MAKE) ty
+
+qtest:
+	uv run pytest tests --quick
 
 ftest:
 	uv run pytest tests

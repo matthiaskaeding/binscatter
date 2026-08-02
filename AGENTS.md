@@ -27,6 +27,9 @@ make ok
 ## Testing
 
 ```bash
+# Representative sample across every module -- a fast confidence check
+make qtest
+
 # Fast tests (excludes PySpark)
 make ftest
 
@@ -41,6 +44,19 @@ uv run pytest tests -k "polars"
 ```
 
 PySpark tests are skipped by default. Use `--run-pyspark` flag to include them.
+
+`make qtest` (`pytest tests --quick`) runs only tests marked `@pytest.mark.quick`,
+and only on pandas and polars. It is the check to run while iterating: roughly
+13s against 95s for the full suite, covering every test module. It is *not* a
+substitute for `make ftest` before pushing -- it deliberately skips the duckdb,
+dask and PySpark parametrizations, which is where backend-specific bugs live.
+
+The `quick` marker means "representative of this module", not "important". Add one
+when a new test file appears, or when a new area of behaviour is not reachable from
+any currently marked test; do not mark a test simply because it is a good test.
+Mark the test function rather than individual `pytest.param` entries -- `--quick`
+cuts the backend axis itself, so a marked test keeps working when a backend is
+added. `--quick` fails loudly if it selects nothing.
 
 ## Architecture
 

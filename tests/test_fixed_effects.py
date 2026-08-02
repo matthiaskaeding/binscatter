@@ -107,6 +107,7 @@ def force_absorption(monkeypatch):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 @pytest.mark.parametrize(
     "controls",
@@ -140,6 +141,7 @@ def test_x_means_unchanged_by_absorption(df_type, monkeypatch, force_absorption)
     np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-12)
 
 
+@pytest.mark.quick
 def test_absorbed_matches_statsmodels_oracle(force_absorption):
     """Independent check against explicit bin + fixed-effect dummies."""
     sm = pytest.importorskip("statsmodels.api")
@@ -412,6 +414,7 @@ def test_poly_line_with_absorbed_fixed_effect(monkeypatch, force_absorption):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_nulls_in_fixed_effect_column_are_dropped(df_type, force_absorption):
     df = make_panel(n=900, n_groups=8, seed=41)

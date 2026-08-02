@@ -58,11 +58,25 @@ def to_pandas_native(df_native):
     raise TypeError(f"Unsupported dataframe type: {type(df_native)}")
 
 
+#: Backends kept under ``--quick``. Both are in-process and cost milliseconds per
+#: call; duckdb, dask and PySpark are what make a full backend sweep expensive, and
+#: a smoke run is not the place to find an engine-specific bug.
+QUICK_BACKENDS = frozenset({"pandas", "polars"})
+
+
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--run-pyspark",
         action="store_true",
         help="Run tests that require PySpark (skipped by default)",
+    )
+    parser.addoption(
+        "--quick",
+        action="store_true",
+        help=(
+            "Run only tests marked 'quick', and only on the in-process backends: a "
+            "representative sample across every module, for a fast confidence check"
+        ),
     )
 
 
@@ -70,18 +84,47 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "pyspark: mark test as requiring PySpark and --run-pyspark"
     )
+    config.addinivalue_line(
+        "markers",
+        "quick: representative of its module; included in a --quick smoke run",
+    )
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    if config.getoption("--run-pyspark"):
+    if not config.getoption("--run-pyspark"):
+        skip_marker = pytest.mark.skip(
+            reason="use --run-pyspark to include PySpark tests"
+        )
+        for item in items:
+            if "pyspark" in item.keywords:
+                item.add_marker(skip_marker)
+
+    if not config.getoption("--quick"):
         return
 
-    skip_marker = pytest.mark.skip(reason="use --run-pyspark to include PySpark tests")
+    # ``--quick`` trims two axes at once: which tests run, and which backends they
+    # run on. Marking whole functions and letting the backend axis be cut here keeps
+    # the marks off individual ``pytest.param`` entries, so a test stays selected
+    # when someone adds a backend.
+    selected, deselected = [], []
     for item in items:
-        if "pyspark" in item.keywords:
-            item.add_marker(skip_marker)
+        backend = getattr(item, "callspec", None)
+        backend = backend.params.get("df_type") if backend else None
+        keep = "quick" in item.keywords and (
+            backend is None or backend in QUICK_BACKENDS
+        )
+        (selected if keep else deselected).append(item)
+
+    if not selected:
+        raise pytest.UsageError(
+            "--quick selected no tests. Every module should carry at least one "
+            "@pytest.mark.quick; see the testing section of AGENTS.md."
+        )
+
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
 
 
 @pytest.fixture(scope="session")

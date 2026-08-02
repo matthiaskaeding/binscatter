@@ -191,6 +191,7 @@ def assert_matches_one_hot(df, monkeypatch, rtol=1e-9, atol=1e-9, **kwargs):
 # this section runs on pandas, because nothing else in the module can see a backend.
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_matches_one_hot_on_every_backend(df_type, monkeypatch, force_multiway):
     """Absorbing both factors must reproduce encoding both, on each engine.
@@ -254,6 +255,7 @@ def test_row_order_does_not_change_result(df_type, force_multiway):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", EXACT_QUANTILE_BACKENDS)
 @pytest.mark.parametrize("factors", [2, 3], ids=["two_way", "three_way"])
 def test_matches_dense_ols(df_type, factors, force_multiway):
@@ -287,6 +289,7 @@ def test_matches_dense_ols(df_type, factors, force_multiway):
 # the one-hot route, so every one is the same assertion.
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -324,6 +327,7 @@ def test_call_variants_match_one_hot(kwargs, monkeypatch, force_multiway):
     assert_matches_one_hot(make_call_panel(), monkeypatch, rtol=tol, atol=tol, **kwargs)
 
 
+@pytest.mark.quick
 def test_poly_line_with_absorbed_factors(monkeypatch, force_multiway):
     """The overlay is fitted with no bin dummies at all, which is its own solve.
 

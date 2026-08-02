@@ -277,6 +277,7 @@ def _get_dpi_bins(
     return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fes)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "df_fixture,expect_error,df_type",
     fix_data_types,
@@ -355,6 +356,7 @@ def test_binscatter(df_fixture, expect_error, df_type, request):
         )
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_rule_of_thumb_matches_helper(df_good, df_type):
     df = conv(df_good, df_type)
@@ -522,6 +524,7 @@ def test_dpi_handles_gapminder():
     assert dpi_bins >= rot_bins - 2
 
 
+@pytest.mark.quick
 def test_dpi_matches_helper(df_good):
     """DPI num_bins='dpi' matches direct helper call."""
     expected_bins = _get_dpi_bins(df_good, "x0", "y0")
@@ -789,6 +792,7 @@ def _collect_lazyframe_to_pandas(frame):
     return to_pandas_native(frame.collect().to_native())
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_binscatter_controls_matches_reference(df_type):
     rng = np.random.default_rng(123)
@@ -888,6 +892,7 @@ def test_binscatter_controls_across_backends(df_type):
     )
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_binscatter_categorical_controls_only(df_type):
     rng = np.random.default_rng(321)
@@ -944,6 +949,7 @@ def test_binscatter_controls_collapsed_bins_error(df_type):
         )
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_partial_out_controls_matches_statsmodels(df_type):
     rng = np.random.default_rng(2025)
@@ -1163,6 +1169,7 @@ def test_fit_polynomial_line_matches_statsmodels(df_type):
     np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=rtol)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_poly_line_does_not_change_bins(df_type):
     df = pd.DataFrame(

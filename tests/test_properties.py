@@ -586,6 +586,7 @@ def test_constant_categorical_control_is_a_no_op(case):
 # the three has to work. These draw the combination as well as the data.
 
 
+@pytest.mark.quick
 @PROPERTY_SETTINGS
 @given(mixed_frames(), control_subsets())
 def test_any_mix_of_control_dtypes_produces_a_well_formed_result(case, controls):
