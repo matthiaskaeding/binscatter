@@ -42,5 +42,6 @@ See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/b
 
 ## Tests
 
-- Run the full backend matrix, including PySpark: `make test`
-- Use the faster run without PySpark: `make ftest`
+- Check a representative sample while working: `make test-fast` (~18s)
+- Run the whole suite without PySpark: `make test`
+- Run the full backend matrix, including PySpark: `make test-spark`

@@ -34,6 +34,26 @@ logger = logging.getLogger(__name__)
 _FE_COUNT = "__fe_count"
 
 
+def free_aliases(df: nw.LazyFrame, stems: Sequence[str]) -> dict[str, str]:
+    """Map each stem to a column name the frame does not already carry.
+
+    ``__fe_count`` and friends are valid column names, so a caller may legitimately
+    have one. Aggregating into a name the frame already holds fails at collect time
+    with a message about a duplicate insert, which says nothing about the cause -- so
+    the aggregation temporaries step aside instead of assuming the namespace is
+    theirs, the same way ``binscatter`` already suffixes its bin column.
+    """
+    taken = set(df.collect_schema().names())
+    aliases: dict[str, str] = {}
+    for stem in stems:
+        name = stem
+        while name in taken:
+            name = f"{name}_"
+        taken.add(name)
+        aliases[stem] = name
+    return aliases
+
+
 @dataclass
 class FEMoments:
     """Group-level sufficient statistics for the absorbed categorical.
@@ -174,7 +194,11 @@ def compute_fe_moments(
     rather than by position.
     """
     response_names = list(response_exprs)
-    aliases = {name: f"__fe_resp_{i}" for i, name in enumerate(response_names)}
+    free = free_aliases(
+        df, [_FE_COUNT, *(f"__fe_resp_{i}" for i in range(len(response_names)))]
+    )
+    count_alias = free[_FE_COUNT]
+    aliases = {name: free[f"__fe_resp_{i}"] for i, name in enumerate(response_names)}
 
     # Materialize derived responses before grouping. Dask rejects non-elementary
     # aggregations such as (col * col).sum() inside group_by, so the expression has
@@ -183,7 +207,7 @@ def compute_fe_moments(
         *(response_exprs[name].alias(aliases[name]) for name in response_names)
     )
 
-    group_aggs = [nw.len().alias(_FE_COUNT)]
+    group_aggs = [nw.len().alias(count_alias)]
     group_aggs += [
         nw.col(aliases[name]).sum().alias(aliases[name]) for name in response_names
     ]
@@ -197,7 +221,7 @@ def compute_fe_moments(
         raise ValueError(f"No groups found for fixed effect column '{fe_name}'.")
     group_index = {label: i for i, label in enumerate(labels)}
 
-    counts = np.asarray(grouped.get_column(_FE_COUNT).to_list(), dtype=float)
+    counts = np.asarray(grouped.get_column(count_alias).to_list(), dtype=float)
     response_sums = {
         name: np.asarray(grouped.get_column(aliases[name]).to_list(), dtype=float)
         for name in response_names
@@ -220,13 +244,13 @@ def compute_fe_moments(
     else:
         bin_index = {label: i for i, label in enumerate(bin_labels)}
         crosstab = (
-            df.group_by(bin_name, fe_name).agg(nw.len().alias(_FE_COUNT)).collect()
+            df.group_by(bin_name, fe_name).agg(nw.len().alias(count_alias)).collect()
         )
         bin_counts = np.zeros((num_groups, len(bin_labels)), dtype=float)
         for label, bin_label, count in zip(
             crosstab.get_column(fe_name).to_list(),
             crosstab.get_column(bin_name).to_list(),
-            crosstab.get_column(_FE_COUNT).to_list(),
+            crosstab.get_column(count_alias).to_list(),
         ):
             bin_counts[group_index[label], bin_index[bin_label]] = float(count)
 

@@ -654,6 +654,7 @@ def test_dpi_small_sample():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 def test_binscatter_matches_binsreg_sim_no_controls():
     df = _load_binsreg_sim_data()
     num_bins = 20
@@ -672,6 +673,7 @@ def test_binscatter_matches_binsreg_sim_no_controls():
     )
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
 )
@@ -686,6 +688,7 @@ def test_rule_of_thumb_matches_binsreg_sim(controls):
     assert abs(ours - theirs) <= 1
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "controls", [None, ["w"]], ids=["no_controls", "with_controls"]
 )
@@ -700,6 +703,7 @@ def test_dpi_matches_binsreg_sim(controls):
     assert abs(ours - theirs) <= 2
 
 
+@pytest.mark.quick
 def test_binscatter_matches_binsreg_sim_with_controls():
     df = _load_binsreg_sim_data()
     num_bins = 20
@@ -727,6 +731,47 @@ def test_binscatter_rejects_unknown_num_bins_string(df_good, df_type):
     df = conv(df_good, df_type)
     with pytest.raises(ValueError):
         binscatter(df, "x0", "y0", num_bins="unknown-option")
+
+
+@pytest.mark.quick
+@pytest.mark.parametrize("num_bins", [2.1, 2.9, 3.0])
+def test_binscatter_rejects_non_integer_explicit_bin_counts(df_good, num_bins):
+    """Explicit bin counts are integers, not floats that happen to truncate."""
+    with pytest.raises((TypeError, ValueError), match="integer"):
+        binscatter(df_good, "x0", "y0", num_bins=num_bins)
+
+
+@pytest.mark.quick
+@pytest.mark.parametrize("role", ["x", "y"])
+def test_reserved_output_bin_name_has_a_clear_input_error(role):
+    """An x/y name that collides with the public bin column fails deliberately."""
+    rng = np.random.default_rng(17)
+    frame = pd.DataFrame({"x": rng.normal(size=200), "y": rng.normal(size=200)}).rename(
+        columns={role: "bin"}
+    )
+    x_name = "bin" if role == "x" else "x"
+    y_name = "bin" if role == "y" else "y"
+    with pytest.raises(ValueError, match="bin.*reserved|reserved.*bin"):
+        binscatter(frame, x_name, y_name, return_type="native")
+
+
+@pytest.mark.quick
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_unusable_x_column_names_the_distribution_not_the_coercion(df_type):
+    """An all-null x reaches the caller as the error about x, not ``float(None)``.
+
+    Every backend returns ``None`` for each requested quantile here. Coercing those
+    raised ``float() argument must be ... not 'NoneType'``, which names neither the
+    column nor the cause; they are dropped instead, so the caller sees too few edges.
+    """
+    frame = pd.DataFrame(
+        {
+            "x0": [np.nan, np.inf, -np.inf, None],
+            "y0": [1.0, 2.0, 3.0, 4.0],
+        }
+    )
+    with pytest.raises(ValueError, match="distribution of the x column"):
+        binscatter(conv(frame, df_type), "x0", "y0", num_bins=4)
 
 
 def _manual_binscatter_with_controls(
@@ -789,6 +834,7 @@ def _collect_lazyframe_to_pandas(frame):
     return to_pandas_native(frame.collect().to_native())
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_binscatter_controls_matches_reference(df_type):
     rng = np.random.default_rng(123)
@@ -944,6 +990,7 @@ def test_binscatter_controls_collapsed_bins_error(df_type):
         )
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_partial_out_controls_matches_statsmodels(df_type):
     rng = np.random.default_rng(2025)
@@ -1288,6 +1335,7 @@ def test_configure_compute_quantiles_single_bin_raises(df_type):
         configure_compute_quantiles(1, df_nw.implementation)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_non_unique_quantiles_produce_unique_bins_binary(df_type):
     """Binary data should produce 2 unique bins even when quantiles collapse."""
@@ -1779,6 +1827,7 @@ def test_maybe_add_regression_features_with_categorical():
         assert feat in result.columns
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("backend", ["pandas", "polars"])
 def test_dummy_names_consistent_across_backends(backend):
     """Test that dummy variable names are consistent across backends."""

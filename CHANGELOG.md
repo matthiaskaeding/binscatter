@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+- Three consistently named test targets replace the ambiguous `ftest`/`test` pair, whose names implied the opposite of what they did — `make test` was the *slower* one, since it added `--run-pyspark`. Now `make test-fast` runs a representative sample (tests marked `@pytest.mark.quick`, exact backends only, ~18s), `make test` runs the whole suite with PySpark skipped and is the gate, and `make test-spark` runs the full backend matrix. `--strict-markers` means a misspelled or stale marker fails loudly rather than silently selecting nothing. CI invokes `pytest` directly and is unaffected. The contributor guides now direct you to check with `make test-fast` while iterating and `make test` before committing.
+- `tests/test_fe_contract.py`, checking agreement with `binsreg` — the paper authors' own package — across a wide sweep of fixed-effect specifications: one, two and three factors at cardinalities from 5 to 200 levels, with none, one and two numeric controls, from 2 to 20 bins, plus skewed and singleton-heavy level distributions, nested factors, integer identifiers via `categorical=`, and every backend. Fixed effects reach `binsreg` as dummy columns in `w`, which is what makes it a fair judge of an implementation that absorbs them instead; agreement is ~1e-15. The file imports only `binscatter()`, patches nothing and asserts nothing about which route ran, so it stays valid across implementations — verified by running it against three (as shipped, absorption disabled, absorption forced everywhere), where only the cost test tells them apart. `test_fixed_effects.py` remains the regression test for the current design, which it tests by forcing its two routes and comparing them.
+
+### Fixed
+- A control column named after an internal aggregation temporary (`__fe_count`, `__fe_resp_0`) crashed with `cannot insert __fe_count, already exists`, which named neither the column nor the cause. The fixed-effect collector now steps aside from names the frame already carries, the way `binscatter` already suffixes its bin column (#95).
+- A column with no usable values — empty, or every entry null or non-finite — reached the quantile coercion as `float(None)` and raised `TypeError: float() argument must be a string or a real number, not 'NoneType'`. Unusable quantiles are now dropped, so the caller sees too few bin edges and gets the existing error about the distribution of `x` (#95). All five backend quantile paths share one coercion, where three previously rolled their own.
+- An x or y column named `bin` is rejected up front instead of being silently overwritten by the bin index in the returned frame, and a non-integer `num_bins` is rejected rather than truncated (#95).
+
 ## 0.4.0 - 2026-08-02
 
 ### Added

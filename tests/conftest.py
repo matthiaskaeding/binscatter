@@ -70,6 +70,10 @@ def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line(
         "markers", "pyspark: mark test as requiring PySpark and --run-pyspark"
     )
+    config.addinivalue_line(
+        "markers",
+        "quick: part of the representative sample run by `make test-fast`",
+    )
 
 
 def pytest_collection_modifyitems(

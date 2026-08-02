@@ -67,6 +67,7 @@ def _sorted_native(result) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "controls", [None, ["w"], ["w", "t"]], ids=["none", "one", "two"]
 )
@@ -137,6 +138,7 @@ def test_rbc_interval_need_not_contain_the_dot():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "controls",
     [None, ["z"], ["z", "g"]],
@@ -216,6 +218,7 @@ def test_pointwise_interval_is_centred_on_the_dot():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("kind", ["pointwise", "rbc"])
 @pytest.mark.parametrize("backend", BACKEND_PARAMS)
 def test_intervals_are_well_formed_on_every_backend(backend, kind):

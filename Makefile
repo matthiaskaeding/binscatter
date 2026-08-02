@@ -1,12 +1,13 @@
-.PHONY: help lint ty ok ftest test make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
+.PHONY: help lint ty ok test-fast test test-spark make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
 
 help:
 	@echo "Developer commands:"
 	@echo "  make lint                 # Format python files and fix lint with ruff"
 	@echo "  make ty                   # Type-check src/ with ty"
 	@echo "  make ok                   # Run linting/formatting and type checks"
-	@echo "  make ftest                # Run fast pytest suite (no PySpark)"
-	@echo "  make test                 # Run full pytest suite with --run-pyspark"
+	@echo "  make test-fast            # Representative sample; check with this first"
+	@echo "  make test                 # Whole suite, PySpark skipped (the gate)"
+	@echo "  make test-spark           # Whole suite including PySpark"
 	@echo "  make benchmark-fe         # Benchmark fixed-effect absorption vs one-hot"
 	@echo "  make make-nb              # Render examples/demo.ipynb under artifacts/"
 	@echo "  make setup-krnl           # Install the binscatter ipykernel"
@@ -29,10 +30,16 @@ ok:
 	@echo ""
 	@$(MAKE) ty
 
-ftest:
-	uv run pytest tests
+# A representative sample: tests marked `quick`, on the exact backends only.
+# `--strict-markers` plus a non-empty selection means a stale marker set fails
+# loudly rather than reporting a vacuous pass.
+test-fast:
+	uv run pytest tests -m quick -k "not dask" --strict-markers
 
 test:
+	uv run pytest tests
+
+test-spark:
 	uv run pytest --run-pyspark tests
 
 benchmark-fe:
