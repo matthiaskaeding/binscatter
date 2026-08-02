@@ -28,13 +28,13 @@ make ok
 
 ```bash
 # A representative sample across every module
-make test ARGS=--quick
+make test-quick
 
 # The suite, minus PySpark -- run this before pushing
 make test
 
 # The suite including PySpark
-make test ARGS=--run-pyspark
+make test-pyspark
 
 # Run a single test
 uv run pytest tests/test_binscatter.py::test_name -v
@@ -45,10 +45,9 @@ uv run pytest tests -k "polars"
 
 PySpark tests are skipped by default. Use `--run-pyspark` flag to include them.
 
-`make test ARGS=--quick` is for iterating, not for pushing: it keeps pandas,
-Polars and DuckDB but skips the distributed Dask and PySpark parametrizations.
-Plain `make test` is the gate. Any additional pytest options can be passed in
-`ARGS`, for example `make test ARGS="-k polars"`.
+`make test-quick` is for iterating, not for pushing: it keeps pandas, Polars and
+DuckDB but skips the distributed Dask and PySpark parametrizations. Plain
+`make test` is the gate.
 
 The `quick` marker means "representative of this module", not "important". Add one
 when a new test file appears, or when an area of behaviour is unreachable from any
