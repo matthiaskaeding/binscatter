@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -90,7 +91,7 @@ def _quantiles_from_polars(
     x_col = pl.col(x_name)
     exprs = [x_col.quantile(p, interpolation="linear").alias(f"q{p}") for p in probs]
     qs = df_native.select(exprs).collect()
-    return tuple(float(qs.item(0, i)) for i in range(qs.width))
+    return _to_float_tuple([qs.item(0, i) for i in range(qs.width)])
 
 
 def _quantiles_from_pyspark(
@@ -105,7 +106,7 @@ def _quantiles_from_pyspark(
         )
     except Exception as err:  # pragma: no cover - optional dependency
         raise RuntimeError("PySpark quantile computation failed") from err
-    return tuple(float(v) for v in splits)
+    return _to_float_tuple(splits)
 
 
 def _quantiles_fallback(
@@ -124,7 +125,7 @@ def _quantiles_fallback(
         raise
     qs_nw = qs if hasattr(qs, "to_native") else nw.from_native(qs)
     num_cols = qs_nw.shape[1]
-    return tuple(float(qs_nw.item(0, i)) for i in range(num_cols))
+    return _to_float_tuple([qs_nw.item(0, i) for i in range(num_cols)])
 
 
 def _assign_bins_pandas(
@@ -304,6 +305,15 @@ def _assign_bins_fallback(
 
 
 def _to_float_tuple(values: Any) -> tuple[float, ...]:
+    """Coerce a backend's quantile result to floats, dropping the ones that are not.
+
+    A column with no usable values -- empty, or every entry null or non-finite --
+    makes a backend return ``None`` for each requested probability. Those are not
+    bin edges, so they are dropped rather than coerced: the caller then sees too few
+    edges and raises about the distribution of ``x``, which is the real problem.
+    Coercing instead produced ``float() argument must be ... not 'NoneType'``, which
+    names neither the column nor the cause.
+    """
     if values is None:
         return ()
     if isinstance(values, (list, tuple)):
@@ -313,4 +323,15 @@ def _to_float_tuple(values: Any) -> tuple[float, ...]:
             seq = list(values)
         except TypeError:
             seq = [values]
-    return tuple(float(v) for v in seq)
+
+    out: list[float] = []
+    for value in seq:
+        if value is None:
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            out.append(number)
+    return tuple(out)

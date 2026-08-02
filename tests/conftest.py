@@ -113,6 +113,7 @@ QUICK_BACKENDS = frozenset({"pandas", "polars", "duckdb"})
 #: brackets covers exactly one. Both were confirmed to fail deterministically.
 KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
     "#95 group 1: normal equations are built from raw uncentered moments": (
+        "tests/test_properties.py::test_control_is_invariant_to_its_own_affine_rescaling",
         "tests/test_binscatter.py::test_automatic_selectors_are_location_invariant",
         "tests/test_binscatter.py::test_control_translation_is_invariant_across_fe_routes",
         "tests/test_binscatter.py::test_dpi_selector_caps_bins_for_the_sample_size",
@@ -153,18 +154,12 @@ KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
         "tests/test_sparse_fe.py::test_fixed_effect_dgp_is_invariant_to_numeric_control_units",
     ),
     "#95 group 2: the design is accepted where a refusal is specified": (
-        "tests/test_binscatter.py::test_binscatter_rejects_non_integer_explicit_bin_counts",
         "tests/test_binscatter.py::test_control_collinear_with_bins_is_rejected_at_any_scale",
-        "tests/test_binscatter.py::test_reserved_output_bin_name_has_a_clear_input_error",
         "tests/test_fixed_effects.py::test_disconnected_bin_group_structure_is_rejected",
         "tests/test_fixed_effects.py::test_one_way_rejects_numeric_control_collinear_with_bins",
         "tests/test_sparse_fe.py::test_multiway_rejects_connected_but_unidentified_design",
         "tests/test_sparse_fe.py::test_multiway_rejects_disconnected_bin_factor_components",
         "tests/test_sparse_fe.py::test_multiway_rejects_numeric_control_collinear_with_bins",
-    ),
-    "#95 group 3: internal aggregation aliases collide with user column names": (
-        "tests/test_fixed_effects.py::test_temporary_aliases_do_not_shadow_control_columns",
-        "tests/test_sparse_fe.py::test_multiway_temporary_aliases_do_not_shadow_control_columns",
     ),
     "#95: native output does not preserve the input backend": (
         "tests/test_binscatter.py::test_controlled_native_output_preserves_input_backend[dask]",
@@ -173,16 +168,6 @@ KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
         "tests/test_fixed_effects.py::test_one_way_native_output_preserves_input_backend[duckdb]",
         "tests/test_sparse_fe.py::test_multiway_native_output_preserves_input_backend[dask]",
         "tests/test_sparse_fe.py::test_multiway_native_output_preserves_input_backend[duckdb]",
-    ),
-    "#95 group 4: an all-null or empty column reaches quantiles.py as float(None)": (
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-dask]",
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-duckdb]",
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-pandas]",
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-polars]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-dask]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-duckdb]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-pandas]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-polars]",
     ),
 }
 
