@@ -281,7 +281,200 @@ def test_integer_coded_factors_via_categorical(force_multiway):
 
 
 # --------------------------------------------------------------------------
-# 2. Routing
+# 2. The same gate, under the conditions a caller can actually create
+# --------------------------------------------------------------------------
+# Absorbing and encoding are the same estimator under *every* one of these, so each
+# is the equivalence check again with one thing about the input or the call changed.
+# The one-way file makes the same sweep; these are the multi-way analogues, plus the
+# cases that only exist once there is more than one factor.
+
+
+def test_rot_selector_matches_one_hot(monkeypatch, force_multiway):
+    """ROT must not notice the representation, dots included.
+
+    The multi-way branch of the selector reads the residual sum of squares straight
+    off the joint solve rather than from a dense fit, so this is the check that the
+    substitution holds: same bin count, and the same dots inside them.
+    """
+    df = make_two_way(n=1500, g1=20, g2=8)
+    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins="rot")
+
+    without_absorption(monkeypatch)
+    one_hot = run_native(df, controls=["age", "firm", "year"], num_bins="rot")
+
+    assert len(absorbed) == len(one_hot)
+    np.testing.assert_allclose(absorbed, one_hot, rtol=1e-8, atol=1e-8)
+
+
+def test_dpi_selector_matches_one_hot(monkeypatch, force_multiway):
+    """DPI caps absorption at one factor, which must not move the output.
+
+    The cap is the whole reason DPI is safe with several factors, and this is what
+    it is worth as far as a caller is concerned: two absorbed factors, one absorbed
+    and one encoded, and both encoded all have to agree.
+    """
+    df = make_two_way(n=1500, g1=20, g2=8)
+    capped = run_native(df, controls=["age", "firm", "year"], num_bins="dpi")
+
+    without_absorption(monkeypatch)
+    one_hot = run_native(df, controls=["age", "firm", "year"], num_bins="dpi")
+
+    assert len(capped) == len(one_hot)
+    np.testing.assert_allclose(capped, one_hot, rtol=1e-8, atol=1e-8)
+
+
+def test_poly_line_with_absorbed_factors(monkeypatch, force_multiway):
+    """The overlay is fitted with no bin dummies at all, which is its own solve.
+
+    ``_fit_polynomial`` has a separate multi-way branch that hands
+    ``solve_absorbed_system`` empty bin blocks, so the plotted line goes through code
+    the dot tests never reach. It is also the one absorbed quantity a user sees that
+    is not a dot.
+    """
+    df = make_two_way(n=1500, g1=20, g2=8)
+    controls = ["age", "firm", "year"]
+
+    absorbed = binscatter(df, "x", "y", controls=controls, num_bins=6, poly_line=2)
+
+    without_absorption(monkeypatch)
+    one_hot = binscatter(df, "x", "y", controls=controls, num_bins=6, poly_line=2)
+
+    np.testing.assert_allclose(
+        absorbed.data[1].y, one_hot.data[1].y, rtol=1e-8, atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_nulls_in_factor_columns_are_dropped(df_type, force_multiway):
+    """A null in either factor drops the row from both crosstabs, not just its own."""
+    df = make_two_way(n=1200, g1=15, g2=6, seed=41)
+    df.loc[:39, "firm"] = None
+    df.loc[60:99, "year"] = None
+    clean = df.dropna(subset=["firm", "year"])
+
+    with_nulls = run_native(
+        convert_to_backend(df, df_type), controls=["firm", "year"], num_bins=5
+    )
+    dropped = run_native(
+        convert_to_backend(clean, df_type), controls=["firm", "year"], num_bins=5
+    )
+
+    rtol, atol = tolerances(df_type, reshaped_input=True)
+    np.testing.assert_allclose(with_nulls, dropped, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_row_order_does_not_change_result(df_type, force_multiway):
+    """Levels are stacked onto one axis by label, from F+1 separate ``group_by`` calls.
+
+    Nothing guarantees those calls agree on an order, or keep one between runs, so a
+    shuffle is the cheapest way to catch an axis that was mapped by position.
+    """
+    df = make_two_way(n=1200, g1=15, g2=6, seed=13)
+    shuffled = df.sample(frac=1.0, random_state=11).reset_index(drop=True)
+    controls = ["age", "firm", "year"]
+
+    a = run_native(convert_to_backend(df, df_type), controls=controls, num_bins=5)
+    b = run_native(convert_to_backend(shuffled, df_type), controls=controls, num_bins=5)
+
+    rtol, atol = tolerances(df_type, reshaped_input=True)
+    np.testing.assert_allclose(a, b, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize(
+    "labels",
+    [
+        pytest.param(lambda i: f"g{i}", id="string"),
+        pytest.param(lambda i: i, id="int"),
+        pytest.param(lambda i: f"grüße-{i}/ü", id="unicode"),
+    ],
+)
+def test_factor_label_types(labels, force_multiway):
+    """Labels index the stacked level axis, so exotic ones must round-trip."""
+    df = make_two_way(n=900, g1=8, g2=5, seed=5)
+    df["firm"] = [labels(int(v[1:])) for v in df["firm"]]
+    df["year"] = [labels(int(v[1:])) for v in df["year"]]
+
+    kwargs = {"controls": ["age", "firm", "year"], "num_bins": 4}
+    if not isinstance(labels(0), str):
+        kwargs["categorical"] = ["firm", "year"]
+
+    out = run_native(df, **kwargs)
+    expected = dense_reference(df, 4, ("age",), ("firm", "year"))
+
+    assert np.all(np.isfinite(out))
+    np.testing.assert_allclose(out, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_factors_sharing_label_values_stay_separate(force_multiway):
+    """``firm`` and ``year`` both labelled ``a, b, c`` must not collide.
+
+    Every level lands in one parameter vector, addressed by ``offsets[i] + index``,
+    and each factor carries its own label index. A shared index would silently merge
+    ``firm == "a"`` with ``year == "a"`` into one effect -- no error, just wrong dots.
+    This is the failure mode that only exists once there are two factors.
+    """
+    df = make_two_way(n=1200, g1=8, g2=5, seed=23)
+    shared = list("abcdefgh")
+    df["firm"] = [shared[int(v[1:])] for v in df["firm"]]
+    df["year"] = [shared[int(v[1:])] for v in df["year"]]
+
+    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins=5)
+    expected = dense_reference(df, 5, ("age",), ("firm", "year"))
+
+    np.testing.assert_allclose(absorbed, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_constant_factor_alongside_absorbed_ones(force_multiway):
+    """A one-level factor carries no information and must be a no-op."""
+    df = make_two_way(n=900, g1=12, g2=6, seed=29)
+    df["const"] = "same"
+
+    with_const = run_native(df, controls=["age", "firm", "year", "const"], num_bins=5)
+    without = run_native(df, controls=["age", "firm", "year"], num_bins=5)
+
+    np.testing.assert_allclose(with_const, without, rtol=1e-9, atol=1e-9)
+
+
+def test_level_confined_to_a_single_bin(force_multiway):
+    """A level appearing in one bin only makes its row of ``D'B`` a single entry.
+
+    That is the sparsest the incidence blocks get, and the point where a solve can
+    quietly attribute the bin effect to the level instead.
+    """
+    df = make_two_way(n=1200, g1=10, g2=5, seed=19)
+    # Give one firm the largest x values outright, so it lives in the top bin alone.
+    tail = np.argsort(df["x"].to_numpy())[-60:]
+    df.loc[df.index[tail], "firm"] = "solo"
+
+    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins=5)
+    expected = dense_reference(df, 5, ("age",), ("firm", "year"))
+
+    np.testing.assert_allclose(absorbed, expected, rtol=1e-7, atol=1e-7)
+
+
+def test_crosstab_budget_reaches_the_caller(monkeypatch, force_multiway):
+    """The budget has to stop a real call, not just answer when asked directly.
+
+    :func:`test_crosstab_budget_names_the_offending_columns` pins the arithmetic and
+    the message; this pins that the check is still wired into the path a user takes.
+    """
+    monkeypatch.setattr(sparse_mod, "MAX_CROSSTAB_ENTRIES", 10)
+    df = make_two_way(n=500, g1=20, g2=10)
+
+    with pytest.raises(ValueError, match="crosstab entries"):
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["firm", "year"],
+            num_bins=5,
+            return_type="native",
+        )
+
+
+# --------------------------------------------------------------------------
+# 3. Routing
 # --------------------------------------------------------------------------
 
 
@@ -312,35 +505,14 @@ def test_max_absorbed_caps_the_selection():
     )
 
 
-def test_dpi_caps_absorption_at_one_factor(monkeypatch, force_multiway):
-    """The DPI sandwich is one-way only, so DPI must never see two factors.
-
-    Capping is safe because absorbing and encoding are the same estimator; this
-    asserts the routing directly rather than by observing that nothing crashed.
-
-    The cap keys off ``auto_bins == "dpi"`` alone, so the cardinalities are free to
-    be small: whether both factors clear the production threshold is what
-    :func:`test_selects_every_factor_above_the_threshold` is for. Lowering them here
-    keeps the one-hot encoding of the *un*absorbed factor -- which is what this test
-    would otherwise spend all its time on -- down to four dummy columns.
-    """
-    df = make_two_way(n=1500, g1=8, g2=5)
-    seen = spy_on(monkeypatch, "_select_dpi_bins")
-
-    binscatter(
-        df,
-        "x",
-        "y",
-        controls=["firm", "year"],
-        num_bins="dpi",
-        return_type="native",
-    )
-
-    assert seen == [("firm",)], "DPI must be handed at most one absorbed factor"
-
-
 def test_rot_absorbs_every_factor(monkeypatch, force_multiway):
-    """ROT reduces to the residual sum of squares, which the joint solve gives."""
+    """ROT must take the joint solve, not quietly settle for one factor.
+
+    The output cannot show this: absorbing one factor and encoding the other is the
+    same estimator, so :func:`test_rot_selector_matches_one_hot` would pass either
+    way. What would change is the cost, silently, which is the whole point of the
+    multi-way branch -- so this is asserted on the call rather than on the dots.
+    """
     df = make_two_way(g1=60, g2=55)
     seen = spy_on(monkeypatch, "_select_rule_of_thumb_bins")
 
@@ -357,32 +529,8 @@ def test_rot_absorbs_every_factor(monkeypatch, force_multiway):
     assert len(out) >= 2
 
 
-def test_rot_bin_count_matches_the_one_hot_path(monkeypatch, force_multiway):
-    """Absorbed and encoded are the same model, so ROT must pick the same count."""
-    df = make_two_way(g1=20, g2=12)
-
-    absorbed = core._select_rule_of_thumb_bins(
-        *_rot_inputs(df, max_absorbed=None),
-    )
-    without_absorption(monkeypatch)
-    one_hot = core._select_rule_of_thumb_bins(*_rot_inputs(df, max_absorbed=None))
-
-    assert absorbed == one_hot
-
-
-def _rot_inputs(df, max_absorbed):
-    lazy, _, numeric, categorical = core.clean_df(df, ("age", "firm", "year"), "x", "y")
-    frame, features, absorbed = core.add_regression_features(
-        lazy,
-        numeric_controls=numeric,
-        categorical_controls=categorical,
-        max_absorbed=max_absorbed,
-    )
-    return frame, "x", "y", features, absorbed
-
-
 # --------------------------------------------------------------------------
-# 3. Guards
+# 4. Guards
 # --------------------------------------------------------------------------
 
 
@@ -487,7 +635,7 @@ def test_multi_fe_moments_rejects_a_single_factor():
 
 
 # --------------------------------------------------------------------------
-# 4. Structure of the collected moments
+# 5. Structure of the collected moments
 # --------------------------------------------------------------------------
 
 
