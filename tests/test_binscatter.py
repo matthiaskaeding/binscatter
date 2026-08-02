@@ -293,6 +293,7 @@ def _get_dpi_bins(
     return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fes)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "df_fixture,expected_exception,expected_message,df_type",
     fix_data_types,
@@ -932,6 +933,7 @@ def test_binscatter_controls_matches_reference(df_type):
     )
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_controlled_native_output_preserves_input_backend(df_type):
     """Numeric-control output stays in the caller's dataframe ecosystem."""
@@ -1097,6 +1099,7 @@ def test_multiway_dots_are_stable_at_large_x_y_locations(column, expected_shift)
     np.testing.assert_allclose(shifted - expected_shift, baseline, rtol=1e-7, atol=1e-6)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     ("selector", "controls"),
     [

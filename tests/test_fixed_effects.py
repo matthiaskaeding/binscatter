@@ -301,6 +301,7 @@ def test_absorbed_matches_statsmodels_oracle(force_absorption):
     np.testing.assert_allclose(fitted, expected, rtol=1e-8, atol=1e-8)
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("control_name", ["__fe_resp_0", "__fe_count"])
 def test_temporary_aliases_do_not_shadow_control_columns(
     control_name, force_absorption
@@ -408,6 +409,7 @@ def test_single_group_bridge_matches_dense_ols(force_absorption):
     np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
 
 
+@pytest.mark.quick
 def test_one_way_rejects_numeric_control_collinear_with_bins(force_absorption):
     """A one-way FE does not rescue a control that reproduces the bin block."""
     frame, high = _disconnected_panel()
