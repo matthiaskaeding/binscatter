@@ -245,7 +245,7 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
         categorical_controls=categorical_controls,
     )
     # Both are far below ABSORB_MIN_LEVELS, so both are one-hot encoded.
-    assert absorbed is None
+    assert absorbed == ()
 
     # Collect dummy names
     result = df_with_dummies.collect()

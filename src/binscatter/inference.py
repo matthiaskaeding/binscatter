@@ -234,13 +234,14 @@ def compute_intervals(
 
     Returns bounds in bin order, matching the row order of the plotting frame.
     """
-    if profile.fe_name is not None:
+    if profile.fe_names:
+        named = ", ".join(f"'{name}'" for name in profile.fe_names)
         msg = (
             f"Confidence intervals are not available when a categorical control is "
-            f"absorbed as a fixed effect (here: '{profile.fe_name}'). The interval "
-            "needs the fixed effect's contribution to the sandwich variance, which "
-            "absorption deliberately never forms. Reduce the cardinality of that "
-            "control, or drop it, to use ci=."
+            f"absorbed as a fixed effect (here: {named}). The interval needs the "
+            "fixed effect's contribution to the sandwich variance, which absorption "
+            "deliberately never forms. Reduce the cardinality of that control, or "
+            "drop it, to use ci=."
         )
         raise NotImplementedError(msg)
 

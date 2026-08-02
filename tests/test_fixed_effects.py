@@ -87,7 +87,7 @@ def _to_pandas(obj):
 
 def without_absorption(monkeypatch):
     """Force the legacy one-hot path so the two can be compared."""
-    monkeypatch.setattr(core, "select_absorbed", lambda *a, **k: None)
+    monkeypatch.setattr(core, "select_absorbed_factors", lambda *a, **k: ())
 
 
 @pytest.fixture
@@ -385,8 +385,10 @@ def test_absorption_threshold_preserves_existing_behaviour(monkeypatch):
     """Below the threshold nothing is absorbed, so results cannot move."""
     df = make_panel(n=1500, n_groups=20, seed=59)
     assert (
-        fe_mod.select_absorbed(core.clean_df(df, ("grp",), "x", "y")[0], ("grp",))
-        is None
+        fe_mod.select_absorbed_factors(
+            core.clean_df(df, ("grp",), "x", "y")[0], ("grp",)
+        )
+        == ()
     )
 
     default = run_native(df, controls=["age", "grp"], num_bins="dpi")
@@ -447,7 +449,7 @@ def test_high_cardinality_completes():
     # Assert the routing decision directly rather than by timing it: if this ever
     # falls back to one-hot the test would still pass, just take minutes.
     lazy, _, _, categorical = core.clean_df(df, ("firm_id",), "x", "y", ("firm_id",))
-    assert fe_mod.select_absorbed(lazy, categorical) == "firm_id"
+    assert fe_mod.select_absorbed_factors(lazy, categorical) == ("firm_id",)
 
     out = run_native(df, controls=["firm_id"], categorical=["firm_id"], num_bins=10)
     assert out.shape == (10,)

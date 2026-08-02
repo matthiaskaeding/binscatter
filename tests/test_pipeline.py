@@ -50,7 +50,7 @@ def test_maybe_add_regression_features_creates_dummies(df_type):
     )
     collected = df_augmented.collect()
     dummy_cols = [c for c in collected.columns if c.startswith("__ctrl")]
-    assert absorbed is None
+    assert absorbed == ()
     assert dummy_cols
     assert features == tuple(dummy_cols)
 
@@ -76,7 +76,7 @@ def test_high_cardinality_categorical_is_absorbed(df_type, monkeypatch):
     collected = df_augmented.collect()
     dummy_cols = [c for c in collected.columns if c.startswith("__ctrl")]
 
-    assert absorbed == "cat_hi", "the highest-cardinality column should be absorbed"
+    assert absorbed == ("cat_hi",), "the highest-cardinality column should be absorbed"
     assert dummy_cols, "the non-absorbed categorical should still be encoded"
     assert features == tuple(dummy_cols)
     assert not any("cat_hi" in c for c in dummy_cols), (

@@ -49,12 +49,12 @@ def time_call(df: pd.DataFrame, absorb: bool) -> float:
     the production threshold -- otherwise the low-cardinality rows would silently
     compare the one-hot path against itself, and report a 1x speedup.
     """
-    original = core.select_absorbed
+    original = core.select_absorbed_factors
     original_threshold = fe_mod.ABSORB_MIN_LEVELS
     if absorb:
         fe_mod.ABSORB_MIN_LEVELS = 2
     else:
-        core.select_absorbed = lambda *a, **k: None
+        core.select_absorbed_factors = lambda *a, **k: ()
     try:
         start = time.perf_counter()
         binscatter(
@@ -68,7 +68,7 @@ def time_call(df: pd.DataFrame, absorb: bool) -> float:
         )
         return time.perf_counter() - start
     finally:
-        core.select_absorbed = original
+        core.select_absorbed_factors = original
         fe_mod.ABSORB_MIN_LEVELS = original_threshold
 
 
@@ -105,7 +105,7 @@ def bench_discovery(n: int = 1_000_000, n_groups: int = 5_000) -> None:
     lazy = nw.from_native(make_frame(n, n_groups)).lazy()
 
     start = time.perf_counter()
-    fe_mod.select_absorbed(lazy, ("firm_id",))
+    fe_mod.select_absorbed_factors(lazy, ("firm_id",))
     count = time.perf_counter() - start
 
     start = time.perf_counter()
@@ -114,7 +114,7 @@ def bench_discovery(n: int = 1_000_000, n_groups: int = 5_000) -> None:
     ).collect()
     group = time.perf_counter() - start
 
-    print(f"  select_absorbed : {count:.3f}s")
+    print(f"  select_absorbed_factors : {count:.3f}s")
     print(f"  group_by        : {group:.3f}s")
     print(f"  discovery share : {count / (count + group):.0%}")
 

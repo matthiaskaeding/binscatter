@@ -120,33 +120,46 @@ def demean_centered(
 ABSORB_MIN_LEVELS = 50
 
 
-def select_absorbed(
-    df: nw.LazyFrame, categorical_controls: tuple[str, ...]
-) -> str | None:
-    """Pick the categorical control to absorb: the one with the most levels.
+def select_absorbed_factors(
+    df: nw.LazyFrame,
+    categorical_controls: tuple[str, ...],
+    *,
+    max_absorbed: int | None = None,
+) -> tuple[str, ...]:
+    """Pick the categorical controls to absorb, highest cardinality first.
 
-    Returns ``None`` when there is nothing to absorb. Costs a single pass computing
-    ``n_unique`` for every categorical control at once.
+    Every control clearing :data:`ABSORB_MIN_LEVELS` is absorbed, unless
+    ``max_absorbed`` caps how many. Returns ``()`` when there is nothing to absorb.
+    Costs a single pass computing ``n_unique`` for every categorical control at once.
 
     A constant categorical is never absorbed: it carries no information, and the
     one-hot path already drops it, so absorbing it would only introduce a degenerate
     single-group demeaning.
+
+    Absorbing more than one factor requires the sparse path in :mod:`sparse_fe`;
+    callers that cannot take it pass ``max_absorbed=1`` and let the remaining
+    categoricals be one-hot encoded, which is the same estimator by a costlier route.
     """
     if not categorical_controls:
-        return None
+        return ()
 
     counts = df.select(
         *(nw.col(c).n_unique().alias(c) for c in categorical_controls)
     ).collect()
     cardinalities = {c: int(counts.item(0, c)) for c in categorical_controls}
-    absorbed = max(categorical_controls, key=lambda c: cardinalities[c])
-    if cardinalities[absorbed] < ABSORB_MIN_LEVELS:
+    ranked = sorted(
+        categorical_controls, key=lambda c: (cardinalities[c], c), reverse=True
+    )
+    absorbed = tuple(c for c in ranked if cardinalities[c] >= ABSORB_MIN_LEVELS)
+    if max_absorbed is not None:
+        absorbed = absorbed[:max_absorbed]
+    if not absorbed:
         logger.debug(
             "[fixed_effects] max cardinality %d < %d, keeping the one-hot path",
-            cardinalities[absorbed],
+            max(cardinalities.values()),
             ABSORB_MIN_LEVELS,
         )
-        return None
+        return ()
     logger.debug(
         "[fixed_effects] cardinalities=%s absorbing=%s", cardinalities, absorbed
     )

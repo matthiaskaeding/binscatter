@@ -29,7 +29,7 @@ from binscatter.fixed_effects import (
     demean_centered,
     group_codes,
     recover_levels,
-    select_absorbed,
+    select_absorbed_factors,
     within_correct,
 )
 from binscatter.inference import IntervalResult, compute_intervals
@@ -37,6 +37,7 @@ from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
 )
+from binscatter.sparse_fe import collect_multi_fe_moments, solve_absorbed_system
 
 logger = logging.getLogger(__name__)
 
@@ -209,11 +210,15 @@ def binscatter(
         len(categorical_columns),
     )
 
-    df_with_regression_features, regression_features, absorbed_fe = (
+    # The DPI selector's sandwich variance is written against the closed-form one-way
+    # projection, so under it absorption stays capped at a single factor and the rest
+    # are one-hot encoded -- the same estimator, by the route that already works.
+    df_with_regression_features, regression_features, absorbed_fes = (
         add_regression_features(
             df,
             numeric_controls=numeric_columns,
             categorical_controls=categorical_columns,
+            max_absorbed=1 if auto_bins == "dpi" else None,
         )
     )
     logger.debug("[binscatter] regression features total=%d", len(regression_features))
@@ -236,14 +241,14 @@ def binscatter(
 
     if auto_bins == "rot":
         computed_num_bins = _select_rule_of_thumb_bins(
-            df_with_regression_features, x, y, regression_features, absorbed_fe
+            df_with_regression_features, x, y, regression_features, absorbed_fes
         )
         logger.info(
             "Selected %d bins using rule-of-thumb (ROT) selector", computed_num_bins
         )
     elif auto_bins == "dpi":
         computed_num_bins = _select_dpi_bins(
-            df_with_regression_features, x, y, regression_features, absorbed_fe
+            df_with_regression_features, x, y, regression_features, absorbed_fes
         )
         logger.info(
             "Selected %d bins using direct plug-in (DPI) selector", computed_num_bins
@@ -295,7 +300,7 @@ def binscatter(
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
-        fe_name=absorbed_fe,
+        fe_names=absorbed_fes,
         bin_edges=unique_quantiles,
     )
     add_bins = configure_add_bins(profile)
@@ -375,10 +380,18 @@ class Profile(NamedTuple):
     regression_features: tuple[str, ...]
     polynomial_features: tuple[str, ...]
     x_bounds: tuple[float, float]
-    fe_name: str | None = None
+    #: Categorical controls absorbed rather than one-hot encoded, highest
+    #: cardinality first. One name takes the exact Mundlak path in
+    #: :mod:`fixed_effects`; two or more take the sparse solve in :mod:`sparse_fe`.
+    fe_names: tuple[str, ...] = ()
     #: The ``num_bins + 1`` quantile boundaries the bins were cut on. Only the
     #: inference path needs them; everything else works off the bin labels.
     bin_edges: tuple[float, ...] = ()
+
+    @property
+    def fe_name(self) -> str | None:
+        """The single absorbed factor, or ``None`` unless exactly one is absorbed."""
+        return self.fe_names[0] if len(self.fe_names) == 1 else None
 
     @property
     def x_col(self) -> nw.Expr:
@@ -532,6 +545,19 @@ def partial_out_controls(
     bin_block = np.diag(counts.astype(float, copy=False))
     bin_y = sum_y.astype(float, copy=False)
 
+    if len(profile.fe_names) > 1:
+        return _partial_out_multiway(
+            df_prepped,
+            profile,
+            per_bin=per_bin,
+            bin_block=bin_block,
+            bin_controls=bin_control_sums,
+            control_block=ww,
+            bin_y=bin_y,
+            control_y=wy,
+            mean_controls=total_ctrl_sums / total_count if k else np.array([]),
+        )
+
     fe_moments: FEMoments | None = None
     if profile.fe_name is not None:
         fe_moments = compute_fe_moments(
@@ -593,6 +619,56 @@ def partial_out_controls(
     return df_plotting, {"beta": beta, "gamma": gamma}
 
 
+@timed
+def _partial_out_multiway(
+    df_prepped: nw.LazyFrame,
+    profile: Profile,
+    *,
+    per_bin: nw.DataFrame,
+    bin_block: np.ndarray,
+    bin_controls: np.ndarray,
+    control_block: np.ndarray,
+    bin_y: np.ndarray,
+    control_y: np.ndarray,
+    mean_controls: np.ndarray,
+) -> tuple[nw.LazyFrame, dict[str, np.ndarray]]:
+    """Bin means with two or more categoricals absorbed jointly.
+
+    Same estimator as the one-hot path, same estimator as absorbing one factor and
+    encoding the rest -- only the route differs. The blocks that do not involve the
+    fixed effects are handed over unchanged; :mod:`sparse_fe` adds the level blocks
+    and solves the joint system.
+    """
+    moments = collect_multi_fe_moments(
+        df_prepped,
+        fe_names=profile.fe_names,
+        feature_names=profile.regression_features,
+        response_exprs={"y": profile.y_col},
+        bin_name=profile.bin_name,
+        bin_labels=per_bin.get_column(profile.bin_name).to_list(),
+    )
+    solution = solve_absorbed_system(
+        moments,
+        bin_block=bin_block,
+        bin_controls=bin_controls,
+        control_block=control_block,
+        bin_y=bin_y,
+        control_y=control_y,
+    )
+
+    fitted = solution.beta + solution.level
+    if mean_controls.size:
+        fitted = fitted + mean_controls @ solution.gamma
+
+    y_vals = nw.new_series(
+        name=profile.y_name, values=fitted, backend=per_bin.implementation
+    )
+    df_plotting = (
+        per_bin.select(profile.bin_name, profile.x_name).with_columns(y_vals).lazy()
+    )
+    return df_plotting, {"beta": solution.beta, "gamma": solution.gamma}
+
+
 def _attach_intervals(
     df_plotting: nw.LazyFrame, profile: Profile, intervals: IntervalResult
 ) -> nw.LazyFrame:
@@ -652,7 +728,26 @@ def _fit_polynomial_line(
         xtx[1:, 0] = column_sums
 
     fe_level = 0.0
-    if profile.fe_name is not None and feature_names:
+    if len(profile.fe_names) > 1 and feature_names:
+        # No bin dummies here: the overlay is a plain polynomial in x plus controls,
+        # so the joint design is the features alongside the absorbed levels.
+        moments = collect_multi_fe_moments(
+            df_prepped,
+            fe_names=profile.fe_names,
+            feature_names=feature_names,
+            response_exprs={"y": profile.y_col},
+        )
+        solution = solve_absorbed_system(
+            moments,
+            bin_block=np.zeros((0, 0)),
+            bin_controls=np.zeros((0, len(feature_names))),
+            control_block=feature_xtx,
+            bin_y=np.zeros(0),
+            control_y=feature_xty,
+        )
+        fe_level = solution.level
+        coefficients = np.concatenate([[0.0], solution.gamma])
+    elif profile.fe_name is not None and feature_names:
         # Absorbing removes the intercept, so the design is the features alone.
         # The overlay level is restored from the mean fixed effect, exactly as in
         # partial_out_controls.
@@ -1001,9 +1096,10 @@ def _select_rule_of_thumb_bins(
     x: str,
     y: str,
     regression_features: tuple[str, ...],
-    fe_name: str | None = None,
+    fe_names: tuple[str, ...] = (),
 ) -> int:
     """Implement the SA-4.1 rule-of-thumb selector (currently for p=0, v=0)."""
+    fe_name = fe_names[0] if len(fe_names) == 1 else None
     data_cols: tuple[str, ...] = (x, *regression_features)
     stats = _collect_rule_of_thumb_stats(df, data_cols, y)
     n_obs = stats.item(0, "__n")
@@ -1040,13 +1136,38 @@ def _select_rule_of_thumb_bins(
             xtx[idx + 1, jdx + 1] = value
             xtx[jdx + 1, idx + 1] = value
 
-    if fe_name is None:
+    if len(fe_names) > 1:
+        # Absorbing kills the intercept, so the design is the data columns plus the
+        # stacked levels. The residual sum of squares comes straight out of the joint
+        # solve as ``y'y - theta'X'y``, which is exactly what the variance constant
+        # below reduces to once the within cross-products cancel.
+        moments = collect_multi_fe_moments(
+            df,
+            fe_names=fe_names,
+            feature_names=data_cols,
+            response_exprs={"y": nw.col(y)},
+        )
+        solution = solve_absorbed_system(
+            moments,
+            bin_block=np.zeros((0, 0)),
+            bin_controls=np.zeros((0, len(data_cols))),
+            control_block=xtx[1:, 1:],
+            bin_y=np.zeros(0),
+            control_y=xty[1:],
+        )
+        beta_y = solution.gamma
+        sum_y_sq_resid = float(xty_sq[0])
+        explained_ss = solution.explained_ss
+        design_xtx = None
+        slope_index = 0
+    elif fe_name is None:
         beta_y = _solve_normal_equations(xtx, xty)
         beta_y_sq = _solve_normal_equations(xtx, xty_sq)
         # With an intercept in the design, OLS fitted values sum to the response
         # total, so this equals the raw sum of y-squared.
         sum_y_sq_resid = float(column_sums @ beta_y_sq)
         design_xtx = xtx
+        explained_ss = None
         slope_index = 1
     else:
         # Absorbing the fixed effect kills the intercept, so the design is the data
@@ -1065,6 +1186,7 @@ def _select_rule_of_thumb_bins(
         beta_y = _solve_normal_equations(design_xtx, design_xty)
         # Within-transformed total sum of squares for y.
         sum_y_sq_resid = float(xty_sq[0] - s_y @ (inv * s_y))
+        explained_ss = None
         slope_index = 0
 
     # Sample moments of x for the Gaussian reference density.
@@ -1098,7 +1220,11 @@ def _select_rule_of_thumb_bins(
 
     # V_hat = (1/n) * Σᵢ σ²(xᵢ) where σ²(x) = E[y²|x] - E[y|x]²
     # We estimate this as the average residual variance from the polynomial fit
-    quad_form = float(beta_y.T @ design_xtx @ beta_y)
+    if explained_ss is None:
+        assert design_xtx is not None  # type narrowing for checker
+        quad_form = float(beta_y.T @ design_xtx @ beta_y)
+    else:
+        quad_form = explained_ss
     variance_constant = (sum_y_sq_resid - quad_form) / n_obs_f
     variance_constant = max(variance_constant, 0.0)
     if variance_constant <= 0 or not math.isfinite(variance_constant):
@@ -1122,10 +1248,22 @@ def _select_dpi_bins(
     x: str,
     y: str,
     regression_features: tuple[str, ...],
-    fe_name: str | None = None,
+    fe_names: tuple[str, ...] = (),
 ) -> int:
-    """Implement the SA-4.2 direct plug-in selector (for p=0, s=0, v=0)."""
-    pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features, fe_name)
+    """Implement the SA-4.2 direct plug-in selector (for p=0, s=0, v=0).
+
+    Only ever sees zero or one absorbed factor: the sandwich variance below is
+    written against the closed-form one-way projection, so ``binscatter`` caps
+    absorption at one factor whenever DPI is the selector.
+    """
+    if len(fe_names) > 1:  # pragma: no cover - the caller caps absorption at one
+        msg = (
+            "The DPI selector has not been generalized to more than one absorbed "
+            f"factor (got {fe_names}). Pass num_bins explicitly, or num_bins='rot'."
+        )
+        raise NotImplementedError(msg)
+    fe_name = fe_names[0] if fe_names else None
+    pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features, fe_names)
 
     required_cols = (x, y) + regression_features
     if fe_name is not None:
@@ -1554,21 +1692,28 @@ def add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: tuple[str, ...],
     categorical_controls: tuple[str, ...],
-) -> tuple[nw.LazyFrame, tuple[str, ...], str | None]:
+    max_absorbed: int | None = None,
+) -> tuple[nw.LazyFrame, tuple[str, ...], tuple[str, ...]]:
     """Inject numeric controls and one-hot categorical controls when requested.
 
-    The highest-cardinality categorical is absorbed rather than encoded, so it is
+    High-cardinality categoricals are absorbed rather than encoded, so they are
     excluded from the dummies and returned as the third element. Remaining
     categoricals are one-hot encoded as before and ride along inside the control
     block, where the within correction handles them for free.
+
+    ``max_absorbed`` caps how many are absorbed. Absorbing and encoding are the same
+    estimator, so the cap costs speed rather than correctness, and callers whose
+    downstream path only understands one factor set it to 1.
     """
     if not numeric_controls and not categorical_controls:
-        return df, (), None
+        return df, (), ()
     if numeric_controls and not categorical_controls:
-        return df, numeric_controls, None
+        return df, numeric_controls, ()
 
-    absorbed = select_absorbed(df, categorical_controls)
-    remaining = tuple(c for c in categorical_controls if c != absorbed)
+    absorbed = select_absorbed_factors(
+        df, categorical_controls, max_absorbed=max_absorbed
+    )
+    remaining = tuple(c for c in categorical_controls if c not in absorbed)
     if not remaining:
         return df, numeric_controls, absorbed
 
