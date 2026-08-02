@@ -24,11 +24,14 @@ make ok
 ## Testing
 
 ```bash
-# Fast tests (excludes PySpark)
-make ftest
+# A representative sample across every module
+make test-quick
 
-# Full test suite including PySpark
+# The suite, minus PySpark -- run this before pushing
 make test
+
+# The suite including PySpark
+make test-pyspark
 
 # Run a single test
 uv run pytest tests/test_binscatter.py::test_name -v
@@ -38,6 +41,23 @@ uv run pytest tests -k "polars"
 ```
 
 PySpark tests are skipped by default. Use `--run-pyspark` flag to include them.
+
+`make test-quick` is for iterating, not for pushing: it keeps pandas, Polars and
+DuckDB but skips the distributed Dask and PySpark parametrizations. Plain
+`make test` is the gate.
+
+Some tests specify behaviour binscatter does not have yet. They are listed in
+`KNOWN_FAILURES` in `tests/conftest.py` and marked `xfail(strict=True)`, so the
+suite stays green while the gap stays visible. That list is a work queue, not a
+suppression list: fix the behaviour, then delete the line. Strictness means a test
+that starts passing while still listed turns red, so the list cannot drift out of
+date. See #95 for what each group needs.
+
+The `quick` marker means "representative of this module", not "important". Add one
+when a new test file appears, or when an area of behaviour is unreachable from any
+marked test -- not because a test is a good one. Mark the function, not individual
+`pytest.param` entries: `--quick` cuts the backend axis itself, so a marked test
+keeps working when a backend is added. It fails loudly if it selects nothing.
 
 ## Architecture
 

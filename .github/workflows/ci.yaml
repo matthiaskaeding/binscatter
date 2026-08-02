@@ -4,9 +4,12 @@ on:
   push:
     branches:
     - main
+  # Every pull request, not only those targeting `main`. A PR based on another
+  # branch is how a change gets split into reviewable parts -- source in one,
+  # tests in the next -- and filtering on the base branch meant exactly those
+  # PRs ran no checks at all, which is backwards: the stacked half is the one
+  # whose base is still moving.
   pull_request:
-    branches:
-    - main
   workflow_dispatch:
 
 jobs:

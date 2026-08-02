@@ -18,6 +18,7 @@ def test_clean_controls_returns_tuple():
     assert _clean_controls(["a", "b"]) == ("a", "b")
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize(
     "controls,expected",
     [([], ((), ())), (["z"], (("z",), ())), (["cat"], ((), ("cat",)))],
