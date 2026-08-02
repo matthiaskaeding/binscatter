@@ -42,6 +42,18 @@ uv run pytest tests -k "polars"
 
 PySpark tests are skipped by default. Use `--run-pyspark` flag to include them.
 
+`tests/test_fe_contract.py` is the portable half of the fixed-effect tests: what any
+implementation must satisfy, judged only through `binscatter()` against `binsreg` —
+the authors' own package, which takes fixed effects as dummy columns in `w` and has
+no notion of absorbing anything. It imports nothing private, patches nothing, and
+asserts nothing about which route ran, so it stays valid when the fixed-effect
+machinery is replaced; it is verified against three implementations (as shipped,
+absorption disabled, absorption forced everywhere) and only the cost test tells them
+apart. `test_fixed_effects.py` is the other kind: it forces this design's two routes
+and compares them, and would need rewriting alongside a new one. Put a new
+fixed-effect guarantee in the contract file unless it is genuinely about how this
+implementation works.
+
 ## Architecture
 
 ### Core Flow

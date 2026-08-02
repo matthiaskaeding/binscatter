@@ -502,3 +502,15 @@ def test_demean_centered_preserves_mean_and_equalizes_group_means():
     assert result.mean() == pytest.approx(expected_mean)
     for group in range(counts.size):
         assert result[codes == group].mean() == pytest.approx(expected_mean)
+
+
+@pytest.mark.parametrize("control_name", ["__fe_resp_0", "__fe_count"])
+def test_temporary_aliases_do_not_shadow_control_columns(
+    control_name, force_absorption
+):
+    """Valid user column names must not collide with aggregation temporaries."""
+    df = make_panel(n=1500, n_groups=12, seed=3)
+    expected = run_native(df, controls=["age", "grp"], num_bins=6)
+    renamed = df.rename(columns={"grp": control_name})
+    actual = run_native(renamed, controls=["age", control_name], num_bins=6)
+    np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)

@@ -157,6 +157,23 @@ def binscatter(
         raise TypeError("x_name must be a string")
     if not isinstance(y, str):
         raise TypeError("y_name must be a string")
+    # ``bin`` is the name the bin index is returned under, so an x or y column
+    # already called that would be overwritten on the way out. The internal bin
+    # column is uuid-suffixed and cannot collide; this one can, and silently.
+    if "bin" in (x, y):
+        raise ValueError(
+            "'bin' is reserved for the bin index in the returned frame, so it "
+            "cannot also name the x or y column. Rename the column first."
+        )
+    # bool is an int subclass, and a float that happens to be whole is still a float:
+    # silently truncating either would answer a question nobody asked.
+    if not isinstance(num_bins, str) and (
+        isinstance(num_bins, bool) or not isinstance(num_bins, int)
+    ):
+        raise TypeError(
+            "num_bins must be an integer or one of 'dpi', 'rot', "
+            f"'rule-of-thumb'; got {num_bins!r}."
+        )
     if poly_line is not None:
         if not isinstance(poly_line, int):
             raise TypeError("poly_line must be an integer in {1, 2, 3}")
