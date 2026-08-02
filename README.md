@@ -38,24 +38,7 @@ binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_fixed.png" alt="Binscatter: GDP per capita vs Life Expectancy (120 bins)" width="640" />
 
-### Confidence intervals
-
-Pass `ci` to draw an interval around each dot:
-
-```python
-binscatter(df, "gdpPercap", "lifeExp", num_bins=120, ci="rbc")
-```
-
-There are two styles, and they answer different questions:
-
-- `ci="pointwise"` is the heteroskedasticity-robust interval for the binscatter estimate itself — how precisely each bin's mean is pinned down. It is centred on the dot.
-- `ci="rbc"` is the robust bias-corrected interval for the underlying regression function. Because the dots are flat within a bin they are biased for the true conditional mean, so the interval is built from the next-order fit; it is a valid interval for the true curve, and is deliberately *not* centred on the dot. This matches `binsreg`'s `ci=(1, 1)`.
-
-Use `ci_level` to change the level (default `0.95`). With `return_type="native"` the bounds come back as `ci_lower`, `ci_upper` and `ci_std_error` columns.
-
-Intervals are only trustworthy when the number of bins is well above the IMSE-optimal choice, so pass `num_bins` explicitly rather than relying on the automatic selectors — binscatter warns if you don't.
-
-See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. Its lightweight source lives at [`examples/demo.ipynb`](examples/demo.ipynb); GitHub Actions executes it after relevant pushes to `main` and publishes the output separately so generated plots do not inflate the main branch. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
+See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
 ## Tests
 
