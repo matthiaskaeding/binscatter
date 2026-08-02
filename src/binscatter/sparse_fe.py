@@ -47,6 +47,8 @@ from typing import Any
 import narwhals as nw
 import numpy as np
 
+from binscatter.fixed_effects import free_aliases
+
 logger = logging.getLogger(__name__)
 
 _FE_COUNT = "__mfe_count"
@@ -225,7 +227,11 @@ def collect_multi_fe_moments(
         raise ValueError(msg)
 
     response_names = list(response_exprs)
-    aliases = {name: f"__mfe_resp_{i}" for i, name in enumerate(response_names)}
+    free = free_aliases(
+        df, [_FE_COUNT, *(f"__mfe_resp_{i}" for i in range(len(response_names)))]
+    )
+    count_alias = free[_FE_COUNT]
+    aliases = {name: free[f"__mfe_resp_{i}"] for i, name in enumerate(response_names)}
 
     # Derived responses become columns before grouping: dask rejects composed
     # aggregations such as (col * col).sum() inside group_by.
@@ -233,7 +239,7 @@ def collect_multi_fe_moments(
         *(response_exprs[name].alias(aliases[name]) for name in response_names)
     )
 
-    group_aggs = [nw.len().alias(_FE_COUNT)]
+    group_aggs = [nw.len().alias(count_alias)]
     group_aggs += [
         nw.col(aliases[name]).sum().alias(aliases[name]) for name in response_names
     ]
@@ -253,7 +259,7 @@ def collect_multi_fe_moments(
         indices.append({label: i for i, label in enumerate(labels)})
         offsets.append(offsets[-1] + len(labels))
         count_blocks.append(
-            np.asarray(grouped.get_column(_FE_COUNT).to_list(), dtype=float)
+            np.asarray(grouped.get_column(count_alias).to_list(), dtype=float)
         )
         for name in response_names:
             response_blocks[name].append(
@@ -296,12 +302,12 @@ def collect_multi_fe_moments(
         for j in range(i + 1, len(fe_names)):
             pair = (
                 df.group_by(fe_names[i], fe_names[j])
-                .agg(nw.len().alias(_FE_COUNT))
+                .agg(nw.len().alias(count_alias))
                 .collect()
             )
             left = _map_to_positions(pair.get_column(fe_names[i]), indices[i])
             right = _map_to_positions(pair.get_column(fe_names[j]), indices[j])
-            cell = np.asarray(pair.get_column(_FE_COUNT).to_list(), dtype=float)
+            cell = np.asarray(pair.get_column(count_alias).to_list(), dtype=float)
             left = left + offsets[i]
             right = right + offsets[j]
             rows.extend((left, right))
@@ -329,14 +335,16 @@ def collect_multi_fe_moments(
         b_vals: list[np.ndarray] = []
         for i, fe_name in enumerate(fe_names):
             crosstab = (
-                df.group_by(bin_name, fe_name).agg(nw.len().alias(_FE_COUNT)).collect()
+                df.group_by(bin_name, fe_name)
+                .agg(nw.len().alias(count_alias))
+                .collect()
             )
             level_pos = _map_to_positions(crosstab.get_column(fe_name), indices[i])
             bin_pos = _map_to_positions(crosstab.get_column(bin_name), bin_index)
             b_rows.append(level_pos + offsets[i])
             b_cols.append(bin_pos)
             b_vals.append(
-                np.asarray(crosstab.get_column(_FE_COUNT).to_list(), dtype=float)
+                np.asarray(crosstab.get_column(count_alias).to_list(), dtype=float)
             )
         dtb = sparse.coo_matrix(
             (

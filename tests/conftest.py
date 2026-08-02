@@ -162,10 +162,6 @@ KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
         "tests/test_sparse_fe.py::test_multiway_rejects_disconnected_bin_factor_components",
         "tests/test_sparse_fe.py::test_multiway_rejects_numeric_control_collinear_with_bins",
     ),
-    "#95 group 3: internal aggregation aliases collide with user column names": (
-        "tests/test_fixed_effects.py::test_temporary_aliases_do_not_shadow_control_columns",
-        "tests/test_sparse_fe.py::test_multiway_temporary_aliases_do_not_shadow_control_columns",
-    ),
     "#95: native output does not preserve the input backend": (
         "tests/test_binscatter.py::test_controlled_native_output_preserves_input_backend[dask]",
         "tests/test_binscatter.py::test_controlled_native_output_preserves_input_backend[duckdb]",
@@ -173,16 +169,6 @@ KNOWN_FAILURES: dict[str, tuple[str, ...]] = {
         "tests/test_fixed_effects.py::test_one_way_native_output_preserves_input_backend[duckdb]",
         "tests/test_sparse_fe.py::test_multiway_native_output_preserves_input_backend[dask]",
         "tests/test_sparse_fe.py::test_multiway_native_output_preserves_input_backend[duckdb]",
-    ),
-    "#95 group 4: an all-null or empty column reaches quantiles.py as float(None)": (
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-dask]",
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-duckdb]",
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-pandas]",
-        "tests/test_binscatter.py::test_binscatter[df_all_invalid-polars]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-dask]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-duckdb]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-pandas]",
-        "tests/test_binscatter.py::test_binscatter[df_nulls-polars]",
     ),
 }
 
