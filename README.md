@@ -4,7 +4,7 @@
 
 - Built on the `narwhals` dataframe abstraction, so pandas, Polars, DuckDB, Dask, and PySpark inputs all work out of the box.
 - Uses `plotly` as graphics backend - because: (1) it's great (2) it uses `narwhals` as well, minimizing dependencies
-- Lightweight - four runtime dependencies: `narwhals`, `numpy`, `plotly` and `scipy`. Your dataframe library of choice is not one of them: pandas, Polars, DuckDB, Dask and PySpark are all imported lazily, so you only need the one you actually use.
+- Lightweight - three runtime dependencies: `narwhals`, `numpy` and `plotly`. Your dataframe library of choice is not one of them: pandas, Polars, DuckDB, Dask and PySpark are all imported lazily, so you only need the one you actually use. (`pip install binscatter[multiway]` adds `scipy`, which speeds up models with two or more high-cardinality categorical controls.)
 - Just works: by default picks the number of bins automatically via the DPI (Direct Plug-In) selector from Cattaneo et al. (2024) - no manual tuning
 
 ## What are binscatter plots?

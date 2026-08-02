@@ -37,7 +37,11 @@ from binscatter.quantiles import (
     configure_add_bins,
     configure_compute_quantiles,
 )
-from binscatter.sparse_fe import collect_multi_fe_moments, solve_absorbed_system
+from binscatter.sparse_fe import (
+    collect_multi_fe_moments,
+    solve_absorbed_system,
+    sparse_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -210,15 +214,19 @@ def binscatter(
         len(categorical_columns),
     )
 
-    # The DPI selector's sandwich variance is written against the closed-form one-way
-    # projection, so under it absorption stays capped at a single factor and the rest
-    # are one-hot encoded -- the same estimator, by the route that already works.
+    # Absorption is capped at a single factor in two cases, both of which fall back to
+    # one-hot encoding the rest -- the same estimator by the slower route that predates
+    # multi-way absorption, so neither changes any result:
+    #   * the DPI selector, whose sandwich variance is written against the closed-form
+    #     one-way projection and has no multi-factor analogue;
+    #   * a missing scipy, since the joint solve is sparse.
+    single_factor_only = auto_bins == "dpi" or not sparse_available()
     df_with_regression_features, regression_features, absorbed_fes = (
         add_regression_features(
             df,
             numeric_controls=numeric_columns,
             categorical_controls=categorical_columns,
-            max_absorbed=1 if auto_bins == "dpi" else None,
+            max_absorbed=1 if single_factor_only else None,
         )
     )
     logger.debug("[binscatter] regression features total=%d", len(regression_features))

@@ -8,7 +8,7 @@ version = "0.4.0"
 description = "Cross-backend binscatter plots."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["narwhals>=2.1.2", "numpy>=2.3", "plotly>=6.3.0", "scipy>=1.11"]
+dependencies = ["narwhals>=2.1.2", "numpy>=2.3", "plotly>=6.3.0"]
 authors = [{ name = "Matthias Kaeding" }]
 license = { file = "LICENSE" }
 keywords = ["binscatter", "visualization", "econometrics"]
@@ -20,6 +20,12 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Topic :: Scientific/Engineering :: Visualization",
 ]
+
+[project.optional-dependencies]
+# Absorbing two or more categorical controls jointly needs a sparse min-norm
+# solve, which numpy does not provide. Without it binscatter absorbs one factor
+# and one-hot encodes the rest, which is the same estimator by a slower route.
+multiway = ["scipy>=1.11"]
 
 [project.urls]
 homepage = "https://github.com/matthiaskaeding/binscatter"
@@ -47,6 +53,7 @@ dev = [
   "nbstripout>=0.8.2",
   "scikit-learn>=1.8.0",
   "hypothesis>=6.100",
+  "scipy>=1.11",
 ]
 ci = [
   "pytest>=8.3.5",
@@ -60,6 +67,7 @@ ci = [
   "statsmodels>=0.14.6",
   "binsreg==2.1.7",
   "hypothesis>=6.100",
+  "scipy>=1.11",
 ]
 
 

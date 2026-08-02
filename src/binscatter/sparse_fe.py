@@ -26,8 +26,10 @@ Two honest costs relative to the one-factor path:
   :data:`MAX_CROSSTAB_ENTRIES` turns the latter into an error naming the columns
   rather than an allocation failure.
 
-Unlike the optional backends, scipy is imported at module scope: it is a hard
-runtime dependency, so there is nothing to degrade to.
+scipy is optional, and imported lazily like the optional backends. Without it
+:func:`sparse_available` reports ``False`` and the caller caps absorption at one
+factor, one-hot encoding the rest -- the same estimator by the slower route that
+predates this module, so a missing scipy costs speed rather than results.
 
 The system is rank-deficient by exactly ``F``: the bin dummies span the intercept
 and so does every factor. Any least-squares solution will do, because the quantity
@@ -44,8 +46,6 @@ from typing import Any
 
 import narwhals as nw
 import numpy as np
-from scipy import sparse
-from scipy.sparse import linalg as sparse_linalg
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +56,37 @@ _FE_COUNT = "__mfe_count"
 #: about half a gigabyte, which is a bad day but not a dead process. Beyond it the
 #: honest answer is that this method is wrong for the data.
 MAX_CROSSTAB_ENTRIES = 25_000_000
+
+_SCIPY_HINT = (
+    "Absorbing two or more categorical controls needs a sparse solver. Install it "
+    "with `pip install 'binscatter[multiway]'` or `pip install scipy`."
+)
+
+
+def require_sparse():
+    """Return ``(scipy.sparse, scipy.sparse.linalg)``, or explain how to get them.
+
+    Reaching this without scipy is a bug rather than a user error: callers check
+    :func:`sparse_available` first and fall back to one-hot encoding. The message is
+    here so that a caller added later fails legibly instead of with a bare
+    ``ModuleNotFoundError``.
+    """
+    try:
+        from scipy import sparse
+        from scipy.sparse import linalg as sparse_linalg
+    except ImportError as err:  # pragma: no cover - needs scipy uninstalled
+        raise ImportError(_SCIPY_HINT) from err
+    return sparse, sparse_linalg
+
+
+def sparse_available() -> bool:
+    """Whether scipy is importable, and so whether multi-way absorption can run."""
+    try:
+        require_sparse()
+    except ImportError:  # pragma: no cover - needs scipy uninstalled
+        logger.debug("[sparse_fe] scipy unavailable, capping absorption at one factor")
+        return False
+    return True
 
 
 @dataclass
@@ -187,6 +218,8 @@ def collect_multi_fe_moments(
     frame; group and bin ordering out of ``group_by`` is not stable across backends,
     so both axes are mapped by label rather than by position.
     """
+    sparse, _ = require_sparse()
+
     if len(fe_names) < 2:
         msg = f"collect_multi_fe_moments needs at least two factors, got {fe_names}."
         raise ValueError(msg)
@@ -350,6 +383,8 @@ def solve_absorbed_system(
     ``moments``. Pass empty bin blocks to fit a design with no bin dummies, which is
     what the polynomial overlay and the rule-of-thumb selector want.
     """
+    sparse, sparse_linalg = require_sparse()
+
     num_bins = int(bin_block.shape[0])
     num_controls = int(control_block.shape[0])
     dty = moments.response_sums[response]
