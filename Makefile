@@ -18,8 +18,8 @@ help:
 	@echo "  make make-plots           # Build README plots from replication data"
 
 lint:
-	uv tool run ruff format
-	uv tool run ruff check --fix
+	uv tool run ruff@0.16.1 format
+	uv tool run ruff@0.16.1 check --fix
 
 ty:
 	uv tool run ty@latest check src
