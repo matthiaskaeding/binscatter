@@ -29,14 +29,26 @@ from tests.test_fixed_effects import run_native, tolerances, without_absorption
 
 pytest.importorskip("scipy")
 
-#: Backends the equivalence tests run on. PySpark is deliberately absent, unlike in
-#: ``test_fixed_effects.py``. Multi-way absorption reaches the backend only through
-#: ``group_by`` -- per-factor aggregates and two-key crosstabs -- and both of those are
-#: already exercised on PySpark by the one-way absorption tests, which collect the same
-#: two-key ``(bin, fe)`` crosstab through the same narwhals calls. Everything past the
-#: aggregates is numpy and scipy on the driver and cannot see the backend at all. So a
-#: PySpark run here re-pays JVM startup to cover nothing this file is testing.
-DF_TYPE_PARAMS = [df_type for df_type in DF_BACKENDS if df_type != "pyspark"]
+#: Every backend, with PySpark opt-in behind ``--run-pyspark`` as elsewhere in the
+#: suite. Only the three tests in section 1 are parametrized over this: what a backend
+#: can get wrong is how the aggregates come back -- their order, their nulls, their
+#: quantile edges -- and one equivalence check exercises the same ``group_by`` calls
+#: that every other test would re-run at the same price. Argument shapes and factor
+#: pathologies cannot see the backend at all, so they stay on pandas.
+DF_TYPE_PARAMS = [
+    pytest.param(df_type) for df_type in DF_BACKENDS if df_type != "pyspark"
+]
+if "pyspark" in DF_BACKENDS:
+    DF_TYPE_PARAMS.append(pytest.param("pyspark", marks=pytest.mark.pyspark))
+
+#: Backends that cut bins on exact quantiles, so a comparison against a reference
+#: fitted on ``numpy.quantile`` edges is meaningful at full precision. dask and
+#: PySpark approximate, which would put the two fits over genuinely different bins --
+#: the oracle is simply not a useful check there, and asserting it at the 0.1 relative
+#: tolerance that would be needed asserts almost nothing. Equivalence covers them.
+EXACT_QUANTILE_BACKENDS = [
+    df_type for df_type in DF_BACKENDS if df_type not in ("dask", "pyspark")
+]
 
 
 def make_two_way(n=4000, g1=60, g2=25, seed=0):
@@ -86,6 +98,22 @@ def make_three_way(n=5000, g1=40, g2=25, g3=12, seed=3):
 #: Controls for the three-way panel: one numeric, three categorical.
 THREE_WAY_CONTROLS = ["age", "fac0", "fac1", "fac2"]
 THREE_WAY_CATS = ("fac0", "fac1", "fac2")
+
+
+def make_call_panel(n=1200, seed=0):
+    """One frame carrying every column the argument sweep needs.
+
+    Building it once rather than per variant keeps the sweep to what it is actually
+    varying -- the call -- and keeps the levels small, since each variant pays for
+    the one-hot side of its own comparison.
+    """
+    df = make_two_way(n=n, g1=15, g2=8, seed=seed)
+    rng = np.random.default_rng(seed + 1)
+    df["region"] = [f"r{v}" for v in rng.integers(0, 5, n)]
+    df["const"] = "same"
+    df["firm_id"] = df["firm"].str[1:].astype(int)
+    df["year_id"] = df["year"].str[1:].astype(int)
+    return df
 
 
 @pytest.fixture
@@ -140,207 +168,47 @@ def dense_reference(df, num_bins, numeric, categorical):
     return beta[:num_bins] + design[:, num_bins:].mean(axis=0) @ beta[num_bins:]
 
 
-# --------------------------------------------------------------------------
-# 1. Equivalence: the gate
-# --------------------------------------------------------------------------
+def assert_matches_one_hot(df, monkeypatch, rtol=1e-9, atol=1e-9, **kwargs):
+    """Run ``binscatter`` absorbed and one-hot encoded, and compare the dots.
 
-
-@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_two_way_matches_one_hot(df_type, monkeypatch, force_multiway):
-    """Absorbing both factors must reproduce encoding both.
-
-    Sized for the one-hot side: 28 levels rather than the 85 the oracle tests use,
-    which is the same comparison an order of magnitude cheaper.
+    This is the gate in one line: the two routes are the same estimator, so every
+    test that varies an argument or the data is this call with something changed.
     """
-    df = make_two_way(n=1500, g1=20, g2=8)
-    native = convert_to_backend(df, df_type)
-    controls = ["age", "firm", "year"]
-
-    absorbed = run_native(native, controls=controls, num_bins=8)
-
+    absorbed = run_native(df, **kwargs)
     without_absorption(monkeypatch)
-    one_hot = run_native(native, controls=controls, num_bins=8)
-
-    rtol, atol = tolerances(df_type)
-    np.testing.assert_allclose(absorbed, one_hot, rtol=rtol, atol=atol)
-
-
-@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_two_way_matches_dense_ols(df_type, force_multiway):
-    """Independent oracle: a one-hot design solved with numpy."""
-    df = make_two_way()
-    native = convert_to_backend(df, df_type)
-
-    absorbed = run_native(native, controls=["age", "firm", "year"], num_bins=8)
-    expected = dense_reference(df, 8, ("age",), ("firm", "year"))
-
-    # The oracle cuts bins on exact quantiles. dask cuts on approximate ones, so the
-    # two fits are over genuinely different bins -- the same situation
-    # ``reshaped_input`` covers elsewhere. The equivalence test above is the tight
-    # check on dask, since both of its runs share the same edges.
-    rtol, atol = tolerances(df_type, reshaped_input=True)
-    np.testing.assert_allclose(absorbed, expected, rtol=rtol, atol=atol)
-
-
-@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_three_way_matches_dense_ols(df_type, force_multiway):
-    """Three factors: the pairwise crosstabs grow, the answer must not move."""
-    df = make_three_way()
-    native = convert_to_backend(df, df_type)
-
-    absorbed = run_native(native, controls=THREE_WAY_CONTROLS, num_bins=8)
-    expected = dense_reference(df, 8, ("age",), THREE_WAY_CATS)
-
-    # See the two-way case: the oracle cuts on exact quantiles, dask on approximate
-    # ones, so only a loose comparison is meaningful there.
-    rtol, atol = tolerances(df_type, reshaped_input=True)
-    np.testing.assert_allclose(absorbed, expected, rtol=rtol, atol=atol)
-
-
-@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_three_way_matches_one_hot(df_type, monkeypatch, force_multiway):
-    """Absorbing all three factors must reproduce encoding all three.
-
-    Sized for the one-hot side, like the two-way case. Three factors still mean
-    three pairwise crosstabs at 25 levels; only the encoding gets cheaper.
-    """
-    df = make_three_way(n=1500, g1=12, g2=8, g3=5)
-    native = convert_to_backend(df, df_type)
-
-    absorbed = run_native(native, controls=THREE_WAY_CONTROLS, num_bins=8)
-
-    without_absorption(monkeypatch)
-    one_hot = run_native(native, controls=THREE_WAY_CONTROLS, num_bins=8)
-
-    rtol, atol = tolerances(df_type)
-    np.testing.assert_allclose(absorbed, one_hot, rtol=rtol, atol=atol)
-
-
-def test_two_way_without_numeric_controls(force_multiway):
-    """The control block is empty here, so the bin and level blocks stand alone."""
-    df = make_two_way()
-
-    absorbed = run_native(df, controls=["firm", "year"], num_bins=8)
-    expected = dense_reference(df, 8, (), ("firm", "year"))
-
-    np.testing.assert_allclose(absorbed, expected, rtol=1e-9, atol=1e-9)
-
-
-def test_nested_factors_match_dense_ols(force_multiway):
-    """County nested in state: the crosstab is one-to-one in one direction.
-
-    Nesting makes the joint design rank-deficient by more than the usual ``F``,
-    which a least-squares solve has to absorb without the fitted values moving.
-    """
-    rng = np.random.default_rng(11)
-    n = 3000
-    county = rng.integers(0, 60, n)
-    state = county // 10  # each county sits in exactly one state
-    x = rng.normal(size=n)
-    y = 0.8 * x + rng.normal(scale=2.0, size=60)[county] + rng.normal(scale=0.5, size=n)
-    df = pd.DataFrame(
-        {
-            "x": x,
-            "y": y,
-            "county": [f"c{v:02d}" for v in county],
-            "state": [f"s{v}" for v in state],
-        }
-    )
-
-    absorbed = run_native(df, controls=["county", "state"], num_bins=6)
-    expected = dense_reference(df, 6, (), ("county", "state"))
-
-    np.testing.assert_allclose(absorbed, expected, rtol=1e-8, atol=1e-8)
-
-
-def test_singleton_levels_match_dense_ols(force_multiway):
-    """Levels seen exactly once are the degenerate case for a group-mean method."""
-    df = make_two_way(n=1200, g1=200, g2=15, seed=7)
-
-    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins=5)
-    expected = dense_reference(df, 5, ("age",), ("firm", "year"))
-
-    np.testing.assert_allclose(absorbed, expected, rtol=1e-8, atol=1e-8)
-
-
-def test_integer_coded_factors_via_categorical(force_multiway):
-    """Integer identifiers only become factors when named in ``categorical=``."""
-    df = make_two_way()
-    df["firm_id"] = df["firm"].str[1:].astype(int)
-    df["year_id"] = df["year"].str[1:].astype(int)
-
-    absorbed = run_native(
-        df,
-        controls=["firm_id", "year_id"],
-        categorical=["firm_id", "year_id"],
-        num_bins=8,
-    )
-    expected = dense_reference(df, 8, (), ("firm_id", "year_id"))
-
-    np.testing.assert_allclose(absorbed, expected, rtol=1e-9, atol=1e-9)
-
-
-# --------------------------------------------------------------------------
-# 2. The same gate, under the conditions a caller can actually create
-# --------------------------------------------------------------------------
-# Absorbing and encoding are the same estimator under *every* one of these, so each
-# is the equivalence check again with one thing about the input or the call changed.
-# The one-way file makes the same sweep; these are the multi-way analogues, plus the
-# cases that only exist once there is more than one factor.
-
-
-def test_rot_selector_matches_one_hot(monkeypatch, force_multiway):
-    """ROT must not notice the representation, dots included.
-
-    The multi-way branch of the selector reads the residual sum of squares straight
-    off the joint solve rather than from a dense fit, so this is the check that the
-    substitution holds: same bin count, and the same dots inside them.
-    """
-    df = make_two_way(n=1500, g1=20, g2=8)
-    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins="rot")
-
-    without_absorption(monkeypatch)
-    one_hot = run_native(df, controls=["age", "firm", "year"], num_bins="rot")
+    one_hot = run_native(df, **kwargs)
 
     assert len(absorbed) == len(one_hot)
-    np.testing.assert_allclose(absorbed, one_hot, rtol=1e-8, atol=1e-8)
+    np.testing.assert_allclose(absorbed, one_hot, rtol=rtol, atol=atol)
+    return absorbed
 
 
-def test_dpi_selector_matches_one_hot(monkeypatch, force_multiway):
-    """DPI caps absorption at one factor, which must not move the output.
+# --------------------------------------------------------------------------
+# 1. The gate, on every backend
+# --------------------------------------------------------------------------
+# What a backend can get wrong is the aggregates: the order they come back in, how
+# they treat nulls, and where they cut bins. That is three tests. Everything below
+# this section runs on pandas, because nothing else in the module can see a backend.
 
-    The cap is the whole reason DPI is safe with several factors, and this is what
-    it is worth as far as a caller is concerned: two absorbed factors, one absorbed
-    and one encoded, and both encoded all have to agree.
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_matches_one_hot_on_every_backend(df_type, monkeypatch, force_multiway):
+    """Absorbing both factors must reproduce encoding both, on each engine.
+
+    Sized for the one-hot side: encoding ``G`` levels costs ``k(k+1)/2`` aggregations,
+    so the levels drive the runtime quadratically while two factors are two factors at
+    any cardinality. The oracle tests keep realistic ones -- they never encode.
     """
-    df = make_two_way(n=1500, g1=20, g2=8)
-    capped = run_native(df, controls=["age", "firm", "year"], num_bins="dpi")
+    native = convert_to_backend(make_two_way(n=1200, g1=10, g2=5), df_type)
 
-    without_absorption(monkeypatch)
-    one_hot = run_native(df, controls=["age", "firm", "year"], num_bins="dpi")
-
-    assert len(capped) == len(one_hot)
-    np.testing.assert_allclose(capped, one_hot, rtol=1e-8, atol=1e-8)
-
-
-def test_poly_line_with_absorbed_factors(monkeypatch, force_multiway):
-    """The overlay is fitted with no bin dummies at all, which is its own solve.
-
-    ``_fit_polynomial`` has a separate multi-way branch that hands
-    ``solve_absorbed_system`` empty bin blocks, so the plotted line goes through code
-    the dot tests never reach. It is also the one absorbed quantity a user sees that
-    is not a dot.
-    """
-    df = make_two_way(n=1500, g1=20, g2=8)
-    controls = ["age", "firm", "year"]
-
-    absorbed = binscatter(df, "x", "y", controls=controls, num_bins=6, poly_line=2)
-
-    without_absorption(monkeypatch)
-    one_hot = binscatter(df, "x", "y", controls=controls, num_bins=6, poly_line=2)
-
-    np.testing.assert_allclose(
-        absorbed.data[1].y, one_hot.data[1].y, rtol=1e-8, atol=1e-8
+    rtol, atol = tolerances(df_type)
+    assert_matches_one_hot(
+        native,
+        monkeypatch,
+        rtol=rtol,
+        atol=atol,
+        controls=["age", "firm", "year"],
+        num_bins=8,
     )
 
 
@@ -379,6 +247,144 @@ def test_row_order_does_not_change_result(df_type, force_multiway):
 
     rtol, atol = tolerances(df_type, reshaped_input=True)
     np.testing.assert_allclose(a, b, rtol=rtol, atol=atol)
+
+
+# --------------------------------------------------------------------------
+# 2. The independent oracle
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("df_type", EXACT_QUANTILE_BACKENDS)
+@pytest.mark.parametrize("factors", [2, 3], ids=["two_way", "three_way"])
+def test_matches_dense_ols(df_type, factors, force_multiway):
+    """A one-hot design built and solved with numpy, not the library's machinery.
+
+    Three factors as well as two because the pairwise crosstabs grow quadratically in
+    the number of absorbed columns -- three factors mean three crosstabs, not one.
+    """
+    if factors == 2:
+        df = make_two_way()
+        controls, numeric, cats = ["age", "firm", "year"], ("age",), ("firm", "year")
+    else:
+        df = make_three_way()
+        controls, numeric, cats = THREE_WAY_CONTROLS, ("age",), THREE_WAY_CATS
+
+    absorbed = run_native(
+        convert_to_backend(df, df_type), controls=controls, num_bins=8
+    )
+    expected = dense_reference(df, 8, numeric, cats)
+
+    np.testing.assert_allclose(absorbed, expected, rtol=1e-9, atol=1e-9)
+
+
+# --------------------------------------------------------------------------
+# 3. The arguments ``binscatter()`` takes
+# --------------------------------------------------------------------------
+# Absorption sits behind a handful of the public arguments, and each of them reaches
+# it differently: ``controls`` decides how many factors there are, ``categorical``
+# decides what counts as one, and ``num_bins`` decides which selector runs and
+# therefore how many get absorbed at all. Every one of these is the same estimator as
+# the one-hot route, so every one is the same assertion.
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"controls": ["age", "firm", "year"]}, id="two_factors"),
+        pytest.param(
+            {"controls": ["age", "firm", "year", "region"]}, id="three_factors"
+        ),
+        pytest.param({"controls": ["firm", "year"]}, id="no_numeric_control"),
+        pytest.param({"controls": ["age", "firm"]}, id="one_factor_no_sparse_path"),
+        pytest.param(
+            {"controls": ["age", "firm", "year", "const"]}, id="constant_factor"
+        ),
+        pytest.param(
+            {
+                "controls": ["firm_id", "year_id"],
+                "categorical": ["firm_id", "year_id"],
+            },
+            id="integer_coded_via_categorical",
+        ),
+        pytest.param(
+            {"controls": ["age", "firm", "year"], "num_bins": "rot"}, id="rot"
+        ),
+        pytest.param(
+            {"controls": ["age", "firm", "year"], "num_bins": "dpi"}, id="dpi"
+        ),
+    ],
+)
+def test_call_variants_match_one_hot(kwargs, monkeypatch, force_multiway):
+    """Vary one argument at a time; the dots must not care which route was taken."""
+    kwargs = {"num_bins": 6, **kwargs}
+    # The selectors reach the absorbed moments through a different path than a fixed
+    # bin count does, and both round to an integer, so they get a looser tolerance.
+    tol = 1e-8 if isinstance(kwargs["num_bins"], str) else 1e-9
+
+    assert_matches_one_hot(make_call_panel(), monkeypatch, rtol=tol, atol=tol, **kwargs)
+
+
+def test_poly_line_with_absorbed_factors(monkeypatch, force_multiway):
+    """The overlay is fitted with no bin dummies at all, which is its own solve.
+
+    ``_fit_polynomial_line`` has a separate multi-way branch that hands
+    ``solve_absorbed_system`` empty bin blocks, so the plotted line goes through code
+    the dot tests never reach. It is also the one absorbed quantity a user sees that
+    is not a dot, which is why it is asserted on the figure rather than the frame.
+    """
+    df = make_call_panel()
+    controls = ["age", "firm", "year"]
+
+    absorbed = binscatter(df, "x", "y", controls=controls, num_bins=6, poly_line=2)
+
+    without_absorption(monkeypatch)
+    one_hot = binscatter(df, "x", "y", controls=controls, num_bins=6, poly_line=2)
+
+    np.testing.assert_allclose(
+        absorbed.data[1].y, one_hot.data[1].y, rtol=1e-8, atol=1e-8
+    )
+
+
+# --------------------------------------------------------------------------
+# 4. What the factors themselves can look like
+# --------------------------------------------------------------------------
+
+
+def test_nested_factors_match_dense_ols(force_multiway):
+    """County nested in state: the crosstab is one-to-one in one direction.
+
+    Nesting makes the joint design rank-deficient by more than the usual ``F``,
+    which a least-squares solve has to absorb without the fitted values moving.
+    """
+    rng = np.random.default_rng(11)
+    n = 3000
+    county = rng.integers(0, 60, n)
+    state = county // 10  # each county sits in exactly one state
+    x = rng.normal(size=n)
+    y = 0.8 * x + rng.normal(scale=2.0, size=60)[county] + rng.normal(scale=0.5, size=n)
+    df = pd.DataFrame(
+        {
+            "x": x,
+            "y": y,
+            "county": [f"c{v:02d}" for v in county],
+            "state": [f"s{v}" for v in state],
+        }
+    )
+
+    absorbed = run_native(df, controls=["county", "state"], num_bins=6)
+    expected = dense_reference(df, 6, (), ("county", "state"))
+
+    np.testing.assert_allclose(absorbed, expected, rtol=1e-8, atol=1e-8)
+
+
+def test_singleton_levels_match_dense_ols(force_multiway):
+    """Levels seen exactly once are the degenerate case for a group-mean method."""
+    df = make_two_way(n=1200, g1=200, g2=15, seed=7)
+
+    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins=5)
+    expected = dense_reference(df, 5, ("age",), ("firm", "year"))
+
+    np.testing.assert_allclose(absorbed, expected, rtol=1e-8, atol=1e-8)
 
 
 @pytest.mark.parametrize(
@@ -425,17 +431,6 @@ def test_factors_sharing_label_values_stay_separate(force_multiway):
     np.testing.assert_allclose(absorbed, expected, rtol=1e-8, atol=1e-8)
 
 
-def test_constant_factor_alongside_absorbed_ones(force_multiway):
-    """A one-level factor carries no information and must be a no-op."""
-    df = make_two_way(n=900, g1=12, g2=6, seed=29)
-    df["const"] = "same"
-
-    with_const = run_native(df, controls=["age", "firm", "year", "const"], num_bins=5)
-    without = run_native(df, controls=["age", "firm", "year"], num_bins=5)
-
-    np.testing.assert_allclose(with_const, without, rtol=1e-9, atol=1e-9)
-
-
 def test_level_confined_to_a_single_bin(force_multiway):
     """A level appearing in one bin only makes its row of ``D'B`` a single entry.
 
@@ -453,28 +448,8 @@ def test_level_confined_to_a_single_bin(force_multiway):
     np.testing.assert_allclose(absorbed, expected, rtol=1e-7, atol=1e-7)
 
 
-def test_crosstab_budget_reaches_the_caller(monkeypatch, force_multiway):
-    """The budget has to stop a real call, not just answer when asked directly.
-
-    :func:`test_crosstab_budget_names_the_offending_columns` pins the arithmetic and
-    the message; this pins that the check is still wired into the path a user takes.
-    """
-    monkeypatch.setattr(sparse_mod, "MAX_CROSSTAB_ENTRIES", 10)
-    df = make_two_way(n=500, g1=20, g2=10)
-
-    with pytest.raises(ValueError, match="crosstab entries"):
-        binscatter(
-            df,
-            "x",
-            "y",
-            controls=["firm", "year"],
-            num_bins=5,
-            return_type="native",
-        )
-
-
 # --------------------------------------------------------------------------
-# 3. Routing
+# 5. Routing
 # --------------------------------------------------------------------------
 
 
@@ -530,7 +505,7 @@ def test_rot_absorbs_every_factor(monkeypatch, force_multiway):
 
 
 # --------------------------------------------------------------------------
-# 4. Guards
+# 6. Guards
 # --------------------------------------------------------------------------
 
 
@@ -550,6 +525,26 @@ def test_crosstab_budget_names_the_offending_columns():
             (1_000_000, 100_000),
             num_bins=10,
             total_count=50_000_000.0,
+        )
+
+
+def test_crosstab_budget_reaches_the_caller(monkeypatch, force_multiway):
+    """The budget has to stop a real call, not just answer when asked directly.
+
+    :func:`test_crosstab_budget_names_the_offending_columns` pins the arithmetic and
+    the message; this pins that the check is still wired into the path a user takes.
+    """
+    monkeypatch.setattr(sparse_mod, "MAX_CROSSTAB_ENTRIES", 10)
+    df = make_two_way(n=500, g1=20, g2=10)
+
+    with pytest.raises(ValueError, match="crosstab entries"):
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["firm", "year"],
+            num_bins=5,
+            return_type="native",
         )
 
 
@@ -635,7 +630,7 @@ def test_multi_fe_moments_rejects_a_single_factor():
 
 
 # --------------------------------------------------------------------------
-# 5. Structure of the collected moments
+# 7. Structure of the collected moments
 # --------------------------------------------------------------------------
 
 
