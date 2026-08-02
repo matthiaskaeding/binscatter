@@ -2,10 +2,16 @@
 
 Multi-way absorption is, like the one-way case, a silent rewrite of an existing code
 path: nothing raises if it is subtly wrong, the plotted values just quietly move. So
-the gate is the same -- equivalence against the one-hot path on every backend, backed
-by an independent dense-OLS oracle -- plus the two things one-way absorption never
-had to handle: a rank deficiency of ``F`` rather than one, and a crosstab that can be
-too big to collect.
+the gate is the same -- equivalence against the one-hot path on every in-process
+backend, backed by an independent dense-OLS oracle -- plus the two things one-way
+absorption never had to handle: a rank deficiency of ``F`` rather than one, and a
+crosstab that can be too big to collect.
+
+Panel sizes here are chosen against the *one-hot* side of each comparison, not the
+absorbed side. Encoding ``G`` levels costs ``k(k+1)/2`` aggregations in ``k = G + J``,
+so the levels drive the runtime quadratically while contributing nothing extra to what
+the comparison proves -- two factors are two factors at 8 levels each. Tests that only
+read cardinalities keep realistic ones; tests that pay for the encoding do not.
 """
 
 from __future__ import annotations
@@ -18,15 +24,19 @@ import pytest
 import binscatter.fixed_effects as fe_mod
 import binscatter.sparse_fe as sparse_mod
 from binscatter import binscatter, core
-from tests.conftest import convert_to_backend
-from tests.test_fixed_effects import (
-    DF_TYPE_PARAMS,
-    run_native,
-    tolerances,
-    without_absorption,
-)
+from tests.conftest import DF_BACKENDS, convert_to_backend
+from tests.test_fixed_effects import run_native, tolerances, without_absorption
 
 pytest.importorskip("scipy")
+
+#: Backends the equivalence tests run on. PySpark is deliberately absent, unlike in
+#: ``test_fixed_effects.py``. Multi-way absorption reaches the backend only through
+#: ``group_by`` -- per-factor aggregates and two-key crosstabs -- and both of those are
+#: already exercised on PySpark by the one-way absorption tests, which collect the same
+#: two-key ``(bin, fe)`` crosstab through the same narwhals calls. Everything past the
+#: aggregates is numpy and scipy on the driver and cannot see the backend at all. So a
+#: PySpark run here re-pays JVM startup to cover nothing this file is testing.
+DF_TYPE_PARAMS = [df_type for df_type in DF_BACKENDS if df_type != "pyspark"]
 
 
 def make_two_way(n=4000, g1=60, g2=25, seed=0):
@@ -89,6 +99,23 @@ def force_multiway(monkeypatch):
     monkeypatch.setattr(fe_mod, "ABSORB_MIN_LEVELS", 2)
 
 
+def spy_on(monkeypatch, name):
+    """Record the ``fe_names`` each call to ``core.<name>`` is handed.
+
+    Returns the list the spy appends to. Routing is asserted from this rather than
+    from nothing having crashed, so the recorded value is the whole point.
+    """
+    seen: list[tuple[str, ...]] = []
+    original = getattr(core, name)
+
+    def spy(frame, x, y, regression_features, fe_names=()):
+        seen.append(fe_names)
+        return original(frame, x, y, regression_features, fe_names)
+
+    monkeypatch.setattr(core, name, spy)
+    return seen
+
+
 def dense_reference(df, num_bins, numeric, categorical):
     """Bin means from an explicit one-hot OLS, evaluated at the control means.
 
@@ -120,8 +147,12 @@ def dense_reference(df, num_bins, numeric, categorical):
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_two_way_matches_one_hot(df_type, monkeypatch, force_multiway):
-    """Absorbing both factors must reproduce encoding both."""
-    df = make_two_way()
+    """Absorbing both factors must reproduce encoding both.
+
+    Sized for the one-hot side: 28 levels rather than the 85 the oracle tests use,
+    which is the same comparison an order of magnitude cheaper.
+    """
+    df = make_two_way(n=1500, g1=20, g2=8)
     native = convert_to_backend(df, df_type)
     controls = ["age", "firm", "year"]
 
@@ -143,10 +174,10 @@ def test_two_way_matches_dense_ols(df_type, force_multiway):
     absorbed = run_native(native, controls=["age", "firm", "year"], num_bins=8)
     expected = dense_reference(df, 8, ("age",), ("firm", "year"))
 
-    # The oracle cuts bins on exact quantiles. dask and PySpark cut on approximate
-    # ones, so the two fits are over genuinely different bins -- the same situation
+    # The oracle cuts bins on exact quantiles. dask cuts on approximate ones, so the
+    # two fits are over genuinely different bins -- the same situation
     # ``reshaped_input`` covers elsewhere. The equivalence test above is the tight
-    # check on those backends, since both of its runs share the same edges.
+    # check on dask, since both of its runs share the same edges.
     rtol, atol = tolerances(df_type, reshaped_input=True)
     np.testing.assert_allclose(absorbed, expected, rtol=rtol, atol=atol)
 
@@ -160,16 +191,20 @@ def test_three_way_matches_dense_ols(df_type, force_multiway):
     absorbed = run_native(native, controls=THREE_WAY_CONTROLS, num_bins=8)
     expected = dense_reference(df, 8, ("age",), THREE_WAY_CATS)
 
-    # See the two-way case: the oracle cuts on exact quantiles, dask and PySpark on
-    # approximate ones, so only a loose comparison is meaningful there.
+    # See the two-way case: the oracle cuts on exact quantiles, dask on approximate
+    # ones, so only a loose comparison is meaningful there.
     rtol, atol = tolerances(df_type, reshaped_input=True)
     np.testing.assert_allclose(absorbed, expected, rtol=rtol, atol=atol)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_three_way_matches_one_hot(df_type, monkeypatch, force_multiway):
-    """Absorbing all three factors must reproduce encoding all three."""
-    df = make_three_way()
+    """Absorbing all three factors must reproduce encoding all three.
+
+    Sized for the one-hot side, like the two-way case. Three factors still mean
+    three pairwise crosstabs at 25 levels; only the encoding gets cheaper.
+    """
+    df = make_three_way(n=1500, g1=12, g2=8, g3=5)
     native = convert_to_backend(df, df_type)
 
     absorbed = run_native(native, controls=THREE_WAY_CONTROLS, num_bins=8)
@@ -277,58 +312,46 @@ def test_max_absorbed_caps_the_selection():
     )
 
 
-def test_dpi_caps_absorption_at_one_factor():
+def test_dpi_caps_absorption_at_one_factor(monkeypatch, force_multiway):
     """The DPI sandwich is one-way only, so DPI must never see two factors.
 
     Capping is safe because absorbing and encoding are the same estimator; this
     asserts the routing directly rather than by observing that nothing crashed.
+
+    The cap keys off ``auto_bins == "dpi"`` alone, so the cardinalities are free to
+    be small: whether both factors clear the production threshold is what
+    :func:`test_selects_every_factor_above_the_threshold` is for. Lowering them here
+    keeps the one-hot encoding of the *un*absorbed factor -- which is what this test
+    would otherwise spend all its time on -- down to four dummy columns.
     """
-    df = make_two_way(g1=60, g2=55)
-    seen: list[tuple[str, ...]] = []
-    original = core._select_dpi_bins
+    df = make_two_way(n=1500, g1=8, g2=5)
+    seen = spy_on(monkeypatch, "_select_dpi_bins")
 
-    def spy(frame, x, y, regression_features, fe_names=()):
-        seen.append(fe_names)
-        return original(frame, x, y, regression_features, fe_names)
-
-    core._select_dpi_bins = spy
-    try:
-        binscatter(
-            df,
-            "x",
-            "y",
-            controls=["firm", "year"],
-            num_bins="dpi",
-            return_type="native",
-        )
-    finally:
-        core._select_dpi_bins = original
+    binscatter(
+        df,
+        "x",
+        "y",
+        controls=["firm", "year"],
+        num_bins="dpi",
+        return_type="native",
+    )
 
     assert seen == [("firm",)], "DPI must be handed at most one absorbed factor"
 
 
-def test_rot_absorbs_every_factor(force_multiway):
+def test_rot_absorbs_every_factor(monkeypatch, force_multiway):
     """ROT reduces to the residual sum of squares, which the joint solve gives."""
     df = make_two_way(g1=60, g2=55)
-    seen: list[tuple[str, ...]] = []
-    original = core._select_rule_of_thumb_bins
+    seen = spy_on(monkeypatch, "_select_rule_of_thumb_bins")
 
-    def spy(frame, x, y, regression_features, fe_names=()):
-        seen.append(fe_names)
-        return original(frame, x, y, regression_features, fe_names)
-
-    core._select_rule_of_thumb_bins = spy
-    try:
-        out = binscatter(
-            df,
-            "x",
-            "y",
-            controls=["firm", "year"],
-            num_bins="rot",
-            return_type="native",
-        )
-    finally:
-        core._select_rule_of_thumb_bins = original
+    out = binscatter(
+        df,
+        "x",
+        "y",
+        controls=["firm", "year"],
+        num_bins="rot",
+        return_type="native",
+    )
 
     assert seen == [("firm", "year")]
     assert len(out) >= 2
@@ -407,9 +430,14 @@ def test_absorption_caps_at_one_factor_without_scipy(monkeypatch, force_multiway
     np.testing.assert_allclose(without_scipy, with_scipy, rtol=1e-9, atol=1e-9)
 
 
-def test_scipy_fallback_leaves_one_factor_absorbed(monkeypatch):
-    """The fallback is a cap, not a retreat to encoding everything."""
-    df = make_two_way(g1=60, g2=55)
+def test_scipy_fallback_leaves_one_factor_absorbed(monkeypatch, force_multiway):
+    """The fallback is a cap, not a retreat to encoding everything.
+
+    Small cardinalities for the same reason as the DPI cap: the fallback keys off
+    ``sparse_available()`` alone, and the levels would only be paid for in the
+    one-hot encoding of the factor that stays behind.
+    """
+    df = make_two_way(n=1500, g1=8, g2=5)
     monkeypatch.setattr(core, "sparse_available", lambda: False)
     seen: list[tuple[str, ...]] = []
     original = core.add_regression_features
