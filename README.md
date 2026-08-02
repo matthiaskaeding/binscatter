@@ -38,6 +38,35 @@ binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_fixed.png" alt="Binscatter: GDP per capita vs Life Expectancy (120 bins)" width="640" />
 
+### Fixed effects
+
+Categorical controls are absorbed as fixed effects rather than one-hot encoded, so
+cardinality costs nothing. Pass as many as you like:
+
+```python
+binscatter(
+    df,
+    "wage",
+    "tenure",
+    controls=["age", "firm_id", "year"],
+    categorical=["firm_id", "year"],
+)
+```
+
+String columns are detected automatically; `categorical=` is the override for
+integer-coded identifiers like `firm_id`, which would otherwise enter as a single
+linear term. Everything is computed from group-level aggregates — the number of
+levels never enters the cost, and no per-row residuals are formed — so absorbing
+several high-cardinality factors stays cheap on lazy backends.
+
+With one factor the projection is a closed form. With several it is solved
+iteratively, to a relative residual of `1e-11`; if a design is too poorly connected
+to reach that, the call raises rather than returning a number that depends on the
+iteration budget.
+
+`ci=` works alongside absorbed fixed effects up to 500 levels in total, which is
+where re-forming the block the sandwich variance needs stops being affordable.
+
 ### Confidence intervals
 
 Pass `ci` to draw an interval around each dot:

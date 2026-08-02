@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Literal
 import narwhals as nw
 import numpy as np
 
+from .dummy_builders import configure_build_dummies
+
 if TYPE_CHECKING:  # pragma: no cover - circular import guard
     from .core import Profile
 
@@ -43,6 +45,13 @@ CIKind = Literal["pointwise", "rbc"]
 #: Number of basis columns each style spends per bin boundary. ``pointwise`` uses
 #: one dummy per bin; ``rbc`` uses a hat function per knot, so it has one more.
 _BASIS_SIZE = {"pointwise": 0, "rbc": 1}
+
+#: Total absorbed levels the sandwich will re-encode as dummies. Absorption exists
+#: so the fixed-effect block never has to be formed, but the variance genuinely
+#: needs it, so intervals put it back explicitly when it is small enough to afford:
+#: the bread and meat are ``(J + k) x (J + k)``, so cost grows quadratically in the
+#: dummies added. Beyond this the interval is refused rather than made unusably slow.
+CI_MAX_FE_LEVELS = 500
 
 
 @dataclass(frozen=True)
@@ -224,6 +233,53 @@ def _solve(matrix: np.ndarray, rhs: np.ndarray) -> np.ndarray:
         return np.linalg.lstsq(matrix, rhs, rcond=None)[0]
 
 
+def _expand_fixed_effects(
+    df_prepped: nw.LazyFrame, profile: Profile
+) -> tuple[nw.LazyFrame, Profile]:
+    """Put the absorbed fixed effects back into the design as explicit dummies.
+
+    The rest of this module builds an HC1 sandwich sized off
+    ``regression_features``, which by construction excludes the absorbed columns.
+    Leaving them out would not merely drop a block: the residuals in
+    :func:`_second_pass` are reconstructed from the fitted curve, so omitted group
+    means would contaminate the meat as well.
+
+    Absorbed and one-hot designs have identical fitted values, so re-encoding the
+    columns here yields an interval consistent with the dots while reusing the
+    existing machinery unchanged. It is affordable only for modest cardinality,
+    which is the whole reason the estimation path absorbs them instead.
+    """
+    cardinalities = df_prepped.select(
+        *(nw.col(c).n_unique().alias(c) for c in profile.fe_names)
+    ).collect()
+    levels = {c: int(cardinalities.item(0, c)) for c in profile.fe_names}
+    total_levels = sum(levels.values())
+    if total_levels > CI_MAX_FE_LEVELS:
+        described = ", ".join(f"'{c}' ({levels[c]} levels)" for c in profile.fe_names)
+        msg = (
+            "Confidence intervals are not available at this fixed-effect cardinality. "
+            f"The absorbed categorical control(s) {described} span {total_levels} "
+            f"levels in total, above the limit of {CI_MAX_FE_LEVELS}. The interval "
+            "needs the fixed effects' contribution to the sandwich variance, which "
+            "absorption deliberately never forms, so it is re-encoded as dummies -- "
+            "affordable only below that limit. Reduce the cardinality of these "
+            "controls, or drop them, to use ci=."
+        )
+        raise NotImplementedError(msg)
+
+    build_dummies = configure_build_dummies(df_prepped.implementation)
+    expanded, dummy_cols = build_dummies(df_prepped, profile.fe_names)
+    logger.debug(
+        "[inference] re-encoded absorbed fixed effects %s as %d dummies",
+        profile.fe_names,
+        len(dummy_cols),
+    )
+    return expanded, profile._replace(
+        regression_features=profile.regression_features + dummy_cols,
+        fe_names=(),
+    )
+
+
 def compute_intervals(
     df_prepped: nw.LazyFrame,
     profile: Profile,
@@ -234,15 +290,8 @@ def compute_intervals(
 
     Returns bounds in bin order, matching the row order of the plotting frame.
     """
-    if profile.fe_name is not None:
-        msg = (
-            f"Confidence intervals are not available when a categorical control is "
-            f"absorbed as a fixed effect (here: '{profile.fe_name}'). The interval "
-            "needs the fixed effect's contribution to the sandwich variance, which "
-            "absorption deliberately never forms. Reduce the cardinality of that "
-            "control, or drop it, to use ci=."
-        )
-        raise NotImplementedError(msg)
+    if profile.fe_names:
+        df_prepped, profile = _expand_fixed_effects(df_prepped, profile)
 
     edges = np.asarray(profile.bin_edges, dtype=float)
     num_bins = profile.num_bins

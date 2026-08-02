@@ -59,7 +59,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
     df_clean, is_lazy, numeric_controls, categorical_controls = clean_df(
         df, controls_tuple, x, y
     )
-    df_with_features, regression_features, absorbed_fe = add_regression_features(
+    df_with_features, regression_features, absorbed_fes = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
@@ -88,7 +88,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
         regression_features=regression_features,
         polynomial_features=polynomial_features,
         x_bounds=(quantiles[0], quantiles[-1]),
-        fe_name=absorbed_fe,
+        fe_names=absorbed_fes,
     )
     df_with_bins = configure_add_bins(profile)(df_with_features, quantiles)
     return df_with_bins, profile
@@ -246,13 +246,13 @@ def _get_rot_bins(
         x,
         y,
     )
-    df_with_features, regression_features, absorbed_fe = add_regression_features(
+    df_with_features, regression_features, absorbed_fes = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
     return _select_rule_of_thumb_bins(
-        df_with_features, x, y, regression_features, absorbed_fe
+        df_with_features, x, y, regression_features, absorbed_fes
     )
 
 
@@ -269,12 +269,12 @@ def _get_dpi_bins(
         x,
         y,
     )
-    df_with_features, regression_features, absorbed_fe = add_regression_features(
+    df_with_features, regression_features, absorbed_fes = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
-    return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fe)
+    return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fes)
 
 
 @pytest.mark.parametrize(
@@ -1750,7 +1750,7 @@ def test_configure_build_dummies_pyspark():
 
 
 def test_maybe_add_regression_features_with_categorical():
-    """Test that maybe_add_regression_features integrates dummy builders correctly."""
+    """Categorical controls are absorbed rather than encoded into the feature block."""
     df_pd = pd.DataFrame(
         {
             "x": [1, 2, 3, 4, 5, 6],
@@ -1768,10 +1768,9 @@ def test_maybe_add_regression_features_with_categorical():
         categorical_controls=("cat_ctrl",),
     )
 
-    # cat_ctrl has 2 levels, well under ABSORB_MIN_LEVELS, so it is one-hot encoded.
-    assert absorbed is None
-    assert "num_ctrl" in features
-    assert len(features) == 2  # num_ctrl + 1 dummy
+    # cat_ctrl is absorbed as a fixed effect, so it never reaches the dummy builder.
+    assert absorbed == ("cat_ctrl",)
+    assert features == ("num_ctrl",)
 
     # Verify the dataframe has the features
     result = df_with_features.collect()

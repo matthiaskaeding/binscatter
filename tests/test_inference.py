@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from statistics import NormalDist
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -20,7 +21,7 @@ import pytest
 import statsmodels.api as sm
 from binsreg import binsreg as binsreg_fit
 
-from binscatter import binscatter
+from binscatter import binscatter, core
 from tests.conftest import DF_BACKENDS, convert_to_backend, to_pandas_native
 
 BINSREG_SIM_PATH = Path(__file__).resolve().parents[1] / "data" / "binsreg_sim.csv"
@@ -401,15 +402,15 @@ def test_ci_level_is_ignored_when_intervals_are_off():
     assert "ci_lower" not in result.columns
 
 
-def test_absorbed_fixed_effect_raises_a_pointed_error():
-    """Absorption never forms the group block the sandwich variance needs."""
+def test_high_cardinality_fixed_effect_raises_a_pointed_error():
+    """Beyond the budget the fixed-effect block is too costly to put back."""
     rng = np.random.default_rng(5)
-    n = 4_000
-    firm = rng.integers(0, 120, size=n)  # above ABSORB_MIN_LEVELS
+    n = 20_000
+    firm = rng.integers(0, 800, size=n)  # above CI_MAX_FE_LEVELS
     x = rng.normal(size=n)
     y = 1.1 * x + firm * 0.01 + rng.normal(size=n)
     df = pd.DataFrame({"x": x, "y": y, "firm": firm})
-    with pytest.raises(NotImplementedError, match="absorbed as a fixed effect"):
+    with pytest.raises(NotImplementedError, match="fixed-effect cardinality"):
         binscatter(
             df,
             "x",
@@ -419,6 +420,45 @@ def test_absorbed_fixed_effect_raises_a_pointed_error():
             num_bins=6,
             ci="pointwise",
             return_type="native",
+        )
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "rbc"])
+def test_intervals_survive_an_absorbed_fixed_effect(kind):
+    """A modest categorical control is absorbed for estimation but re-encoded here.
+
+    The interval must match what the one-hot path produces, since the two designs
+    have identical fitted values -- otherwise absorption would silently drop the
+    fixed effect from the sandwich.
+    """
+    rng = np.random.default_rng(11)
+    n = 4_000
+    firm = rng.integers(0, 20, size=n)
+    x = rng.normal(size=n)
+    y = 1.1 * x + firm * 0.05 + rng.normal(size=n)
+    df = pd.DataFrame({"x": x, "y": y, "firm": firm})
+
+    kwargs = {
+        "controls": ["firm"],
+        "categorical": ["firm"],
+        "num_bins": 6,
+        "ci": kind,
+        "ci_level": 0.95,
+        "return_type": "native",
+    }
+    absorbed = binscatter(df, "x", "y", **kwargs)
+    assert np.all(np.isfinite(absorbed["ci_std_error"].to_numpy()))
+    assert np.all(absorbed["ci_lower"].to_numpy() < absorbed["ci_upper"].to_numpy())
+
+    with mock.patch.object(core, "select_absorbed", lambda *a, **k: ()):
+        one_hot = binscatter(df, "x", "y", **kwargs)
+
+    for column in ("ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            absorbed[column].to_numpy(),
+            one_hot[column].to_numpy(),
+            rtol=1e-8,
+            atol=1e-8,
         )
 
 
