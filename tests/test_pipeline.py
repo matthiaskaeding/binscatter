@@ -57,6 +57,7 @@ def test_constant_categorical_falls_through_to_the_dummy_path(df_type):
     assert features == ()
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_every_categorical_is_absorbed(df_type):
     """All categorical controls are absorbed, highest cardinality first."""

@@ -148,6 +148,7 @@ def _run(df: pd.DataFrame, num_bins: int, controls=None) -> pd.DataFrame:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @PROPERTY_SETTINGS
 @given(frames())
 def test_produces_requested_bins_with_contiguous_labels(case):
@@ -340,6 +341,7 @@ def test_non_positive_bin_counts_are_rejected(case, num_bins):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.quick
 @PROPERTY_SETTINGS
 @given(data=st.data())
 def test_rows_with_missing_or_non_finite_values_are_ignored(data):

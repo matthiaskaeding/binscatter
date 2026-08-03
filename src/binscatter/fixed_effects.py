@@ -383,6 +383,26 @@ class FEProjector:
         raise ValueError(msg)
 
 
+def free_aliases(df: nw.LazyFrame, stems: Sequence[str]) -> dict[str, str]:
+    """Map each stem to a column name the frame does not already carry.
+
+    ``__fe_count`` and friends are valid column names, so a caller may legitimately
+    have one. Aggregating into a name the frame already holds fails at collect time
+    with a message about a duplicate insert, which says nothing about the cause -- so
+    the aggregation temporaries step aside instead of assuming the namespace is
+    theirs, the same way ``binscatter`` already suffixes its bin column.
+    """
+    taken = set(df.collect_schema().names())
+    aliases: dict[str, str] = {}
+    for stem in stems:
+        name = stem
+        while name in taken:
+            name = f"{name}_"
+        taken.add(name)
+        aliases[stem] = name
+    return aliases
+
+
 @dataclass
 class FEMoments:
     """Group-level sufficient statistics for the absorbed categoricals.
@@ -570,7 +590,11 @@ def compute_fe_moments(
     position, because ``group_by`` output order is not stable across backends.
     """
     response_names = list(response_exprs)
-    aliases = {name: f"__fe_resp_{i}" for i, name in enumerate(response_names)}
+    free = free_aliases(
+        df, [_FE_COUNT, *(f"__fe_resp_{i}" for i in range(len(response_names)))]
+    )
+    count_alias = free[_FE_COUNT]
+    aliases = {name: free[f"__fe_resp_{i}"] for i, name in enumerate(response_names)}
 
     # Materialize derived responses before grouping. Dask rejects non-elementary
     # aggregations such as (col * col).sum() inside group_by, so the expression has
@@ -579,7 +603,7 @@ def compute_fe_moments(
         *(response_exprs[name].alias(aliases[name]) for name in response_names)
     )
 
-    group_aggs = [nw.len().alias(_FE_COUNT)]
+    group_aggs = [nw.len().alias(count_alias)]
     group_aggs += [
         nw.col(aliases[name]).sum().alias(aliases[name]) for name in response_names
     ]
@@ -611,7 +635,7 @@ def compute_fe_moments(
         level_index.append(index)
         cell_codes[:, f] = [index[label] for label in labels]
 
-    cell_weights = cells.get_column(_FE_COUNT).to_numpy().astype(float)
+    cell_weights = cells.get_column(count_alias).to_numpy().astype(float)
     counts = tuple(
         np.bincount(
             cell_codes[:, f], weights=cell_weights, minlength=len(level_index[f])
@@ -652,7 +676,7 @@ def compute_fe_moments(
     else:
         bin_index = {label: i for i, label in enumerate(bin_labels)}
         crosstab = (
-            df.group_by(*fe_names, bin_name).agg(nw.len().alias(_FE_COUNT)).collect()
+            df.group_by(*fe_names, bin_name).agg(nw.len().alias(count_alias)).collect()
         )
         num_rows = crosstab.shape[0]
         crosstab_codes = np.empty((num_rows, len(fe_names)), dtype=np.int64)
@@ -666,7 +690,7 @@ def compute_fe_moments(
             dtype=np.int64,
             count=num_rows,
         )
-        crosstab_counts = crosstab.get_column(_FE_COUNT).to_numpy().astype(float)
+        crosstab_counts = crosstab.get_column(count_alias).to_numpy().astype(float)
 
         # Flatten (level, bin) into a single index so each factor's block is one
         # bincount, rather than materializing a dense (crosstab rows x J) indicator.
