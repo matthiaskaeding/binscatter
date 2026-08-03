@@ -62,6 +62,41 @@ def _sorted_native(result) -> pd.DataFrame:
     return to_pandas_native(result).sort_values("bin").reset_index(drop=True)
 
 
+def _make_multi_control_frame(seed: int = 11, n: int = 900) -> pd.DataFrame:
+    """Synthetic data with a numeric control and two categorical controls.
+
+    ``g`` has four levels, ``h`` has three, and both are well under the
+    fixed-effect absorption threshold, so ``binscatter`` reaches them as
+    ordinary dummy-encoded controls rather than absorbing them.
+    """
+    rng = np.random.default_rng(seed)
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    g = rng.choice(list("abcd"), size=n)
+    h = rng.choice(["lo", "mid", "hi"], size=n)
+    g_effect = pd.Series(g).map({"a": 0.0, "b": 1.0, "c": -1.0, "d": 2.0}).to_numpy()
+    h_effect = pd.Series(h).map({"lo": -0.5, "mid": 0.3, "hi": 1.1}).to_numpy()
+    y = 1.2 * x + 0.5 * z + g_effect + h_effect + rng.normal(scale=0.7, size=n)
+    return pd.DataFrame({"x": x, "y": y, "z": z, "g": g, "h": h})
+
+
+def _binsreg_w(df: pd.DataFrame, controls: list[str]) -> np.ndarray:
+    """Build binsreg's ``w`` matrix, dummy-encoding categoricals as binscatter does.
+
+    binsreg has no notion of a categorical control -- it only accepts numeric
+    columns in ``w`` -- so this reproduces binscatter's own encoding
+    (``drop_first=True``, alphabetically sorted levels) by hand.
+    """
+    blocks = []
+    for name in controls:
+        column = df[name]
+        if pd.api.types.is_numeric_dtype(column):
+            blocks.append(column.to_numpy(dtype=float).reshape(-1, 1))
+        else:
+            blocks.append(pd.get_dummies(column, drop_first=True).to_numpy(dtype=float))
+    return np.column_stack(blocks)
+
+
 # ---------------------------------------------------------------------------
 # Agreement with binsreg's own robust bias-corrected intervals
 # ---------------------------------------------------------------------------
@@ -112,6 +147,67 @@ def test_rbc_matches_binsreg_reference(controls):
         atol=1e-6,
     )
     # Asking for intervals must not move the dots.
+    np.testing.assert_allclose(
+        ours["y"].to_numpy(float), ref_dots["fit"].to_numpy(float), rtol=1e-6, atol=1e-6
+    )
+
+
+@pytest.mark.quick
+@pytest.mark.parametrize(
+    "controls",
+    [["g"], ["z", "g"], ["g", "h"], ["z", "g", "h"]],
+    ids=[
+        "one_categorical",
+        "numeric_and_categorical",
+        "two_categoricals",
+        "numeric_and_two_categoricals",
+    ],
+)
+def test_rbc_matches_binsreg_reference_with_categorical_controls(controls):
+    """``ci="rbc"`` agrees with binsreg when controls include several categoricals.
+
+    ``test_rbc_matches_binsreg_reference`` above only exercises numeric controls,
+    up to two of them, from the binsreg simulation data. Categorical controls take
+    a different path internally (dummy-encoded rather than passed through as-is),
+    so they get their own comparison here, including combinations with more than
+    one categorical and a mix of numeric and categorical.
+    """
+    df = _make_multi_control_frame()
+    num_bins = 6
+    w = _binsreg_w(df, controls)
+
+    ours = _sorted_native(
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=controls,
+            num_bins=num_bins,
+            ci="rbc",
+            return_type="native",
+        )
+    )
+    reference = binsreg_fit(
+        df["y"], df["x"], w=w, nbins=num_bins, ci=(1, 1), noplot=True
+    ).data_plot[0]
+    ref_ci = reference.ci.sort_values("bin").reset_index(drop=True)
+    ref_dots = reference.dots.sort_values("bin").reset_index(drop=True)
+
+    np.testing.assert_allclose(
+        ours["x"].to_numpy(float), ref_ci["x"].to_numpy(float), rtol=1e-8, atol=1e-8
+    )
+    np.testing.assert_allclose(
+        ours["ci_lower"].to_numpy(float),
+        ref_ci["ci_l"].to_numpy(float),
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        ours["ci_upper"].to_numpy(float),
+        ref_ci["ci_r"].to_numpy(float),
+        rtol=1e-6,
+        atol=1e-6,
+    )
     np.testing.assert_allclose(
         ours["y"].to_numpy(float), ref_dots["fit"].to_numpy(float), rtol=1e-6, atol=1e-6
     )
