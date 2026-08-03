@@ -1124,6 +1124,21 @@ def test_partial_out_controls_matches_statsmodels(df_type):
     beta_actual = coeffs["beta"] - coeffs["beta"][0]
     np.testing.assert_allclose(beta_actual, beta_ref, rtol=rtol, atol=atol)
 
+    # The control coefficients themselves, not just their contribution to the
+    # dots. `fitted` above pins only the scalar `mean_controls @ gamma`, so a
+    # gamma wrong in a direction orthogonal to the control means -- one control's
+    # coefficient traded against another's -- would leave every assertion above
+    # intact. The reference blocks are stacked in `regression_features` order,
+    # which is what makes the two vectors comparable element by element.
+    np.testing.assert_allclose(coeffs["gamma"], gamma, rtol=rtol, atol=atol)
+
+    # Exact-quantile backends cut the same bins as the reference, so the bin
+    # coefficients are comparable at their level and not merely up to a common
+    # shift. The distributed backends bin slightly differently and are left with
+    # the shift-invariant check above.
+    if df_type not in ("dask", "pyspark"):
+        np.testing.assert_allclose(coeffs["beta"], beta, rtol=rtol, atol=atol)
+
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_partial_out_controls_coefficients_across_backends(df_type):
@@ -1217,8 +1232,15 @@ def test_partial_out_controls_coefficients_across_backends(df_type):
     )
 
 
+@pytest.mark.parametrize("degree", [1, 2, 3])
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_fit_polynomial_line_matches_statsmodels(df_type):
+def test_fit_polynomial_line_matches_statsmodels(df_type, degree):
+    """Overlay coefficients at every degree the API accepts.
+
+    ``poly_line`` takes 1, 2 or 3; this ran only at 2, so the linear and cubic
+    designs -- one term short and one term long -- were never checked against an
+    oracle at all.
+    """
     rng = np.random.default_rng(1234)
     n = 400
     x = rng.normal(loc=0.5, scale=1.5, size=n)
@@ -1235,9 +1257,10 @@ def test_fit_polynomial_line_matches_statsmodels(df_type):
         poly_degree=3,
     )
     cache: dict[str, float] = {}
-    poly_fit = _fit_polynomial_line(df_prepped, profile, degree=2, cache=cache)
+    poly_fit = _fit_polynomial_line(df_prepped, profile, degree=degree, cache=cache)
 
-    design = np.column_stack([np.ones(n), x, x**2, z])
+    powers = [x**power for power in range(1, degree + 1)]
+    design = np.column_stack([np.ones(n), *powers, z])
     theta, *_ = np.linalg.lstsq(design, y, rcond=None)
     # Use looser tolerance for distributed backends
     if df_type in ("dask", "pyspark"):
@@ -1245,6 +1268,91 @@ def test_fit_polynomial_line_matches_statsmodels(df_type):
     else:
         rtol = 1e-6
     np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=rtol)
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3])
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_fit_polynomial_line_matches_statsmodels_with_categorical_controls(
+    df_type, degree
+):
+    """The overlay's controls go through the same dummy encoding as the dots.
+
+    The other overlay test uses a single numeric control, so the encoded block
+    never reached this fit under test. The reference stacks the dummies in
+    ``regression_features`` order, ``drop_first=True``, as binscatter does.
+    """
+    rng = np.random.default_rng(99)
+    n = 900
+    x = rng.normal(loc=0.5, scale=1.5, size=n)
+    z = rng.normal(size=n)
+    region = rng.choice(["north", "south", "east"], size=n, p=[0.4, 0.35, 0.25])
+    region_effect = np.vectorize({"north": 0.5, "south": -0.2, "east": 0.1}.get)(region)
+    y = (
+        1.2
+        + 0.9 * x
+        - 0.3 * x**2
+        + 0.5 * z
+        + region_effect
+        + rng.normal(scale=0.2, size=n)
+    )
+    df = pd.DataFrame({"x0": x, "y0": y, "z": z, "region": region})
+    df_backend = conv(df, df_type)
+    df_prepped, profile = _prepare_dataframe(
+        df_backend,
+        x="x0",
+        y="y0",
+        controls=["z", "region"],
+        num_bins=10,
+        poly_degree=3,
+    )
+    cache: dict[str, float] = {}
+    poly_fit = _fit_polynomial_line(df_prepped, profile, degree=degree, cache=cache)
+
+    powers = [x**power for power in range(1, degree + 1)]
+    dummies = pd.get_dummies(df["region"], drop_first=True).to_numpy(float)
+    design = np.column_stack([np.ones(n), *powers, z, dummies])
+    theta, *_ = np.linalg.lstsq(design, y, rcond=None)
+    rtol = 1e-3 if df_type in ("dask", "pyspark") else 1e-6
+    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=rtol)
+
+
+@pytest.mark.parametrize("degree", [1, 2, 3])
+@pytest.mark.parametrize("controls", [None, ["w"]], ids=["no_controls", "one_control"])
+def test_poly_line_curve_matches_binsreg(controls, degree):
+    """The drawn overlay, not just the coefficients behind it.
+
+    Nothing checked the curve itself against an outside reference: the
+    coefficient tests stop before evaluation, and the fixed-effect test compares
+    two of our own routes. Evaluation is where ``control_means`` enters, so a
+    curve drawn at the wrong control baseline would pass every other overlay
+    test while sitting visibly off the dots.
+
+    binsreg draws the same overlay under ``polyreg=``, on its own grid. Rather
+    than interpolate ours onto that grid -- which would leave curvature-sized
+    error and force a tolerance loose enough to hide real drift -- the polynomial
+    is recovered exactly from our own grid and evaluated at binsreg's points.
+    """
+    matplotlib = pytest.importorskip("matplotlib")
+    matplotlib.use("Agg")
+
+    df = _load_binsreg_sim_data()
+    w = df[controls] if controls else None
+    # binsreg only populates `poly` on the plotting path, so noplot stays off and
+    # the Agg backend above keeps it from opening a window.
+    reference = binsreg_fit(df["y"], df["x"], w=w, nbins=5, polyreg=degree).data_plot[0]
+    ref_poly = reference.poly
+
+    figure = binscatter(df, "x", "y", controls=controls, num_bins=5, poly_line=degree)
+    traces = [t for t in figure.data if t.name and t.name.startswith("Polynomial fit")]
+    assert len(traces) == 1
+    ours_x = np.asarray(traces[0].x, dtype=float)
+    ours_y = np.asarray(traces[0].y, dtype=float)
+
+    recovered = np.polyfit(ours_x, ours_y, degree)
+    evaluated = np.polyval(recovered, ref_poly["x"].to_numpy(float))
+    np.testing.assert_allclose(
+        evaluated, ref_poly["fit"].to_numpy(float), rtol=1e-8, atol=1e-8
+    )
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
