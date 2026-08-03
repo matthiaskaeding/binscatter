@@ -25,11 +25,13 @@ from plotly import graph_objects as go
 from binscatter.dummy_builders import configure_build_dummies
 from binscatter.fixed_effects import (
     FEMoments,
+    FEProjector,
     compute_fe_moments,
     demean_centered,
-    group_codes,
+    factor_codes,
     recover_levels,
     select_absorbed,
+    symmetrize,
     within_correct,
 )
 from binscatter.inference import IntervalResult, compute_intervals
@@ -231,7 +233,7 @@ def binscatter(
         len(categorical_columns),
     )
 
-    df_with_regression_features, regression_features, absorbed_fe = (
+    df_with_regression_features, regression_features, absorbed_fes = (
         add_regression_features(
             df,
             numeric_controls=numeric_columns,
@@ -258,14 +260,14 @@ def binscatter(
 
     if auto_bins == "rot":
         computed_num_bins = _select_rule_of_thumb_bins(
-            df_with_regression_features, x, y, regression_features, absorbed_fe
+            df_with_regression_features, x, y, regression_features, absorbed_fes
         )
         logger.info(
             "Selected %d bins using rule-of-thumb (ROT) selector", computed_num_bins
         )
     elif auto_bins == "dpi":
         computed_num_bins = _select_dpi_bins(
-            df_with_regression_features, x, y, regression_features, absorbed_fe
+            df_with_regression_features, x, y, regression_features, absorbed_fes
         )
         logger.info(
             "Selected %d bins using direct plug-in (DPI) selector", computed_num_bins
@@ -317,7 +319,7 @@ def binscatter(
         is_lazy_input=is_lazy_input,
         implementation=df.implementation,
         x_bounds=(unique_quantiles[0], unique_quantiles[-1]),
-        fe_name=absorbed_fe,
+        fe_names=absorbed_fes,
         bin_edges=unique_quantiles,
     )
     add_bins = configure_add_bins(profile)
@@ -407,7 +409,9 @@ class Profile(NamedTuple):
     regression_features: tuple[str, ...]
     polynomial_features: tuple[str, ...]
     x_bounds: tuple[float, float]
-    fe_name: str | None = None
+    #: Categorical controls absorbed as fixed effects rather than one-hot encoded,
+    #: ordered by descending cardinality. Empty when there are none.
+    fe_names: tuple[str, ...] = ()
     #: The ``num_bins + 1`` quantile boundaries the bins were cut on. Only the
     #: inference path needs them; everything else works off the bin labels.
     bin_edges: tuple[float, ...] = ()
@@ -565,26 +569,30 @@ def partial_out_controls(
     bin_y = sum_y.astype(float, copy=False)
 
     fe_moments: FEMoments | None = None
-    if profile.fe_name is not None:
+    fe_alphas: dict[str, np.ndarray] = {}
+    if profile.fe_names:
         fe_moments = compute_fe_moments(
             df_prepped,
-            fe_name=profile.fe_name,
+            fe_names=profile.fe_names,
             bin_name=profile.bin_name,
             bin_labels=per_bin.get_column(profile.bin_name).to_list(),
             feature_names=profile.regression_features,
             response_exprs={"y": profile.y_col},
         )
-        inv = fe_moments.inv_counts
-        s_bin = fe_moments.bin_counts
+        # One stacked projection covers every block below; with several factors the
+        # solve is iterative, so doing it once rather than per block matters.
+        fe_alphas = fe_moments.solve_all()
+        s_bin = fe_moments.bin_sums
         s_feat = fe_moments.feature_sums
-        s_y = fe_moments.response_sums["y"]
 
-        bin_block = within_correct(bin_block, s_bin, s_bin, inv)
-        bin_y = within_correct(bin_y, s_bin, s_y, inv)
+        bin_block = symmetrize(within_correct(bin_block, s_bin, fe_alphas["bins"]))
+        bin_y = within_correct(bin_y, s_bin, fe_alphas["y"])
         if k:
-            bin_control_sums = within_correct(bin_control_sums, s_bin, s_feat, inv)
-            ww = within_correct(ww, s_feat, s_feat, inv)
-            wy = within_correct(wy, s_feat, s_y, inv)
+            bin_control_sums = within_correct(
+                bin_control_sums, s_bin, fe_alphas["features"]
+            )
+            ww = symmetrize(within_correct(ww, s_feat, fe_alphas["features"]))
+            wy = within_correct(wy, s_feat, fe_alphas["y"])
 
     XTX = np.zeros((size, size), dtype=float)
     XTy = np.zeros(size, dtype=float)
@@ -601,10 +609,9 @@ def partial_out_controls(
     if fe_moments is None:
         theta = _solve_normal_equations(XTX, XTy)
     else:
-        # The within system is rank-deficient by exactly one (demeaned bin dummies
-        # sum to zero row-wise), and a near-singular matrix often makes
-        # np.linalg.solve return garbage rather than raise, so go straight to the
-        # minimum-norm solution.
+        # The within system is rank-deficient (demeaned bin dummies sum to zero
+        # row-wise), and a near-singular matrix often makes np.linalg.solve return
+        # garbage rather than raise, so go straight to the minimum-norm solution.
         theta = np.linalg.lstsq(XTX, XTy, rcond=None)[0]
 
     beta = theta[:num_bins]
@@ -612,7 +619,7 @@ def partial_out_controls(
     mean_controls = total_ctrl_sums / total_count if k else np.array([])
     fitted = beta + (mean_controls @ gamma if k else 0.0)
     if fe_moments is not None:
-        fitted = fitted + recover_levels(fe_moments, beta, gamma, "y")
+        fitted = fitted + recover_levels(fe_moments, fe_alphas, beta, gamma, "y")
 
     y_vals = nw.new_series(
         name=profile.y_name, values=fitted, backend=per_bin.implementation
@@ -684,24 +691,22 @@ def _fit_polynomial_line(
         xtx[1:, 0] = column_sums
 
     fe_level = 0.0
-    if profile.fe_name is not None and feature_names:
+    if profile.fe_names and feature_names:
         # Absorbing removes the intercept, so the design is the features alone.
         # The overlay level is restored from the mean fixed effect, exactly as in
         # partial_out_controls.
         moments = compute_fe_moments(
             df_prepped,
-            fe_name=profile.fe_name,
+            fe_names=profile.fe_names,
             feature_names=feature_names,
             response_exprs={"y": profile.y_col},
         )
-        inv = moments.inv_counts
+        alphas = moments.solve_all()
         s_feat = moments.feature_sums
-        s_y = moments.response_sums["y"]
-        within_xtx = within_correct(xtx[1:, 1:], s_feat, s_feat, inv)
-        within_xty = within_correct(xty[1:], s_feat, s_y, inv)
+        within_xtx = symmetrize(within_correct(xtx[1:, 1:], s_feat, alphas["features"]))
+        within_xty = within_correct(xty[1:], s_feat, alphas["y"])
         feature_coefs = _solve_normal_equations(within_xtx, within_xty)
-        alpha = inv * (s_y - s_feat @ feature_coefs)
-        fe_level = float(moments.counts @ alpha / moments.total_count)
+        fe_level = recover_levels(moments, alphas, np.array([]), feature_coefs, "y")
         coefficients = np.concatenate([[0.0], feature_coefs])
     else:
         coefficients = _solve_normal_equations(xtx, xty)
@@ -1033,7 +1038,7 @@ def _select_rule_of_thumb_bins(
     x: str,
     y: str,
     regression_features: tuple[str, ...],
-    fe_name: str | None = None,
+    fe_names: tuple[str, ...] = (),
 ) -> int:
     """Implement the SA-4.1 rule-of-thumb selector (currently for p=0, v=0)."""
     data_cols: tuple[str, ...] = (x, *regression_features)
@@ -1072,7 +1077,7 @@ def _select_rule_of_thumb_bins(
             xtx[idx + 1, jdx + 1] = value
             xtx[jdx + 1, idx + 1] = value
 
-    if fe_name is None:
+    if not fe_names:
         beta_y = _solve_normal_equations(xtx, xty)
         beta_y_sq = _solve_normal_equations(xtx, xty_sq)
         # With an intercept in the design, OLS fitted values sum to the response
@@ -1081,22 +1086,22 @@ def _select_rule_of_thumb_bins(
         design_xtx = xtx
         slope_index = 1
     else:
-        # Absorbing the fixed effect kills the intercept, so the design is the data
+        # Absorbing the fixed effects kills the intercept, so the design is the data
         # columns alone, within-transformed via their group sums.
         moments = compute_fe_moments(
             df,
-            fe_name=fe_name,
+            fe_names=fe_names,
             feature_names=data_cols,
             response_exprs={"y": nw.col(y), "y_sq": nw.col(y) * nw.col(y)},
         )
-        inv = moments.inv_counts
+        alphas = moments.solve_all()
         s_feat = moments.feature_sums
         s_y = moments.response_sums["y"]
-        design_xtx = within_correct(xtx[1:, 1:], s_feat, s_feat, inv)
-        design_xty = within_correct(xty[1:], s_feat, s_y, inv)
+        design_xtx = symmetrize(within_correct(xtx[1:, 1:], s_feat, alphas["features"]))
+        design_xty = within_correct(xty[1:], s_feat, alphas["y"])
         beta_y = _solve_normal_equations(design_xtx, design_xty)
         # Within-transformed total sum of squares for y.
-        sum_y_sq_resid = float(xty_sq[0] - s_y @ (inv * s_y))
+        sum_y_sq_resid = float(xty_sq[0] - s_y @ alphas["y"])
         slope_index = 0
 
     # Sample moments of x for the Gaussian reference density.
@@ -1154,14 +1159,12 @@ def _select_dpi_bins(
     x: str,
     y: str,
     regression_features: tuple[str, ...],
-    fe_name: str | None = None,
+    fe_names: tuple[str, ...] = (),
 ) -> int:
     """Implement the SA-4.2 direct plug-in selector (for p=0, s=0, v=0)."""
-    pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features, fe_name)
+    pilot_bins = _select_rule_of_thumb_bins(df, x, y, regression_features, fe_names)
 
-    required_cols = (x, y) + regression_features
-    if fe_name is not None:
-        required_cols = required_cols + (fe_name,)
+    required_cols = (x, y) + regression_features + fe_names
     collected = df.select(*(nw.col(col) for col in required_cols)).collect()
     native = collected.to_pandas()
 
@@ -1175,7 +1178,7 @@ def _select_dpi_bins(
     else:
         controls = None
 
-    raw_groups = native[fe_name].to_numpy() if fe_name is not None else None
+    raw_groups = [native[name].to_numpy() for name in fe_names]
 
     mask = np.isfinite(x_values) & np.isfinite(y_values)
     if controls is not None:
@@ -1186,8 +1189,7 @@ def _select_dpi_bins(
         y_values = y_values[mask]
         if controls is not None:
             controls = controls[mask]
-        if raw_groups is not None:
-            raw_groups = raw_groups[mask]
+        raw_groups = [col[mask] for col in raw_groups]
 
     n_obs = x_values.size
     if n_obs < 5:
@@ -1199,19 +1201,20 @@ def _select_dpi_bins(
     if controls is not None:
         controls = controls - controls.mean(axis=0)
 
-    fe_codes: np.ndarray | None = None
-    fe_counts: np.ndarray | None = None
-    if raw_groups is not None:
-        # Project out centered group effects rather than the full group-indicator
-        # space. This preserves the intercept, so the DPI bin coefficients stay on
-        # the sample-average outcome level instead of becoming rank-deficient.
+    projector: FEProjector | None = None
+    row_codes: np.ndarray | None = None
+    if raw_groups:
+        # Project out centered fixed effects rather than the full indicator space.
+        # This preserves the intercept, so the DPI bin coefficients stay on the
+        # sample-average outcome level instead of becoming rank-deficient.
         # x stays raw because bins are formed on the original scale.
-        fe_codes, fe_counts = group_codes(raw_groups)
-        y_values = demean_centered(y_values, fe_codes, fe_counts)
+        row_codes = factor_codes(raw_groups)
+        projector = FEProjector.from_row_codes(row_codes, fe_names)
+        y_values = demean_centered(y_values, projector, row_codes)
         if controls is not None:
             controls = np.column_stack(
                 [
-                    demean_centered(controls[:, j], fe_codes, fe_counts)
+                    demean_centered(controls[:, j], projector, row_codes)
                     for j in range(controls.shape[1])
                 ]
             )
@@ -1221,8 +1224,8 @@ def _select_dpi_bins(
         y_values,
         controls,
         pilot_bins,
-        fe_codes,
-        fe_counts,
+        projector,
+        row_codes,
     )
     if constants is None:
         return pilot_bins
@@ -1246,12 +1249,12 @@ def _estimate_dpi_imse_constants(
     y_values: np.ndarray,
     controls: np.ndarray | None,
     pilot_bins: int,
-    fe_codes: np.ndarray | None = None,
-    fe_counts: np.ndarray | None = None,
+    projector: FEProjector | None = None,
+    row_codes: np.ndarray | None = None,
 ) -> tuple[float, float] | None:
     """Compute the IMSE bias/variance constants for the DPI selector.
 
-    When ``fe_codes`` is given the caller has already removed centered fixed effects
+    When ``projector`` is given the caller has already removed centered fixed effects
     from ``y_values`` and ``controls``. The spline design and bin dummies receive the
     same projection here so the whole system stays consistent with
     Frisch-Waugh-Lovell while retaining the intercept.
@@ -1280,12 +1283,12 @@ def _estimate_dpi_imse_constants(
     interior_knots = edges[1:-1]
     spline_design = _linear_spline_design(x_norm, interior_knots)
     fit_design = spline_design
-    if fe_codes is not None and fe_counts is not None:
+    if projector is not None and row_codes is not None:
         # Remove centered group effects from the basis. In particular, the intercept
         # remains one rather than collapsing to zero.
         fit_design = np.column_stack(
             [
-                demean_centered(spline_design[:, j], fe_codes, fe_counts)
+                demean_centered(spline_design[:, j], projector, row_codes)
                 for j in range(spline_design.shape[1])
             ]
         )
@@ -1316,8 +1319,8 @@ def _estimate_dpi_imse_constants(
         controls,
         bin_idx,
         bin_counts,
-        fe_codes,
-        fe_counts,
+        projector,
+        row_codes,
     )
     if variance_cons is None:
         return None
@@ -1385,6 +1388,149 @@ def _compute_dpi_bias_constant(
 
 
 def _compute_dpi_variance_constant(
+    y_values: np.ndarray,
+    controls: np.ndarray | None,
+    bin_idx: np.ndarray,
+    bin_counts: np.ndarray,
+    projector: FEProjector | None = None,
+    row_codes: np.ndarray | None = None,
+) -> float | None:
+    """Dispatch the DPI sandwich variance on how many fixed effects are absorbed.
+
+    With at most one factor the projected bin dummies are expressible from the
+    (level, bin) crosstab alone, so :func:`_dpi_variance_implicit` never forms the
+    ``n x J`` design. With several factors the projection is not a single group
+    share and the residual-weighted meat genuinely needs per-row values, so
+    :func:`_dpi_variance_dense` builds the design in bounded chunks instead.
+    """
+    if projector is None or row_codes is None:
+        return _dpi_variance_implicit(y_values, controls, bin_idx, bin_counts)
+    if projector.num_factors == 1:
+        return _dpi_variance_implicit(
+            y_values,
+            controls,
+            bin_idx,
+            bin_counts,
+            row_codes[:, 0],
+            projector.counts[0],
+        )
+    return _dpi_variance_dense(
+        y_values, controls, bin_idx, bin_counts, projector, row_codes
+    )
+
+
+#: Rows per chunk when accumulating the multi-way DPI sandwich. The projected bin
+#: dummy block is dense, so this caps its footprint at ``_DPI_CHUNK * J * 8`` bytes
+#: regardless of how many rows the selector collected.
+_DPI_CHUNK = 100_000
+
+
+def _projected_bin_dummies(
+    bin_idx: np.ndarray,
+    num_bins: int,
+    global_shares: np.ndarray,
+    alpha_bins: np.ndarray,
+    projector: FEProjector,
+    row_codes: np.ndarray,
+) -> np.ndarray:
+    """Return the centered-absorbed bin dummies for the given rows, ``(m, J)``.
+
+    Row ``i`` is ``e_b(i) - (D alpha)_i + global_shares``: the bin indicator with its
+    fixed-effect projection removed and the overall share added back, so the block
+    keeps the intercept instead of collapsing to zero.
+    """
+    block = np.zeros((bin_idx.size, num_bins), dtype=float)
+    block[np.arange(bin_idx.size), bin_idx] = 1.0
+    block -= projector.row_effects(alpha_bins, row_codes)
+    block += global_shares
+    return block
+
+
+def _dpi_variance_dense(
+    y_values: np.ndarray,
+    controls: np.ndarray | None,
+    bin_idx: np.ndarray,
+    bin_counts: np.ndarray,
+    projector: FEProjector,
+    row_codes: np.ndarray,
+) -> float | None:
+    """DPI sandwich variance with several fixed effects absorbed.
+
+    ``controls`` arrive already projected from the caller, so only the bin dummies
+    are transformed here. Bread and meat are accumulated over row chunks in two
+    passes -- the meat needs residuals, which need the coefficients the first pass
+    produces.
+    """
+    n_obs = y_values.size
+    num_bins = int(bin_counts.size)
+    q = 0 if controls is None else controls.shape[1]
+    size = num_bins + q
+    global_shares = bin_counts / n_obs
+
+    # D'B, the (level, bin) crosstab stacked over factors, then its projection.
+    bin_group_sums = np.concatenate(
+        [
+            np.bincount(
+                row_codes[:, f] * num_bins + bin_idx,
+                minlength=int(projector.counts[f].size) * num_bins,
+            )
+            .astype(float)
+            .reshape(int(projector.counts[f].size), num_bins)
+            for f in range(projector.num_factors)
+        ]
+    )
+    alpha_bins = projector.solve(bin_group_sums)
+
+    def design(start: int, stop: int) -> np.ndarray:
+        block = _projected_bin_dummies(
+            bin_idx[start:stop],
+            num_bins,
+            global_shares,
+            alpha_bins,
+            projector,
+            row_codes[start:stop],
+        )
+        if q:
+            assert controls is not None  # type narrowing for checker
+            return np.column_stack((block, controls[start:stop]))
+        return block
+
+    XtX = np.zeros((size, size), dtype=float)
+    XtY = np.zeros(size, dtype=float)
+    for start in range(0, n_obs, _DPI_CHUNK):
+        stop = min(start + _DPI_CHUNK, n_obs)
+        chunk = design(start, stop)
+        XtX += chunk.T @ chunk
+        XtY += chunk.T @ y_values[start:stop]
+
+    try:
+        params = np.linalg.solve(XtX, XtY)
+    except np.linalg.LinAlgError:
+        params = np.linalg.lstsq(XtX, XtY, rcond=None)[0]
+
+    XtUX = np.zeros_like(XtX)
+    for start in range(0, n_obs, _DPI_CHUNK):
+        stop = min(start + _DPI_CHUNK, n_obs)
+        chunk = design(start, stop)
+        u_sq = (y_values[start:stop] - chunk @ params) ** 2
+        XtUX += chunk.T @ (chunk * u_sq[:, None])
+
+    # Absorbing does not make the fixed effects free: they consume rank(D) - 1
+    # parameters beyond the design, the -1 being the intercept the bin dummies
+    # already span. The rank counts connected components, so a design that splits
+    # into separate blocks is not charged for the shifts between them. At F = 1
+    # this is the G - 1 the one-way path charges.
+    n_params = size + projector.rank - 1
+    dof = max(n_obs - n_params, 1)
+    XtUX *= n_obs / dof
+
+    XtX_inv = np.linalg.pinv(XtX)
+    cov = XtX_inv @ XtUX @ XtX_inv
+    cov_diag = np.clip(np.diag(cov[:num_bins, :num_bins]), 0.0, None)
+    return float(np.sum(bin_counts * cov_diag) / n_obs)
+
+
+def _dpi_variance_implicit(
     y_values: np.ndarray,
     controls: np.ndarray | None,
     bin_idx: np.ndarray,
@@ -1586,21 +1732,22 @@ def add_regression_features(
     df: nw.LazyFrame,
     numeric_controls: tuple[str, ...],
     categorical_controls: tuple[str, ...],
-) -> tuple[nw.LazyFrame, tuple[str, ...], str | None]:
+) -> tuple[nw.LazyFrame, tuple[str, ...], tuple[str, ...]]:
     """Inject numeric controls and one-hot categorical controls when requested.
 
-    The highest-cardinality categorical is absorbed rather than encoded, so it is
-    excluded from the dummies and returned as the third element. Remaining
-    categoricals are one-hot encoded as before and ride along inside the control
-    block, where the within correction handles them for free.
+    Categorical controls are absorbed as fixed effects rather than encoded, so they
+    are excluded from the dummies and returned as the third element. The one-hot
+    branch below is still reached for controls :func:`select_absorbed` declines (a
+    constant categorical), and is what :mod:`binscatter.inference` reuses to put the
+    fixed-effect block back into the sandwich variance.
     """
     if not numeric_controls and not categorical_controls:
-        return df, (), None
+        return df, (), ()
     if numeric_controls and not categorical_controls:
-        return df, numeric_controls, None
+        return df, numeric_controls, ()
 
     absorbed = select_absorbed(df, categorical_controls)
-    remaining = tuple(c for c in categorical_controls if c != absorbed)
+    remaining = tuple(c for c in categorical_controls if c not in absorbed)
     if not remaining:
         return df, numeric_controls, absorbed
 
