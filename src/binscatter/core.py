@@ -124,6 +124,11 @@ def binscatter(
             underlying regression function, built from the next-order fit; it is a valid
             interval for the true conditional mean and is deliberately not centred on the
             dot. Default ``"none"``.
+            The two differ in what they require of ``num_bins``: ``"pointwise"`` ignores
+            the smoothing bias, so it is only valid well above the IMSE-optimal bin count
+            and warns when an automatic selector chose it. ``"rbc"`` corrects that bias
+            and stays valid at the IMSE-optimal choice, so it works with the default
+            selector.
         ci_level: Confidence level used when ``ci`` is not ``"none"``. Default ``0.95``.
         kwargs: Extra keyword args forwarded to ``plotly.express.scatter`` when plotting.
 
@@ -334,12 +339,22 @@ def binscatter(
         )
 
     if ci != "none":
-        if auto_bins:
+        # Only the pointwise interval needs undersmoothing. At the IMSE-optimal bin
+        # count squared bias and variance are balanced by construction, so the
+        # smoothing bias is the same order as the standard error and an interval
+        # built from the variance alone under-covers. `rbc` is the standard fix for
+        # exactly that: it builds the interval from the next-order fit, which is
+        # what makes it valid *at* the IMSE-optimal choice. Warning there would
+        # steer users away from the one regime the construction exists to serve --
+        # binsreg likewise forces the bias-corrected degree when it selects the bin
+        # count itself, and does not warn.
+        if ci == "pointwise" and auto_bins:
             warnings.warn(
-                "Confidence intervals are only valid when the number of bins is well "
-                f"above the IMSE-optimal choice, but num_bins={final_num_bins} was "
-                f"picked by the {auto_bins.upper()} selector to minimise IMSE. Pass a "
-                "larger num_bins explicitly for intervals you can rely on.",
+                "ci='pointwise' is only valid when the number of bins is well above "
+                f"the IMSE-optimal choice, but num_bins={final_num_bins} was picked "
+                f"by the {auto_bins.upper()} selector to minimise IMSE. Pass a larger "
+                "num_bins explicitly, or use ci='rbc', which corrects the bias and so "
+                "stays valid at this bin count.",
                 stacklevel=2,
             )
         intervals = compute_intervals(df_prepped, profile, ci, float(ci_level))

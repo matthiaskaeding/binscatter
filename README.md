@@ -53,7 +53,7 @@ There are two styles, and they answer different questions:
 
 Use `ci_level` to change the level (default `0.95`). With `return_type="native"` the bounds come back as `ci_lower`, `ci_upper` and `ci_std_error` columns.
 
-Intervals are only trustworthy when the number of bins is well above the IMSE-optimal choice, so pass `num_bins` explicitly rather than relying on the automatic selectors — binscatter warns if you don't.
+The two also differ in what they ask of `num_bins`. `ci="pointwise"` ignores the smoothing bias, which at the IMSE-optimal bin count is the same size as the standard error — so it is only trustworthy well above that count, and binscatter warns when an automatic selector picked it. `ci="rbc"` corrects that bias, which is precisely what makes it valid *at* the IMSE-optimal choice, so it works with the default selector and does not warn.
 
 See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. Its lightweight source lives at [`examples/demo.ipynb`](examples/demo.ipynb); GitHub Actions executes it after relevant pushes to `main` and publishes the output separately so generated plots do not inflate the main branch. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 

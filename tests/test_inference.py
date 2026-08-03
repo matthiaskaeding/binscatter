@@ -10,6 +10,7 @@ the ``p=0`` estimator itself -- so the oracle is statsmodels with HC1 errors.
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from statistics import NormalDist
 
@@ -423,10 +424,29 @@ def test_absorbed_fixed_effect_raises_a_pointed_error():
 
 
 def test_warns_when_bins_were_chosen_to_minimise_imse():
-    """binsreg raises the same caveat: IMSE-optimal bin counts under-cover."""
+    """A pointwise interval at the IMSE-optimal bin count under-covers.
+
+    The bias and the standard error are the same order there by construction, and
+    ``pointwise`` accounts only for the latter.
+    """
     df = _make_frame()
     with pytest.warns(UserWarning, match="IMSE-optimal"):
         binscatter(df, "x", "y", ci="pointwise", return_type="native")
+
+
+def test_rbc_does_not_warn_under_automatic_bin_selection():
+    """Robust bias correction is valid *at* the IMSE-optimal bin count.
+
+    That is the whole point of building the interval from the next-order fit, so
+    warning here would steer users away from the regime ``rbc`` exists to serve.
+    binsreg likewise forces the bias-corrected degree when it selects the bin count
+    and stays silent.
+    """
+    df = _make_frame()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        binscatter(df, "x", "y", ci="rbc", return_type="native")
+    assert not [w for w in caught if "IMSE" in str(w.message)]
 
 
 def test_no_warning_when_bins_are_given_explicitly():
