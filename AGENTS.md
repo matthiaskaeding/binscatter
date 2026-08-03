@@ -27,11 +27,14 @@ make ok
 ## Testing
 
 ```bash
-# Fast tests (excludes PySpark)
-make ftest
+# Representative sample -- check with this first, while working
+make test-fast
 
-# Full test suite including PySpark
+# Whole suite, PySpark skipped -- the gate, run before committing
 make test
+
+# Whole suite including PySpark
+make test-spark
 
 # Run a single test
 uv run pytest tests/test_binscatter.py::test_name -v
@@ -40,7 +43,33 @@ uv run pytest tests/test_binscatter.py::test_name -v
 uv run pytest tests -k "polars"
 ```
 
+**Always check with `make test-fast` while iterating.** It is the representative
+sample -- tests marked `@pytest.mark.quick` on the exact backends only -- and takes
+about 18 seconds, against roughly two minutes for `make test` and considerably
+longer for `make test-spark`, which starts a JVM and reruns the whole backend matrix
+through it. Run `make test` before committing; leave `make test-spark` for changes
+that touch the PySpark paths.
+
+The sample is meant to hit each concern once: agreement with `binsreg`, control
+partialing, dummy encoding across backends, fixed-effect absorption, the inference
+intervals, quantile edge cases and the input-validation errors. Mark a new test
+`quick` when it covers a concern nothing else in the sample covers, not merely
+because it is fast. `--strict-markers` is on, so a misspelled marker fails rather
+than silently selecting nothing.
+
 PySpark tests are skipped by default. Use `--run-pyspark` flag to include them.
+
+`tests/test_fe_contract.py` is the portable half of the fixed-effect tests: what any
+implementation must satisfy, judged only through `binscatter()` against `binsreg` —
+the authors' own package, which takes fixed effects as dummy columns in `w` and has
+no notion of absorbing anything. It imports nothing private, patches nothing, and
+asserts nothing about which route ran, so it stays valid when the fixed-effect
+machinery is replaced; it is verified against three implementations (as shipped,
+absorption disabled, absorption forced everywhere) and only the cost test tells them
+apart. `test_fixed_effects.py` is the other kind: it forces this design's two routes
+and compares them, and would need rewriting alongside a new one. Put a new
+fixed-effect guarantee in the contract file unless it is genuinely about how this
+implementation works.
 
 ## Architecture
 

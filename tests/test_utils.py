@@ -128,6 +128,7 @@ def test_remove_bad_values_pyspark():
     _assert_remove_bad_values_backend("pyspark")
 
 
+@pytest.mark.quick
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_partial_out_controls_matches_closed_form(df_type):
     rng = np.random.default_rng(123)
