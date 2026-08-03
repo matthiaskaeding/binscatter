@@ -136,19 +136,29 @@ class FEProjector:
         return int(self.cell_codes.shape[0])
 
     @classmethod
-    def from_row_codes(cls, row_codes: np.ndarray, names: Sequence[str]) -> FEProjector:
-        """Build from per-row integer codes, ``(n, F)``.
+    def from_row_codes(
+        cls,
+        row_codes: np.ndarray,
+        names: Sequence[str],
+        row_weights: np.ndarray | None = None,
+    ) -> FEProjector:
+        """Build from integer codes, ``(n, F)``, deduplicating to distinct tuples.
 
-        For callers that already hold materialized rows (the DPI selector). The
-        lazy paths get the same object out of :func:`compute_fe_moments` without
-        ever collecting ``n`` rows.
+        For callers that already hold materialized rows (the DPI selector), or rows
+        of an aggregate that is finer than the fixed-effect tuple -- pass
+        ``row_weights`` for the latter, so a ``(fixed effect, bin)`` crosstab
+        collapses to cells carrying the right counts. The lazy estimation paths get
+        the same object out of :func:`compute_fe_moments` without collecting ``n``
+        rows at all.
         """
         row_codes = np.ascontiguousarray(row_codes)
         if row_codes.ndim == 1:
             row_codes = row_codes[:, None]
         cells, cell_of_row = np.unique(row_codes, axis=0, return_inverse=True)
         cell_of_row = np.ravel(cell_of_row)
-        weights = np.bincount(cell_of_row, minlength=cells.shape[0]).astype(float)
+        weights = np.bincount(
+            cell_of_row, weights=row_weights, minlength=cells.shape[0]
+        ).astype(float)
         counts = tuple(
             np.bincount(
                 cells[:, f], weights=weights, minlength=int(cells[:, f].max()) + 1
@@ -408,15 +418,19 @@ def demean_centered(
     Adding the mean back is exactly right for any number of factors: ``1`` lies in
     ``range(D)``, so ``1'P_D v = 1'v`` and the projection already preserves the mean.
     """
-    sums = _bincount_stacked(values, projector, row_codes)
+    sums = stack_group_sums(values, projector, row_codes)
     alpha = projector.solve(sums)
     return values - projector.row_effects(alpha, row_codes) + float(np.mean(values))
 
 
-def _bincount_stacked(
+def stack_group_sums(
     values: np.ndarray, projector: FEProjector, row_codes: np.ndarray
 ) -> np.ndarray:
-    """Return the stacked group sums ``D'values`` from per-row values."""
+    """Return the stacked group sums ``D'values``, ``(L, m)``.
+
+    ``row_codes`` is ``(rows, F)`` and ``values`` ``(rows,)`` or ``(rows, m)``; the
+    rows may be observations or any finer aggregate keyed by the factor levels.
+    """
     return np.concatenate(
         [
             np.atleast_1d(
@@ -541,7 +555,7 @@ def compute_fe_moments(
     )
 
     def stack(values: np.ndarray) -> np.ndarray:
-        return _bincount_stacked(values, projector, cell_codes)
+        return stack_group_sums(values, projector, cell_codes)
 
     response_sums = {
         name: stack(cells.get_column(aliases[name]).to_numpy().astype(float))

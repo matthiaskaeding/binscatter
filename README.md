@@ -64,8 +64,9 @@ iteratively, to a relative residual of `1e-11`; if a design is too poorly connec
 to reach that, the call raises rather than returning a number that depends on the
 iteration budget.
 
-`ci=` works alongside absorbed fixed effects up to 500 levels in total, which is
-where re-forming the block the sandwich variance needs stops being affordable.
+`ci=` works alongside absorbed fixed effects at any cardinality. The interval's
+sandwich variance is built from the same group-level aggregates, so it never forms
+the fixed-effect block either.
 
 ### Confidence intervals
 
