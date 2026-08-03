@@ -451,9 +451,10 @@ def compute_intervals(
             + total_count * np.outer(column_means, column_means)
         )
         rhs = rhs - fe.sums.T @ fe.alpha_y + total_count * column_means * y_mean
-        # The fixed effects still cost parameters: rank(D) = sum_f G_f - (F - 1)
-        # for a connected design, less the intercept the basis already spans.
-        fe_params = sum(fe.projector.level_counts) - fe.projector.num_factors
+        # The fixed effects still cost parameters: rank(D), less the intercept the
+        # basis already spans. The rank counts connected components, so separable
+        # blocks are not charged for the shifts between them.
+        fe_params = fe.projector.rank - 1
 
     coefficients = _solve(bread, rhs)
     gamma = coefficients[n_basis:]

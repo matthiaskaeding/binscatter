@@ -1483,13 +1483,12 @@ def _dpi_variance_dense(
         u_sq = (y_values[start:stop] - chunk @ params) ** 2
         XtUX += chunk.T @ (chunk * u_sq[:, None])
 
-    # Absorbing does not make the fixed effects free. Together they consume
-    # rank(D) - 1 parameters beyond the design: rank(D) = sum_f G_f - (F - 1) for a
-    # connected design, the convention fixest and pyfixest use, and the -1 is the
-    # intercept the bin dummies already span. At F = 1 this is the G - 1 the one-way
-    # path charges. A disconnected design has lower rank, so this slightly
-    # overcharges and nudges the selected bin count down.
-    n_params = size + sum(projector.level_counts) - projector.num_factors
+    # Absorbing does not make the fixed effects free: they consume rank(D) - 1
+    # parameters beyond the design, the -1 being the intercept the bin dummies
+    # already span. The rank counts connected components, so a design that splits
+    # into separate blocks is not charged for the shifts between them. At F = 1
+    # this is the G - 1 the one-way path charges.
+    n_params = size + projector.rank - 1
     dof = max(n_obs - n_params, 1)
     XtUX *= n_obs / dof
 

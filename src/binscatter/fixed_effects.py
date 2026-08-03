@@ -44,6 +44,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 import narwhals as nw
@@ -134,6 +135,76 @@ class FEProjector:
     @property
     def num_cells(self) -> int:
         return int(self.cell_codes.shape[0])
+
+    @cached_property
+    def num_components(self) -> int:
+        """Connected components of the fixed-effect incidence graph.
+
+        Nodes are levels, and every observed combination joins the levels it
+        contains. For two factors these are the mobility groups of Abowd, Creecy
+        and Kramarz: each one costs the design a further degree of freedom, because
+        its levels can be shifted against each other without changing any fitted
+        value.
+
+        Computed by label propagation rather than a union-find loop: the pull step
+        is a ``minimum.reduceat`` over a precomputed sort, so a design with millions
+        of observed combinations stays vectorized.
+        """
+        if self.num_factors == 1:
+            # A single factor joins nothing, so every level stands alone -- which is
+            # right: D_1 is full rank and costs no components.
+            return int(self.counts[0].size)
+
+        offsets = self.offsets
+        nodes = np.column_stack(
+            [offsets[f] + self.cell_codes[:, f] for f in range(self.num_factors)]
+        )
+        # Per factor, the sort that groups cells by level, so the "smallest label
+        # among the cells touching this level" step is one reduceat.
+        orders, starts, owners = [], [], []
+        for f in range(self.num_factors):
+            column = nodes[:, f]
+            order = np.argsort(column, kind="stable")
+            ordered = column[order]
+            first = np.flatnonzero(
+                np.concatenate(([True], ordered[1:] != ordered[:-1]))
+            )
+            orders.append(order)
+            starts.append(first)
+            owners.append(ordered[first])
+
+        labels = np.arange(self.total_levels)
+        for _ in range(self.total_levels + 1):
+            cell_label = labels[nodes].min(axis=1)
+            updated = labels.copy()
+            for f in range(self.num_factors):
+                reduced = np.minimum.reduceat(cell_label[orders[f]], starts[f])
+                updated[owners[f]] = np.minimum(updated[owners[f]], reduced)
+            # Labels only ever decrease and never exceed their own index, so
+            # following them repeatedly collapses each chain to its root and keeps
+            # the number of sweeps logarithmic rather than proportional to diameter.
+            while True:
+                jumped = updated[updated]
+                if np.array_equal(jumped, updated):
+                    break
+                updated = jumped
+            if np.array_equal(updated, labels):
+                break
+            labels = updated
+
+        return int(np.unique(labels).size)
+
+    @property
+    def rank(self) -> int:
+        """``rank(D)`` for the stacked dummy matrix.
+
+        Each factor beyond the first duplicates the intercept once per connected
+        component, giving ``sum_f G_f - c (F - 1)``. Exact for one or two factors.
+        For three or more it is an upper bound: a component in which two factors are
+        nested carries dependencies the incidence graph cannot see, so the true rank
+        can be lower. ``fixest`` and ``pyfixest`` make the same approximation.
+        """
+        return self.total_levels - self.num_components * (self.num_factors - 1)
 
     @classmethod
     def from_row_codes(

@@ -578,3 +578,66 @@ def test_no_warning_when_bins_are_given_explicitly():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         binscatter(df, "x", "y", num_bins=20, ci="pointwise", return_type="native")
+
+
+def test_disconnected_fixed_effects_use_the_component_aware_dof():
+    """A separable design must not be charged for the shift between its blocks.
+
+    Two islands make one of the dummy columns redundant, so the explicit design is
+    rank-deficient and its residual degrees of freedom are ``n - rank``, not
+    ``n - columns``. Assuming a connected design would overcharge by one parameter
+    and inflate every standard error.
+    """
+    rng = np.random.default_rng(107)
+    n, num_bins = 6_000, 6
+    island = rng.integers(0, 2, n)
+    firm = island * 10 + rng.integers(0, 10, n)
+    year = island * 5 + rng.integers(0, 5, n)
+    x = rng.normal(size=n)
+    y = (
+        1.1 * x
+        + rng.normal(scale=1.5, size=20)[firm]
+        + rng.normal(scale=0.8, size=10)[year]
+        + rng.normal(scale=np.exp(0.25 * x), size=n)
+    )
+    df = pd.DataFrame({"x": x, "y": y, "firm": firm, "year": year})
+
+    actual = to_pandas_native(
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["firm", "year"],
+            categorical=["firm", "year"],
+            num_bins=num_bins,
+            ci="pointwise",
+            return_type="native",
+        )
+    ).sort_values("bin")
+
+    edges = np.quantile(x, np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.zeros((n, num_bins))
+    basis[np.arange(n), bin_idx] = 1.0
+    design = np.column_stack([basis, np.eye(20)[firm][:, 1:], np.eye(10)[year][:, 1:]])
+    rank = np.linalg.matrix_rank(design)
+    assert rank < design.shape[1], "the two islands should make the design deficient"
+
+    xtx = design.T @ design
+    theta = np.linalg.lstsq(xtx, design.T @ y, rcond=None)[0]
+    resid_sq = (y - design @ theta) ** 2
+    bread_inv = np.linalg.pinv(xtx)
+    cov = (
+        bread_inv
+        @ (design.T @ (design * resid_sq[:, None]))
+        @ bread_inv
+        * (n / (n - rank))
+    )
+    g = np.zeros((num_bins, design.shape[1]))
+    g[:, :num_bins] = np.eye(num_bins)
+    g[:, num_bins:] = design[:, num_bins:].mean(axis=0)
+    expected = np.sqrt(np.einsum("ij,jk,ik->i", g, cov, g))
+
+    np.testing.assert_allclose(
+        actual["ci_std_error"].to_numpy(), expected, rtol=1e-8, atol=1e-10
+    )

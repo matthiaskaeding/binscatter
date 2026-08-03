@@ -840,3 +840,100 @@ def test_high_cardinality_two_way_completes():
     )
     assert out.shape == (10,)
     assert np.all(np.isfinite(out))
+
+
+# --------------------------------------------------------------------------
+# 10. Rank of the stacked dummy matrix
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda rng, n: rng.integers(0, 30, (n, 1)),
+        lambda rng, n: np.column_stack([rng.integers(0, 25, n), rng.integers(0, 9, n)]),
+        lambda rng, n: np.column_stack([g := rng.integers(0, 20, n), g]),
+        lambda rng, n: np.column_stack(
+            [
+                (isl := rng.integers(0, 3, n)) * 10 + rng.integers(0, 10, n),
+                isl * 6 + rng.integers(0, 6, n),
+            ]
+        ),
+        lambda rng, n: np.column_stack(
+            [rng.integers(0, 20, n), rng.integers(0, 8, n), rng.integers(0, 5, n)]
+        ),
+        lambda rng, n: np.column_stack(
+            [
+                (isl := rng.integers(0, 2, n)) * 12 + rng.integers(0, 12, n),
+                isl * 6 + rng.integers(0, 6, n),
+                isl * 4 + rng.integers(0, 4, n),
+            ]
+        ),
+    ],
+    ids=[
+        "one_factor",
+        "two_way_connected",
+        "two_way_nested",
+        "two_way_three_islands",
+        "three_way_connected",
+        "three_way_two_islands",
+    ],
+)
+def test_rank_matches_dense_matrix_rank(build):
+    """The component count must reproduce the rank of the materialized dummies.
+
+    This is what the degrees-of-freedom charge rests on, and assuming a connected
+    design silently overcharges every separable one.
+    """
+    rng = np.random.default_rng(97)
+    row_codes = np.asarray(build(rng, 4000))
+    projector, dense = dense_projector(row_codes, tuple("abcdef"[: row_codes.shape[1]]))
+    assert projector.rank == np.linalg.matrix_rank(dense)
+
+
+def test_rank_is_an_upper_bound_when_three_factors_are_nested():
+    """The documented limit: nesting is invisible to the incidence graph.
+
+    With two of three factors identical the design loses far more rank than the
+    component count can see. Charging the upper bound is conservative -- standard
+    errors come out slightly wide -- which is the safe direction, and matches what
+    fixest and pyfixest do.
+    """
+    rng = np.random.default_rng(101)
+    nested = rng.integers(0, 12, 4000)
+    row_codes = np.column_stack([nested, nested, rng.integers(0, 5, 4000)])
+    projector, dense = dense_projector(row_codes, ("a", "b", "c"))
+    assert projector.num_components == 1
+    assert projector.rank > np.linalg.matrix_rank(dense)
+
+
+def test_components_found_on_a_long_chain():
+    """Label propagation must still terminate when the graph is a path.
+
+    A chain is the worst case for propagating labels one hop at a time; the pointer
+    jumping is what keeps it from taking a sweep per link.
+    """
+    m = 5_000
+    row_codes = np.column_stack(
+        [np.arange(2 * m - 2) // 2 + 1, np.arange(2 * m - 2) // 2]
+    )
+    row_codes[::2, 0] -= 1
+    projector = FEProjector.from_row_codes(row_codes, ("a", "b"))
+    assert projector.num_components == 1
+
+
+def test_disconnected_design_is_charged_fewer_parameters():
+    """Splitting a design in two must lower the parameter count by exactly one."""
+    rng = np.random.default_rng(103)
+    n = 4000
+    connected = np.column_stack([rng.integers(0, 20, n), rng.integers(0, 8, n)])
+    island = rng.integers(0, 2, n)
+    split = np.column_stack(
+        [island * 10 + rng.integers(0, 10, n), island * 4 + rng.integers(0, 4, n)]
+    )
+    joined = FEProjector.from_row_codes(connected, ("a", "b"))
+    separate = FEProjector.from_row_codes(split, ("a", "b"))
+    assert joined.num_components == 1
+    assert separate.num_components == 2
+    assert joined.rank == joined.total_levels - 1
+    assert separate.rank == separate.total_levels - 2
