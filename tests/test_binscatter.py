@@ -17,6 +17,7 @@ from binsreg import binsregselect
 
 from binscatter.core import (
     Profile,
+    _build_prediction_grid,
     _fit_polynomial_line,
     _select_dpi_bins,
     _select_rule_of_thumb_bins,
@@ -1410,6 +1411,35 @@ def test_poly_line_does_not_change_y_axis_range():
     # Verify that the polynomial trace was added
     assert len(fig_with_poly.data) == 2, "Should have 2 traces (scatter + polynomial)"
     assert len(fig_without_poly.data) == 1, "Should have 1 trace (scatter only)"
+
+
+@pytest.mark.quick
+@pytest.mark.parametrize(
+    ("poly_line", "exception"),
+    [
+        ("2", TypeError),
+        (2.0, TypeError),
+        (0, ValueError),
+        (4, ValueError),
+    ],
+)
+def test_poly_line_validates_degree(poly_line, exception):
+    """The public API accepts only integer polynomial degrees 1 through 3."""
+    df = pd.DataFrame({"x": np.arange(20), "y": np.arange(20)})
+
+    with pytest.raises(exception, match="poly_line"):
+        binscatter(df, "x", "y", num_bins=5, poly_line=poly_line)
+
+
+def test_prediction_grid_handles_constant_reversed_and_nonfinite_bounds():
+    """Overlay grids stay valid at the boundary cases of the observed x range."""
+    np.testing.assert_array_equal(_build_prediction_grid(3.0, 3.0), [3.0])
+    np.testing.assert_array_equal(
+        _build_prediction_grid(2.0, -2.0, grid_size=3), [-2, 0, 2]
+    )
+
+    with pytest.raises(ValueError, match="finite x bounds"):
+        _build_prediction_grid(float("nan"), 1.0)
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
