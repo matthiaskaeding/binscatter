@@ -483,12 +483,18 @@ def add_redundant(frame: pd.DataFrame, redundancy: str) -> pd.DataFrame:
         pytest.param(
             "constant",
             id="constant",
-            marks=pytest.mark.xfail(strict=True, reason=REDUNDANT_CONSTANT),
+            marks=pytest.mark.xfail(
+                sys.platform == "darwin", strict=True, reason=REDUNDANT_CONSTANT
+            ),
         ),
     ],
 )
 def test_redundant_controls_do_not_move_the_dots(redundancy):
-    """The fitted curve stays estimable when the redundancy is inside the controls."""
+    """The fitted curve stays estimable when redundancy is inside the controls.
+
+    The constant case currently exposes a platform-dependent least-squares
+    solution: it passes with the Linux CI stack and collapses to zero on macOS.
+    """
     frame = simple_frame()
     baseline = dots(frame, controls=["z"], num_bins=10)
     actual = dots(
