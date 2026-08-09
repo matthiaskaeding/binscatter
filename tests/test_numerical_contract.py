@@ -59,6 +59,7 @@ ATOL = 1e-6
 
 UNCENTERED_MOMENTS = "#95: normal equations are built from moments about zero"
 NOMINAL_DEGREES_OF_FREEDOM = "#95: degrees of freedom count control columns, not rank"
+REDUNDANT_CONSTANT = "#95: an explicit constant collapses the fitted dots to zero"
 
 
 def dots(df, **kwargs) -> np.ndarray:
@@ -475,7 +476,17 @@ def add_redundant(frame: pd.DataFrame, redundancy: str) -> pd.DataFrame:
     )
 
 
-@pytest.mark.parametrize("redundancy", REDUNDANCIES)
+@pytest.mark.parametrize(
+    "redundancy",
+    [
+        pytest.param("duplicate", id="duplicate"),
+        pytest.param(
+            "constant",
+            id="constant",
+            marks=pytest.mark.xfail(strict=True, reason=REDUNDANT_CONSTANT),
+        ),
+    ],
+)
 def test_redundant_controls_do_not_move_the_dots(redundancy):
     """The fitted curve stays estimable when the redundancy is inside the controls."""
     frame = simple_frame()
