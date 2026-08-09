@@ -597,8 +597,10 @@ def partial_out_controls(
         XTy[num_bins:] = wy
 
     XTy[:num_bins] = bin_y
+    mean_controls = total_ctrl_sums / total_count if k else np.array([])
 
     if fe_moments is None:
+        _require_identified_bin_curve(XTX, mean_controls, num_bins)
         theta = _solve_normal_equations(XTX, XTy)
     else:
         # The within system is rank-deficient by exactly one (demeaned bin dummies
@@ -609,7 +611,6 @@ def partial_out_controls(
 
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
-    mean_controls = total_ctrl_sums / total_count if k else np.array([])
     fitted = beta + (mean_controls @ gamma if k else 0.0)
     if fe_moments is not None:
         fitted = fitted + recover_levels(fe_moments, beta, gamma, "y")
@@ -1537,6 +1538,47 @@ def _solve_normal_equations(xtx: np.ndarray, rhs: np.ndarray) -> np.ndarray:
         return np.linalg.solve(xtx, rhs)
     except np.linalg.LinAlgError:
         return np.linalg.pinv(xtx) @ rhs
+
+
+def _require_identified_bin_curve(
+    xtx: np.ndarray, mean_controls: np.ndarray, num_bins: int
+) -> None:
+    """Raise when a rank-deficient design leaves the plotted bin values unknown.
+
+    Redundant controls do not always cause a problem. Their null-space directions
+    can leave the fitted curve at the sample-average controls unchanged. A control
+    that reproduces the bin indicators does not: different least-squares solutions
+    then produce different dots. Refuse that design instead of returning an
+    arbitrary answer.
+    """
+    scales = np.sqrt(np.diag(xtx))
+    # A zero column is a harmless redundant control when it evaluates to zero at
+    # the control mean. Give it unit scale so the null-space test below decides.
+    scales = np.where(scales == 0.0, 1.0, scales)
+    scaled_xtx = xtx / np.outer(scales, scales)
+    _, singular_values, vh = np.linalg.svd(scaled_xtx, full_matrices=False)
+    if not singular_values.size:
+        return
+    tolerance = np.finfo(float).eps * max(xtx.shape) * singular_values[0]
+    rank = int(np.count_nonzero(singular_values > tolerance))
+    if rank == xtx.shape[0]:
+        return
+
+    # ``scaled_xtx`` has coordinates ``scales * theta``. Convert the null-space
+    # directions back to the original coefficients before evaluating the curve.
+    null_space = vh[rank:].T / scales[:, None]
+    evaluation = np.zeros((num_bins, xtx.shape[0]))
+    evaluation[:, :num_bins] = np.eye(num_bins)
+    if mean_controls.size:
+        evaluation[:, num_bins:] = mean_controls
+
+    impact = evaluation @ null_space
+    impact_tolerance = 1e-10 * max(1.0, float(np.linalg.norm(evaluation)))
+    if np.max(np.abs(impact)) > impact_tolerance:
+        raise ValueError(
+            "The controls and bin indicators do not identify the plotted bin "
+            "values. Remove a control that is collinear with the bins."
+        )
 
 
 def _gaussian_inverse_density_squared_sum(

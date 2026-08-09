@@ -1412,6 +1412,24 @@ def test_poly_line_does_not_change_y_axis_range():
     assert len(fig_without_poly.data) == 1, "Should have 1 trace (scatter only)"
 
 
+def test_rejects_controls_that_make_bin_values_unidentified():
+    """A control that reproduces the bin dummies cannot have an arbitrary fit."""
+    rng = np.random.default_rng(106)
+    x = rng.normal(size=1_200)
+    edges = pd.Series(x).quantile([index / 10 for index in range(11)]).to_numpy()
+    bin_index = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, 9)
+    df = pd.DataFrame(
+        {
+            "x": x,
+            "y": 1.2 * x + rng.normal(scale=0.2, size=x.size),
+            "collinear": bin_index.astype(float),
+        }
+    )
+
+    with pytest.raises(ValueError, match="do not identify.*collinear with the bins"):
+        binscatter(df, "x", "y", controls=["collinear"], num_bins=10)
+
+
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
 def test_configure_compute_quantiles_returns_correct_length(df_type):
     """Quantiles should have num_bins + 1 elements (including min and max)."""

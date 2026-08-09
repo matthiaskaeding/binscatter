@@ -573,10 +573,6 @@ def test_redundant_controls_do_not_change_the_selected_bin_count(selector, redun
 
 
 @pytest.mark.quick
-@pytest.mark.xfail(
-    strict=True,
-    reason="#95: an unidentified design gets whichever solution the units imply",
-)
 def test_a_control_collinear_with_the_bins_is_not_answered_arbitrarily():
     """The curve at average controls is not identified when W reproduces the bins.
 
