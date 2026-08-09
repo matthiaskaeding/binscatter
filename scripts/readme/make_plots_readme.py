@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import plotly.express as px
 import polars as pl
 
@@ -34,9 +35,12 @@ IMAGES = ROOT / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_README_IMAGES = [
+    "mroz_earnings_experience.png",
     "gapminder_gdp_lifeexp_dpi.png",
     "gapminder_gdp_lifeexp_fixed.png",
 ]
+
+MROZ_DATA_URL = "https://vincentarelbundock.github.io/Rdatasets/csv/wooldridge/mroz.csv"
 
 
 def _write_binscatter_variants(
@@ -163,13 +167,12 @@ def build_gapminder_plots() -> None:
         pl.col("gdpPercap").log().alias("log_gdp"),
         pl.col("lifeExp").log().alias("log_life"),
     )
-    # Fixed 120 bins - shown first in README for a more detailed shape.
-    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=120)
-    _write_fig(fig_fixed, "gapminder_gdp_lifeexp_fixed.png")
-
     # DPI selector (default) - shown second in README.
     fig_dpi = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins="dpi")
     _write_fig(fig_dpi, "gapminder_gdp_lifeexp_dpi.png")
+
+    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=120)
+    _write_fig(fig_fixed, "gapminder_gdp_lifeexp_fixed.png")
 
     _write_binscatter_variants(
         "gapminder_log_axes.png",
@@ -179,8 +182,23 @@ def build_gapminder_plots() -> None:
     )
 
 
+def build_mroz_plot() -> None:
+    df = pd.read_csv(MROZ_DATA_URL).dropna(subset=["exper", "lwage"])
+    fig = binscatter(
+        df,
+        "exper",
+        "lwage",
+        num_bins=15,
+        poly_line=2,
+        title="Earnings and experience",
+    )
+    fig.update_layout(xaxis_title="Experience (years)", yaxis_title="Log hourly wage")
+    _write_fig(fig, "mroz_earnings_experience.png")
+
+
 def main() -> None:
     builders = [
+        ("Mroz earnings", build_mroz_plot),
         ("gapminder", build_gapminder_plots),
         ("lightgbm", build_lightgbm_plot),
         ("readme (state data)", build_readme_plot),
