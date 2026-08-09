@@ -619,14 +619,8 @@ COLLIDES_WITH_A_TEMPORARY = "#95: bin-level aggregates are built under fixed nam
 @pytest.mark.parametrize(
     "name",
     [
-        pytest.param(
-            "__count",
-            marks=pytest.mark.xfail(strict=True, reason=COLLIDES_WITH_A_TEMPORARY),
-        ),
-        pytest.param(
-            "__sum_y",
-            marks=pytest.mark.xfail(strict=True, reason=COLLIDES_WITH_A_TEMPORARY),
-        ),
+        "__count",
+        "__sum_y",
         "__fe_count",
         "__fe_resp_0",
         "__moment_sum__z",
