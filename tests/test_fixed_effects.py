@@ -578,6 +578,38 @@ def test_multiway_matches_one_hot(df_type, controls, monkeypatch):
     np.testing.assert_allclose(absorbed, one_hot, rtol=rtol, atol=atol)
 
 
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+@pytest.mark.parametrize(
+    ("controls", "transformation"),
+    [
+        (["age", "firm"], "rescale"),
+        (["age", "firm", "year"], "rescale"),
+        (["age", "firm", "year"], "shift_response"),
+    ],
+    ids=["one_factor_scale", "two_factor_scale", "two_factor_response_location"],
+)
+def test_fe_projection_is_invariant_to_numeric_units_and_location(
+    df_type, controls, transformation
+):
+    """Backend aggregation cannot make FE estimates depend on units or location."""
+    frame = make_multiway_panel(n=2000, seed=91)
+    baseline = run_native(
+        convert_to_backend(frame, df_type), controls=controls, num_bins=10
+    )
+
+    if transformation == "rescale":
+        changed = frame.assign(age=frame["age"] * 10_000_000.0)
+        offset = 0.0
+    else:
+        changed = frame.assign(y=frame["y"] + 1_000_000_000.0)
+        offset = 1_000_000_000.0
+
+    actual = run_native(
+        convert_to_backend(changed, df_type), controls=controls, num_bins=10
+    )
+    np.testing.assert_allclose(actual - offset, baseline, rtol=1e-7, atol=1e-6)
+
+
 @pytest.mark.parametrize(
     "factors", [("firm", "year"), ("firm", "year", "region")], ids=["two", "three"]
 )

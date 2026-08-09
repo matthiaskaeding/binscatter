@@ -333,9 +333,10 @@ def binscatter(
     if moment_cache is None:
         total_rows = int(df_prepped.select(nw.len()).collect().item(0, 0))
     else:
-        _ensure_moments(
-            df_prepped, moment_cache, {_moment_alias("total_count"): nw.len()}
-        )
+        initial_moments = {_moment_alias("total_count"): nw.len()}
+        if profile.fe_names:
+            initial_moments[_moment_alias("mean_y_total")] = profile.y_col.mean()
+        _ensure_moments(df_prepped, moment_cache, initial_moments)
         total_rows = int(moment_cache[_moment_alias("total_count")])
     if total_rows < final_num_bins:
         if auto_bins:
@@ -454,36 +455,49 @@ def _ensure_feature_moments(
     feature_names: tuple[str, ...],
     y_expr: nw.Expr,
     cache: dict[str, float],
+    *,
+    namespace: str = "",
 ) -> None:
     """Gather feature-level sums, y cross-products, and cross-moments into the cache."""
     if not feature_names:
         return
+
+    def kind(value: str) -> str:
+        return f"{namespace}_{value}" if namespace else value
+
     exprs: dict[str, nw.Expr] = {}
     for col in feature_names:
-        exprs[_moment_alias("sum", col)] = nw.col(col).sum()
-        exprs[_moment_alias("sum_y", col)] = (nw.col(col) * y_expr).sum()
+        exprs[_moment_alias(kind("sum"), col)] = nw.col(col).sum()
+        exprs[_moment_alias(kind("sum_y"), col)] = (nw.col(col) * y_expr).sum()
     for i, col_i in enumerate(feature_names):
         for j, col_j in enumerate(feature_names[i:], start=i):
-            exprs[_moment_alias("sumprod", col_i, col_j)] = (
+            exprs[_moment_alias(kind("sumprod"), col_i, col_j)] = (
                 nw.col(col_i) * nw.col(col_j)
             ).sum()
     _ensure_moments(df, cache, exprs)
 
 
 def _build_feature_normal_equations(
-    feature_names: tuple[str, ...], cache: dict[str, float]
+    feature_names: tuple[str, ...],
+    cache: dict[str, float],
+    *,
+    namespace: str = "",
 ) -> tuple[np.ndarray, np.ndarray]:
     if not feature_names:
         return np.zeros((0, 0), dtype=float), np.zeros(0, dtype=float)
     size = len(feature_names)
     xtx = np.zeros((size, size), dtype=float)
     xty = np.zeros(size, dtype=float)
+
+    def kind(value: str) -> str:
+        return f"{namespace}_{value}" if namespace else value
+
     for i, col_i in enumerate(feature_names):
-        xty[i] = cache[_moment_alias("sum_y", col_i)]
-        xtx[i, i] = cache[_moment_alias("sumprod", col_i, col_i)]
+        xty[i] = cache[_moment_alias(kind("sum_y"), col_i)]
+        xtx[i, i] = cache[_moment_alias(kind("sumprod"), col_i, col_i)]
         for j in range(i + 1, size):
             col_j = feature_names[j]
-            value = cache[_moment_alias("sumprod", col_i, col_j)]
+            value = cache[_moment_alias(kind("sumprod"), col_i, col_j)]
             xtx[i, j] = value
             xtx[j, i] = value
     return xtx, xty
@@ -509,15 +523,33 @@ def partial_out_controls(
     if moment_cache is None:
         moment_cache = {}
 
+    totals_cache = {_moment_alias("total_count"): nw.len()}
+    if profile.fe_names:
+        totals_cache[_moment_alias("mean_y_total")] = profile.y_col.mean()
+    _ensure_moments(df_prepped, moment_cache, totals_cache)
+    total_count = moment_cache[_moment_alias("total_count")]
+    response_mean = (
+        moment_cache[_moment_alias("mean_y_total")] if profile.fe_names else 0.0
+    )
+    if profile.fe_names:
+        centered_y_name = f"__centered_y{profile.distinct_suffix}"
+        df_for_fit = df_prepped.with_columns(
+            (profile.y_col - nw.lit(response_mean)).alias(centered_y_name)
+        )
+        response_for_fit = nw.col(centered_y_name)
+    else:
+        df_for_fit = df_prepped
+        response_for_fit = profile.y_col
+
     agg_exprs = [
         nw.len().alias("__count"),
         profile.x_col.mean().alias(profile.x_name),
-        profile.y_col.sum().alias("__sum_y"),
+        response_for_fit.sum().alias("__sum_y"),
         *[nw.col(c).sum().alias(c) for c in profile.regression_features],
     ]
 
     per_bin = (
-        df_prepped.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
+        df_for_fit.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
     ).collect()
 
     counts = per_bin.get_column("__count").to_numpy()
@@ -535,26 +567,28 @@ def partial_out_controls(
     else:
         bin_control_sums = np.zeros((profile.num_bins, 0))
 
-    totals_cache = {_moment_alias("total_count"): nw.len()}
-    _ensure_moments(df_prepped, moment_cache, totals_cache)
+    feature_namespace = "fe_centered" if profile.fe_names else ""
     _ensure_feature_moments(
-        df_prepped,
+        df_for_fit,
         profile.regression_features,
-        profile.y_col,
+        response_for_fit,
         moment_cache,
+        namespace=feature_namespace,
     )
 
-    total_count = moment_cache[_moment_alias("total_count")]
     if profile.regression_features:
+        sum_kind = f"{feature_namespace}_sum" if feature_namespace else "sum"
         total_ctrl_sums = np.array(
             [
-                moment_cache[_moment_alias("sum", alias)]
+                moment_cache[_moment_alias(sum_kind, alias)]
                 for alias in profile.regression_features
             ],
             dtype=float,
         )
         ww, wy = _build_feature_normal_equations(
-            profile.regression_features, moment_cache
+            profile.regression_features,
+            moment_cache,
+            namespace=feature_namespace,
         )
     else:
         total_ctrl_sums = np.array([], dtype=float)
@@ -572,12 +606,12 @@ def partial_out_controls(
     fe_alphas: dict[str, np.ndarray] = {}
     if profile.fe_names:
         fe_moments = compute_fe_moments(
-            df_prepped,
+            df_for_fit,
             fe_names=profile.fe_names,
             bin_name=profile.bin_name,
             bin_labels=per_bin.get_column(profile.bin_name).to_list(),
             feature_names=profile.regression_features,
-            response_exprs={"y": profile.y_col},
+            response_exprs={"y": response_for_fit},
         )
         # One stacked projection covers every block below; with several factors the
         # solve is iterative, so doing it once rather than per block matters.
@@ -610,14 +644,15 @@ def partial_out_controls(
         theta = _solve_normal_equations(XTX, XTy)
     else:
         # The within system is rank-deficient (demeaned bin dummies sum to zero
-        # row-wise), and a near-singular matrix often makes np.linalg.solve return
-        # garbage rather than raise, so go straight to the minimum-norm solution.
-        theta = np.linalg.lstsq(XTX, XTy, rcond=None)[0]
+        # row-wise). Equilibrate it before the minimum-norm solve: otherwise the
+        # rank threshold depends on the units of a numeric control, and a large
+        # control scale can make every bin direction look numerically rank-zero.
+        theta = _solve_equilibrated_normal_equations(XTX, XTy)
 
     beta = theta[:num_bins]
     gamma = theta[num_bins:]
     mean_controls = total_ctrl_sums / total_count if k else np.array([])
-    fitted = beta + (mean_controls @ gamma if k else 0.0)
+    fitted = response_mean + beta + (mean_controls @ gamma if k else 0.0)
     if fe_moments is not None:
         fitted = fitted + recover_levels(fe_moments, fe_alphas, beta, gamma, "y")
 
@@ -1683,6 +1718,22 @@ def _solve_normal_equations(xtx: np.ndarray, rhs: np.ndarray) -> np.ndarray:
         return np.linalg.solve(xtx, rhs)
     except np.linalg.LinAlgError:
         return np.linalg.pinv(xtx) @ rhs
+
+
+def _solve_equilibrated_normal_equations(
+    xtx: np.ndarray, rhs: np.ndarray
+) -> np.ndarray:
+    """Solve a rank-deficient normal system independently of column units.
+
+    Dividing by the square root of the diagonal converts ``X'X`` to a correlation-
+    scale matrix before ``lstsq`` decides its numerical rank. Mapping the solution
+    back then gives the coefficients in the caller's original units.
+    """
+    scale = np.sqrt(np.maximum(np.diag(xtx), 0.0))
+    scale[scale == 0.0] = 1.0
+    equilibrated = xtx / np.outer(scale, scale)
+    solution = np.linalg.lstsq(equilibrated, rhs / scale, rcond=None)[0]
+    return solution / scale
 
 
 def _gaussian_inverse_density_squared_sum(
