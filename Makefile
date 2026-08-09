@@ -1,4 +1,4 @@
-.PHONY: help lint ty ok test-fast test test-spark make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
+.PHONY: help lint ty ok test-fast test test-spark benchmark-fe-fast benchmark-fe make-nb setup-krnl install-hooks pre-commit install-pkg dl-sims make-data-replication make-plots
 
 help:
 	@echo "Developer commands:"
@@ -8,6 +8,7 @@ help:
 	@echo "  make test-fast            # Representative sample; check with this first"
 	@echo "  make test                 # Whole suite, PySpark skipped (the gate)"
 	@echo "  make test-spark           # Whole suite including PySpark"
+	@echo "  make benchmark-fe-fast    # Short, repeatable fixed-effect benchmark"
 	@echo "  make benchmark-fe         # Benchmark fixed-effect absorption vs one-hot"
 	@echo "  make make-nb              # Render examples/demo.ipynb under artifacts/"
 	@echo "  make setup-krnl           # Install the binscatter ipykernel"
@@ -41,6 +42,9 @@ test:
 
 test-spark:
 	uv run pytest --run-pyspark tests
+
+benchmark-fe-fast:
+	uv run scripts/benchmark_fixed_effects.py --quick
 
 benchmark-fe:
 	uv run scripts/benchmark_fixed_effects.py
