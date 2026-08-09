@@ -1560,6 +1560,7 @@ def test_non_unique_quantiles_produce_unique_bins_ternary(df_type):
     assert result_pd["x0"].nunique() >= 2
 
 
+@pytest.mark.pyspark
 def test_non_unique_quantiles_pyspark():
     """PySpark-specific test for non-unique quantiles."""
     pytest.importorskip("pyspark")
@@ -1681,6 +1682,7 @@ def testbuild_dummies_pandas_polars(backend):
         ]
 
 
+@pytest.mark.pyspark
 def testbuild_dummies_pyspark():
     """Test that PySpark dummy builder works correctly."""
     pytest.importorskip("pyspark")
@@ -1714,6 +1716,7 @@ def testbuild_dummies_pyspark():
         assert set(result[col].unique()) <= {0.0, 1.0}
 
 
+@pytest.mark.pyspark
 def test_dummy_builder_pyspark_handles_nulls():
     """Test that PySpark dummy builder correctly handles null values."""
     pytest.importorskip("pyspark")
@@ -1970,6 +1973,7 @@ def test_configure_build_dummies_dispatch():
     assert builder == build_dummies_fallback
 
 
+@pytest.mark.pyspark
 def test_configure_build_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
@@ -2048,6 +2052,7 @@ def test_dummy_names_consistent_across_backends(backend):
         )
 
 
+@pytest.mark.pyspark
 def test_pyspark_dummy_names_match_pandas():
     """Test that PySpark dummy names exactly match pandas dummy names."""
     pytest.importorskip("pyspark")
@@ -2095,6 +2100,7 @@ def test_pyspark_dummy_names_match_pandas():
     )
 
 
+@pytest.mark.pyspark
 def test_binscatter_with_pyspark_caching():
     """Integration test: full binscatter with PySpark should use caching."""
     pytest.importorskip("pyspark")

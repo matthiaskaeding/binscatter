@@ -32,6 +32,7 @@ import statsmodels.api as sm
 from binsreg import binsreg as binsreg_fit
 
 from binscatter import binscatter, core
+from binscatter.fixed_effects import FEProjector, factor_codes
 from tests.conftest import DF_BACKENDS, convert_to_backend, to_pandas_native
 
 BINSREG_SIM_PATH = Path(__file__).resolve().parents[1] / "data" / "binsreg_sim.csv"
@@ -973,6 +974,161 @@ def test_intervals_match_one_hot_with_two_absorbed_fixed_effects(kind):
     """Two crossed factors, where the projection is iterative rather than closed form."""
     _absorbed_vs_one_hot(
         _fe_frame(n=6_000, n_firms=25, n_years=8, seed=17), ("firm", "year"), kind
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "control_name"),
+    [
+        ("pointwise", "__ci_fe_e"),
+        ("rbc", "__ci_fe_e"),
+        ("rbc", "__ci_fe_x"),
+        ("rbc", "__ci_x2"),
+        ("rbc", "__ci_wx_src_0"),
+        ("pointwise", "__ci_usq"),
+        ("pointwise", "__ci_uw_src_0"),
+        ("rbc", "__ci_uwx_src_0"),
+    ],
+)
+def test_absorbed_intervals_do_not_shadow_numeric_controls(kind, control_name):
+    """Internal aggregation names cannot overwrite a legitimate user control."""
+    rng = np.random.default_rng(113)
+    n = 1_200
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    group = rng.integers(0, 12, n)
+    y = x + 2.0 * z + rng.normal(size=12)[group] + rng.normal(size=n)
+    original = pd.DataFrame(
+        {"x": x, "y": y, "z": z, "group": [f"g{value}" for value in group]}
+    )
+    renamed = original.rename(columns={"z": control_name})
+    kwargs = {"num_bins": 6, "ci": kind, "return_type": "native"}
+
+    expected = _sorted_native(
+        binscatter(original, "x", "y", controls=["z", "group"], **kwargs)
+    )
+    actual = _sorted_native(
+        binscatter(renamed, "x", "y", controls=[control_name, "group"], **kwargs)
+    )
+    for column in ("y", "ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            actual[column].to_numpy(),
+            expected[column].to_numpy(),
+            rtol=1e-10,
+            atol=1e-10,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "fe_name"),
+    [
+        ("pointwise", "__ci_fe_n"),
+        ("pointwise", "__ci_fe_y"),
+        ("rbc", "__ci_fe_sx"),
+        ("pointwise", "__ci_fe_w_0"),
+        ("pointwise", "__ci_fm_0_m0"),
+    ],
+)
+def test_absorbed_intervals_allow_internal_looking_fixed_effect_names(kind, fe_name):
+    """Aggregation outputs must not collide with a fixed-effect grouping key."""
+    original = _fe_frame(n=1_200, n_firms=12, seed=127)
+    renamed = original.rename(columns={"firm": fe_name})
+    kwargs = {"num_bins": 6, "ci": kind, "return_type": "native"}
+
+    expected = _sorted_native(
+        binscatter(
+            original,
+            "x",
+            "y",
+            controls=["firm"],
+            categorical=["firm"],
+            **kwargs,
+        )
+    )
+    actual = _sorted_native(
+        binscatter(
+            renamed,
+            "x",
+            "y",
+            controls=[fe_name],
+            categorical=[fe_name],
+            **kwargs,
+        )
+    )
+    for column in ("y", "ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            actual[column].to_numpy(),
+            expected[column].to_numpy(),
+            rtol=1e-10,
+            atol=1e-10,
+        )
+
+
+def test_three_way_nested_interval_diff_is_only_the_documented_dof_factor():
+    """Pin the public consequence of the documented three-way rank approximation."""
+    rng = np.random.default_rng(131)
+    n, num_bins = 1_600, 6
+    repeated = rng.integers(0, 12, n)
+    crossed = rng.integers(0, 5, n)
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = (
+        0.9 * x
+        + 0.7 * z
+        + rng.normal(size=12)[repeated]
+        + rng.normal(size=5)[crossed]
+        + rng.normal(scale=np.exp(0.2 * x), size=n)
+    )
+    df = pd.DataFrame(
+        {"x": x, "y": y, "z": z, "first": repeated, "copy": repeated, "third": crossed}
+    )
+    factors = ["first", "copy", "third"]
+    actual = _sorted_native(
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["z", *factors],
+            categorical=factors,
+            num_bins=num_bins,
+            ci="pointwise",
+            return_type="native",
+        )
+    )
+
+    edges = np.quantile(x, np.linspace(0.0, 1.0, num_bins + 1))
+    bin_index = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.eye(num_bins)[bin_index]
+    dummy_blocks = [
+        pd.get_dummies(df[name], drop_first=True).to_numpy(float) for name in factors
+    ]
+    design = np.column_stack([basis, z, *dummy_blocks])
+    theta = np.linalg.lstsq(design, y, rcond=None)[0]
+    residual_squared = (y - design @ theta) ** 2
+    bread_inverse = np.linalg.pinv(design.T @ design)
+    exact_rank = np.linalg.matrix_rank(design)
+    covariance = (
+        bread_inverse
+        @ (design.T @ (design * residual_squared[:, None]))
+        @ bread_inverse
+        * (n / (n - exact_rank))
+    )
+    evaluation = np.tile(design.mean(axis=0), (num_bins, 1))
+    evaluation[:, :num_bins] = np.eye(num_bins)
+    exact_standard_error = np.sqrt(
+        np.einsum("ij,jk,ik->i", evaluation, covariance, evaluation)
+    )
+
+    row_codes = factor_codes([df[name].to_numpy() for name in factors])
+    projector = FEProjector.from_row_codes(row_codes, factors)
+    charged_rank = num_bins + 1 + projector.rank - 1
+    assert charged_rank > exact_rank
+    expected_ratio = np.sqrt((n - exact_rank) / (n - charged_rank))
+    np.testing.assert_allclose(
+        actual["ci_std_error"].to_numpy() / exact_standard_error,
+        expected_ratio,
+        rtol=1e-8,
+        atol=1e-10,
     )
 
 

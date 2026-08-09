@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import narwhals as nw
 import numpy as np
 
-from .fixed_effects import FEProjector, stack_group_sums, symmetrize
+from .fixed_effects import FEProjector, free_aliases, stack_group_sums, symmetrize
 
 if TYPE_CHECKING:  # pragma: no cover - circular import guard
     from .core import Profile
@@ -276,7 +276,7 @@ def _fe_codes(
     """
     codes = np.empty((frame.shape[0], len(fe_names)), dtype=np.int64)
     reuse = indices is not None
-    built: list[dict[Any, int]] = indices if reuse else []
+    built: list[dict[Any, int]] = indices if indices is not None else []
     for f, name in enumerate(fe_names):
         labels = frame.get_column(name).to_list()
         if reuse:
@@ -334,21 +334,33 @@ def _fe_design_sums(
     k = len(controls)
     num_bins = profile.num_bins
 
+    stems = [
+        "__ci_fe_n",
+        "__ci_fe_y",
+        *(f"__ci_fe_w_{idx}" for idx in range(k)),
+    ]
+    if needs_x_moments:
+        stems += ["__ci_fe_x", "__ci_fe_sx"]
+    aliases = free_aliases(df_prepped, stems)
+
     products: dict[str, nw.Expr] = {}
     if needs_x_moments:
-        products["__ci_fe_x"] = profile.x_col
+        products[aliases["__ci_fe_x"]] = profile.x_col
 
-    agg = [nw.len().alias("__ci_fe_n"), profile.y_col.sum().alias("__ci_fe_y")]
+    agg = [
+        nw.len().alias(aliases["__ci_fe_n"]),
+        profile.y_col.sum().alias(aliases["__ci_fe_y"]),
+    ]
     if needs_x_moments:
-        agg.append(nw.col("__ci_fe_x").sum().alias("__ci_fe_sx"))
+        agg.append(nw.col(aliases["__ci_fe_x"]).sum().alias(aliases["__ci_fe_sx"]))
     for idx, name in enumerate(controls):
-        agg.append(nw.col(name).sum().alias(f"__ci_fe_w_{idx}"))
+        agg.append(nw.col(name).sum().alias(aliases[f"__ci_fe_w_{idx}"]))
 
     source = df_prepped.with_columns(**products) if products else df_prepped
     cells = source.group_by(*fe_names, profile.bin_name).agg(*agg).collect()
 
     codes, level_index = _fe_codes(cells, fe_names)
-    counts = cells.get_column("__ci_fe_n").to_numpy().astype(float)
+    counts = cells.get_column(aliases["__ci_fe_n"]).to_numpy().astype(float)
     projector = FEProjector.from_row_codes(codes, fe_names, row_weights=counts)
 
     bin_index = {label: i for i, label in enumerate(bin_labels)}
@@ -361,7 +373,7 @@ def _fe_design_sums(
     r0 = _by_level_and_bin(counts, projector, codes, bin_idx, num_bins)
     if needs_x_moments:
         r1 = _by_level_and_bin(
-            cells.get_column("__ci_fe_sx").to_numpy().astype(float),
+            cells.get_column(aliases["__ci_fe_sx"]).to_numpy().astype(float),
             projector,
             codes,
             bin_idx,
@@ -374,7 +386,9 @@ def _fe_design_sums(
         stack_group_sums(
             np.column_stack(
                 [
-                    cells.get_column(f"__ci_fe_w_{idx}").to_numpy().astype(float)
+                    cells.get_column(aliases[f"__ci_fe_w_{idx}"])
+                    .to_numpy()
+                    .astype(float)
                     for idx in range(k)
                 ]
             ),
@@ -385,7 +399,9 @@ def _fe_design_sums(
         else np.zeros((projector.total_levels, 0), dtype=float)
     )
     y_sums = stack_group_sums(
-        cells.get_column("__ci_fe_y").to_numpy().astype(float), projector, codes
+        cells.get_column(aliases["__ci_fe_y"]).to_numpy().astype(float),
+        projector,
+        codes,
     )
 
     edges = np.asarray(profile.bin_edges, dtype=float)
@@ -522,12 +538,20 @@ def _first_pass(
     # Products are materialized as columns before grouping: the dask backend only
     # accepts plain column aggregations inside group_by, so composing the product
     # inside .sum() works everywhere except there.
+    product_stems: list[str] = []
+    if needs_x_moments:
+        product_stems = [
+            "__ci_x2",
+            "__ci_xy",
+            *(f"__ci_wx_src_{idx}" for idx in range(k)),
+        ]
+    product_aliases = free_aliases(df_prepped, product_stems)
     products: dict[str, nw.Expr] = {}
     if needs_x_moments:
-        products["__ci_x2"] = x_col * x_col
-        products["__ci_xy"] = x_col * y_col
+        products[product_aliases["__ci_x2"]] = x_col * x_col
+        products[product_aliases["__ci_xy"]] = x_col * y_col
         for idx, name in enumerate(controls):
-            products[f"__ci_wx_src_{idx}"] = nw.col(name) * x_col
+            products[product_aliases[f"__ci_wx_src_{idx}"]] = nw.col(name) * x_col
 
     agg = [
         nw.len().alias("__ci_n"),
@@ -537,13 +561,17 @@ def _first_pass(
     if needs_x_moments:
         agg += [
             x_col.sum().alias("__ci_sum_x"),
-            nw.col("__ci_x2").sum().alias("__ci_sum_x2"),
-            nw.col("__ci_xy").sum().alias("__ci_sum_xy"),
+            nw.col(product_aliases["__ci_x2"]).sum().alias("__ci_sum_x2"),
+            nw.col(product_aliases["__ci_xy"]).sum().alias("__ci_sum_xy"),
         ]
     for idx, name in enumerate(controls):
         agg.append(nw.col(name).sum().alias(f"__ci_w_{idx}"))
         if needs_x_moments:
-            agg.append(nw.col(f"__ci_wx_src_{idx}").sum().alias(f"__ci_wx_{idx}"))
+            agg.append(
+                nw.col(product_aliases[f"__ci_wx_src_{idx}"])
+                .sum()
+                .alias(f"__ci_wx_{idx}")
+            )
 
     source = df_prepped.with_columns(**products) if products else df_prepped
     per_bin = (
@@ -621,28 +649,46 @@ def _second_pass(
 
     # As in the first pass, every product becomes a column before grouping so the
     # aggregations stay plain enough for dask.
-    with_resid = df_prepped.with_columns(__ci_usq=resid_sq)
-    usq = nw.col("__ci_usq")
+    product_stems = ["__ci_usq"]
+    if needs_x_moments:
+        product_stems += ["__ci_u1_src", "__ci_u2_src"]
+    for idx in range(k):
+        product_stems.append(f"__ci_uw_src_{idx}")
+        if needs_x_moments:
+            product_stems.append(f"__ci_uwx_src_{idx}")
+    product_aliases = free_aliases(df_prepped, product_stems)
+
+    resid_sq_alias = product_aliases["__ci_usq"]
+    with_resid = df_prepped.with_columns(resid_sq.alias(resid_sq_alias))
+    usq = nw.col(resid_sq_alias)
     products: dict[str, nw.Expr] = {}
     if needs_x_moments:
-        products["__ci_u1_src"] = usq * x_col
-        products["__ci_u2_src"] = usq * x_col * x_col
+        products[product_aliases["__ci_u1_src"]] = usq * x_col
+        products[product_aliases["__ci_u2_src"]] = usq * x_col * x_col
     for idx, name in enumerate(controls):
-        products[f"__ci_uw_src_{idx}"] = usq * nw.col(name)
+        products[product_aliases[f"__ci_uw_src_{idx}"]] = usq * nw.col(name)
         if needs_x_moments:
-            products[f"__ci_uwx_src_{idx}"] = usq * nw.col(name) * x_col
+            products[product_aliases[f"__ci_uwx_src_{idx}"]] = (
+                usq * nw.col(name) * x_col
+            )
     source = with_resid.with_columns(**products) if products else with_resid
 
     agg = [usq.sum().alias("__ci_u0")]
     if needs_x_moments:
         agg += [
-            nw.col("__ci_u1_src").sum().alias("__ci_u1"),
-            nw.col("__ci_u2_src").sum().alias("__ci_u2"),
+            nw.col(product_aliases["__ci_u1_src"]).sum().alias("__ci_u1"),
+            nw.col(product_aliases["__ci_u2_src"]).sum().alias("__ci_u2"),
         ]
     for idx in range(k):
-        agg.append(nw.col(f"__ci_uw_src_{idx}").sum().alias(f"__ci_uw_{idx}"))
+        agg.append(
+            nw.col(product_aliases[f"__ci_uw_src_{idx}"]).sum().alias(f"__ci_uw_{idx}")
+        )
         if needs_x_moments:
-            agg.append(nw.col(f"__ci_uwx_src_{idx}").sum().alias(f"__ci_uwx_{idx}"))
+            agg.append(
+                nw.col(product_aliases[f"__ci_uwx_src_{idx}"])
+                .sum()
+                .alias(f"__ci_uwx_{idx}")
+            )
 
     per_bin = (
         source.group_by(profile.bin_name).agg(*agg).sort(profile.bin_name).collect()
@@ -744,14 +790,20 @@ def _fe_second_pass(
         for j in range(i, k):
             moments[f"c_{i}_{j}"] = nw.col(controls[i]) * nw.col(controls[j])
 
-    resid = nw.col("__ci_fe_e")
+    product_stems = [
+        "__ci_fe_e",
+        *(f"__ci_fm_{t}_{key}" for t in ("0", "1", "2") for key in moments),
+    ]
+    product_aliases = free_aliases(df_prepped, product_stems)
+    resid_alias = product_aliases["__ci_fe_e"]
+    resid = nw.col(resid_alias)
     weights = {"0": nw.lit(1.0), "1": resid, "2": resid * resid}
 
     # Products become columns before grouping: dask only accepts plain column
     # aggregations inside group_by.
-    with_resid = df_prepped.with_columns(__ci_fe_e=profile.y_col - fitted)
+    with_resid = df_prepped.with_columns((profile.y_col - fitted).alias(resid_alias))
     products = {
-        f"__ci_fm_{t}_{key}": weight * moment
+        product_aliases[f"__ci_fm_{t}_{key}"]: weight * moment
         for t, weight in weights.items()
         for key, moment in moments.items()
     }
@@ -788,7 +840,8 @@ def _fe_second_pass(
         return out
 
     tables = {
-        t: {key: spread(f"__ci_fm_{t}_{key}") for key in moments} for t in weights
+        t: {key: spread(product_aliases[f"__ci_fm_{t}_{key}"]) for key in moments}
+        for t in weights
     }
 
     # The per-cell offset, recovered from sum(e) alone.

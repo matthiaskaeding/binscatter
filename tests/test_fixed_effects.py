@@ -610,6 +610,92 @@ def test_multiway_matches_statsmodels_oracle(factors):
     np.testing.assert_allclose(fitted, expected, rtol=1e-8, atol=1e-8)
 
 
+def _adversarial_panel(case: str, seed: int) -> tuple[pd.DataFrame, list[str]]:
+    """Small FE designs whose full dummy matrices are cheap enough to materialize."""
+    rng = np.random.default_rng(seed)
+    n = 900
+    if case == "crossed_two_way":
+        codes = [rng.integers(0, 17, n), rng.integers(0, 7, n)]
+    elif case == "disconnected_two_way":
+        island = rng.integers(0, 3, n)
+        codes = [
+            island * 7 + rng.integers(0, 7, n),
+            island * 4 + rng.integers(0, 4, n),
+        ]
+    elif case == "nested_two_way":
+        fine = rng.integers(0, 18, n)
+        codes = [fine, fine // 3]
+    elif case == "crossed_three_way":
+        codes = [
+            rng.integers(0, 13, n),
+            rng.integers(0, 6, n),
+            rng.integers(0, 4, n),
+        ]
+    elif case == "nested_three_way":
+        fine = rng.integers(0, 18, n)
+        codes = [fine, fine // 3, fine % 3]
+    elif case == "duplicate_three_way":
+        repeated = rng.integers(0, 12, n)
+        codes = [repeated, repeated.copy(), rng.integers(0, 5, n)]
+    elif case == "singleton_heavy":
+        mostly_singletons = np.r_[np.arange(100), rng.integers(0, 8, n - 100)]
+        rng.shuffle(mostly_singletons)
+        codes = [mostly_singletons, rng.integers(0, 5, n)]
+    else:  # pragma: no cover - guards the parametrization below
+        raise AssertionError(f"unknown adversarial design {case}")
+
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = 0.7 * x + 1.2 * z + rng.normal(scale=0.7, size=n)
+    data: dict[str, object] = {"x": x, "z": z}
+    factor_names = []
+    for index, code in enumerate(codes):
+        name = f"factor_{index}"
+        factor_names.append(name)
+        y += rng.normal(size=int(code.max()) + 1)[code]
+        data[name] = [f"{name}_{value}" for value in code]
+    data["y"] = y
+    return pd.DataFrame(data), factor_names
+
+
+def _full_dummy_dot_oracle(
+    df: pd.DataFrame, factor_names: list[str], num_bins: int
+) -> np.ndarray:
+    """Dense OLS dots using every indicator, with no reference-level convention."""
+    x = df["x"].to_numpy()
+    edges = np.quantile(x, np.linspace(0.0, 1.0, num_bins + 1))
+    bin_index = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.eye(num_bins)[bin_index]
+    fixed_effects = [pd.get_dummies(df[name]).to_numpy(float) for name in factor_names]
+    design = np.column_stack([basis, df[["z"]].to_numpy(float), *fixed_effects])
+    theta = np.linalg.lstsq(design, df["y"].to_numpy(), rcond=None)[0]
+
+    evaluation = np.tile(design.mean(axis=0), (num_bins, 1))
+    evaluation[:, :num_bins] = np.eye(num_bins)
+    return evaluation @ theta
+
+
+@pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize(
+    "case",
+    [
+        "crossed_two_way",
+        "disconnected_two_way",
+        "nested_two_way",
+        "crossed_three_way",
+        "nested_three_way",
+        "duplicate_three_way",
+        "singleton_heavy",
+    ],
+)
+def test_adversarial_multiway_dots_match_full_dummy_ols(case, seed):
+    """End-to-end dots equal dense OLS across rank-deficient FE topologies."""
+    df, factor_names = _adversarial_panel(case, seed)
+    actual = run_native(df, controls=["z", *factor_names], num_bins=7)
+    expected = _full_dummy_dot_oracle(df, factor_names, num_bins=7)
+    np.testing.assert_allclose(actual, expected, rtol=2e-8, atol=2e-8)
+
+
 def test_projector_solves_the_stacked_normal_equations():
     """``G alpha = rhs`` to machine precision, for several right-hand sides."""
     rng = np.random.default_rng(17)
@@ -722,6 +808,24 @@ def test_disconnected_components_still_give_unique_fitted_values():
     alpha = projector.solve(rhs)
 
     expected = D @ np.linalg.lstsq(D.T @ D, rhs, rcond=None)[0]
+    np.testing.assert_allclose(
+        projector.row_effects(alpha, row_codes), expected, rtol=1e-8, atol=1e-8
+    )
+
+
+def test_projector_solves_a_sparse_long_chain():
+    """The production solver handles the weakest connected design, not just its rank."""
+    links = 180
+    row_codes = np.column_stack(
+        [np.arange(2 * links - 2) // 2 + 1, np.arange(2 * links - 2) // 2]
+    )
+    row_codes[::2, 0] -= 1
+    projector, dense = dense_projector(row_codes)
+    rng = np.random.default_rng(109)
+    values = rng.normal(size=(row_codes.shape[0], 3))
+
+    alpha = projector.solve(dense.T @ values)
+    expected = dense @ np.linalg.lstsq(dense, values, rcond=None)[0]
     np.testing.assert_allclose(
         projector.row_effects(alpha, row_codes), expected, rtol=1e-8, atol=1e-8
     )
@@ -854,6 +958,29 @@ def test_high_cardinality_two_way_completes():
     )
     assert out.shape == (10,)
     assert np.all(np.isfinite(out))
+
+
+def test_joint_cell_limit_raises_a_readable_error(monkeypatch):
+    """The driver-side cell guard fails before a large aggregate is consumed."""
+    monkeypatch.setattr(fe_mod, "MAX_FE_CELLS", 3)
+    df = pd.DataFrame(
+        {
+            "x": np.arange(8, dtype=float),
+            "y": np.arange(8, dtype=float),
+            "firm": ["a", "a", "b", "b", "c", "c", "d", "d"],
+            "year": ["1", "2", "1", "2", "1", "2", "1", "2"],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"firm.*year.*above the 3 limit"):
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["firm", "year"],
+            num_bins=2,
+            return_type="native",
+        )
 
 
 # --------------------------------------------------------------------------
