@@ -3,9 +3,9 @@
 ## Unreleased
 
 ### Changed
-- The README now leads with a detailed 120-bin Gapminder plot and follows it with
-  the automatically selected DPI version, so new readers first see the shape that
-  binscatter reveals.
+- The README now leads with a binscatter from the public replication data for
+  Cattaneo et al.'s taxation-and-innovation application, then shows the original
+  Gapminder DPI example.
 
 ### Added
 - `.github/pull_request_template.md`, so new pull requests open pre-filled with four headings — What, Why, Verify, Risk — and comments asking for a body under 200 words that describes the change rather than the diff. Unused sections are meant to be deleted rather than marked "N/A".

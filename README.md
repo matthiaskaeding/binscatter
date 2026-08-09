@@ -21,20 +21,19 @@ pip install binscatter
 
 ## Example
 
+This binscatter reproduces the taxation-and-innovation application in
+[Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576), using the public
+[Akcigit et al. (2021) replication data](https://doi.org/10.7910/DVN/SR410I).
+
+<img src="images/readme/taxation_innovation_poly2.png" alt="Binscatter: taxation and innovation in 20th-century United States" width="640" />
+
+The original Gapminder example uses the default DPI (Direct Plug-In) selector:
+
 ```python
 import plotly.express as px
 from binscatter import binscatter
 
 df = px.data.gapminder()
-binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
-```
-
-<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_fixed.png" alt="Binscatter: GDP per capita vs Life Expectancy (120 bins)" width="640" />
-
-Use `num_bins` when you want a more detailed view of the relationship. By default,
-binscatter chooses the number of bins with the DPI (Direct Plug-In) selector:
-
-```python
 binscatter(df, "gdpPercap", "lifeExp")
 ```
 
