@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+- The README now leads with a detailed 120-bin Gapminder plot and follows it with
+  the automatically selected DPI version, so new readers first see the shape that
+  binscatter reveals.
+
 ### Added
 - `.github/pull_request_template.md`, so new pull requests open pre-filled with four headings — What, Why, Verify, Risk — and comments asking for a body under 200 words that describes the change rather than the diff. Unused sections are meant to be deleted rather than marked "N/A".
 - `tests/test_numerical_contract.py`, the portable statement of what #95 is about: the dots are the conditional mean of `y` given the bin at the sample-average controls, and that estimand does not know where a control's origin sits, what units it was measured in, which basis was chosen for the space the controls span, or how many redundant copies of a column were passed in. Each test therefore compares `binscatter()` against the same call on transformed data and needs no oracle. It follows the rules `tests/test_fe_contract.py` follows — only `binscatter()` is imported, nothing is patched, nothing asserts which route ran — so it stays valid across implementations; the multi-factor cases are there because they are the numerically hard ones, not to pin a particular way of handling fixed effects. Coverage spans the dots, the ROT and DPI bin counts, both interval styles, the `poly_line` overlay, degenerate designs, and column names that collide with internal temporaries. Five cases carry `quick` and join `make test-fast`.
