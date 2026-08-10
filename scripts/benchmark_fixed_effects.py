@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import platform
 import sys
 import time
@@ -358,9 +359,27 @@ def console_report(
 
 
 def environment_line() -> str:
+    """Describe the runtime and machine resources behind a timing report."""
+    system = platform.system()
+    if system == "Darwin":
+        version = platform.mac_ver()[0] or platform.release()
+        operating_system = f"macOS {version}"
+    else:
+        operating_system = f"{system} {platform.release()}"
+
+    cpu_count = os.cpu_count()
+    cpu = f"{cpu_count} logical CPUs" if cpu_count is not None else "CPU count unknown"
+    try:
+        memory_bytes = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (AttributeError, OSError, ValueError):
+        memory = "RAM unknown"
+    else:
+        memory_gib = memory_bytes / 1024**3
+        memory = f"{memory_gib:g} GiB RAM"
+
     return (
-        f"Python {platform.python_version()}, pandas {pd.__version__}, "
-        f"{platform.system()} {platform.machine()}"
+        f"Python {platform.python_version()}, pandas {pd.__version__}; "
+        f"{operating_system} {platform.machine()}; {cpu}, {memory}"
     )
 
 

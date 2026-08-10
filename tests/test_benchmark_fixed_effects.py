@@ -1,5 +1,7 @@
 """Smoke tests for the reproducible fixed-effect benchmark harness."""
 
+import platform
+
 import pytest
 
 from scripts import benchmark_fixed_effects as benchmark
@@ -48,3 +50,13 @@ def test_markdown_report_is_ready_to_copy():
 def test_measure_rejects_an_empty_timing_sample():
     with pytest.raises(ValueError, match="at least one"):
         benchmark._measure(lambda: None, repeats=0)
+
+
+def test_environment_line_identifies_the_benchmark_runtime():
+    line = benchmark.environment_line()
+
+    assert f"Python {platform.python_version()}" in line
+    assert f"pandas {benchmark.pd.__version__}" in line
+    assert platform.machine() in line
+    assert "logical CPUs" in line or "CPU count unknown" in line
+    assert "RAM" in line

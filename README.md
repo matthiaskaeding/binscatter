@@ -49,9 +49,14 @@ Example timings for 5,000 pandas rows and 10 bins:
 
 | categories | `binscatter` | explicit one-hot | speedup |
 |---:|---:|---:|---:|
-| 10 | ~0.007s | ~0.015s | ~2× |
-| 25 | ~0.007s | ~0.06s | ~9× |
-| 50 | ~0.007s | ~0.27s | ~39× |
+| 10 | ~0.009s | ~0.017s | ~2× |
+| 25 | ~0.008s | ~0.064s | ~8× |
+| 50 | ~0.008s | ~0.28s | ~36× |
+
+Reference environment: MacBook Air (Apple M1, 8 CPU cores, 16 GB RAM), macOS
+15.6.1 arm64, Python 3.11.9, and pandas 3.0.5. The values are medians of three
+calls from `make benchmark-fe-fast`, run locally on 10 August 2026; they are
+comparative measurements, not performance guarantees for other machines.
 
 ```bash
 make benchmark-fe-fast  # short suite
