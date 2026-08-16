@@ -3,7 +3,7 @@
 **TL;DR:** Fast binscatter plots with automatic bin selection for all kinds of dataframes
 
 - Handles pandas, Polars, DuckDB, Dask, and PySpark via `narwhals`
-- Supports covariate adjustment (including high-dimensional categorical controls) and confidence intervals
+- Supports covariate adjustment - including high-dimensional categoricals - and confidence intervals
 - Interactive plots via `plotly`
 - Implementation follows [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
