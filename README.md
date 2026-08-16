@@ -5,7 +5,7 @@
 - Handles pandas, Polars, DuckDB, Dask, and PySpark via `narwhals`
 - Supports covariate adjustment - including high-dimensional categoricals - and confidence intervals
 - Interactive plots via `plotly`
-- Implementation follows [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
+- Implementation follows [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576)
 
 ## What are binscatter plots?
 
