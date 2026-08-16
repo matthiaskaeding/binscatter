@@ -38,6 +38,8 @@
 - `ABSORB_MIN_LEVELS`. It existed because the DPI selector's sandwich variance was not invariant to the one-hot/absorbed reparameterization, which the centered parameterization already fixed; with every categorical now absorbed there is no threshold left to cross.
 
 ### Fixed
+- Controls named `__count` or `__sum_y` no longer collide with internal per-bin
+  aggregation names (#95).
 - Fixed-effect point estimates no longer change when a numeric control is rescaled or when a large constant is added to both the predictor and response (#107). The rank-deficient projected normal equations are now equilibrated before their numerical rank is determined, so control units cannot erase the bin directions, and the response is centred before its fixed-effect aggregates are formed, avoiding cancellation between large group sums.
 - Absorbed confidence intervals now allocate collision-free aggregation names throughout both passes. Numeric controls named like `__ci_fe_e` or `__ci_fe_x` previously produced silently wrong bounds, while fixed-effect columns named like `__ci_fe_n` could crash when their grouping key collided with an aggregate. The regression coverage now also exercises dense full-dummy oracles on disconnected, nested, duplicated and singleton-heavy multi-way designs, sparse-chain projection convergence, the fixed-effect cell limit, and the documented three-way degrees-of-freedom approximation.
 - PySpark-only tests are now consistently marked `pyspark`, so the default non-Spark test gate no longer starts a JVM merely because PySpark happens to be installed.

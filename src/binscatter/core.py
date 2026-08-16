@@ -29,6 +29,7 @@ from binscatter.fixed_effects import (
     compute_fe_moments,
     demean_centered,
     factor_codes,
+    free_aliases,
     recover_levels,
     select_absorbed,
     symmetrize,
@@ -541,10 +542,13 @@ def partial_out_controls(
         df_for_fit = df_prepped
         response_for_fit = profile.y_col
 
+    aliases = free_aliases(df_prepped, ("__count", "__sum_y"))
+    count_alias = aliases["__count"]
+    sum_y_alias = aliases["__sum_y"]
     agg_exprs = [
-        nw.len().alias("__count"),
+        nw.len().alias(count_alias),
         profile.x_col.mean().alias(profile.x_name),
-        response_for_fit.sum().alias("__sum_y"),
+        response_for_fit.sum().alias(sum_y_alias),
         *[nw.col(c).sum().alias(c) for c in profile.regression_features],
     ]
 
@@ -552,11 +556,11 @@ def partial_out_controls(
         df_for_fit.group_by(profile.bin_name).agg(*agg_exprs).sort(profile.bin_name)
     ).collect()
 
-    counts = per_bin.get_column("__count").to_numpy()
+    counts = per_bin.get_column(count_alias).to_numpy()
     if counts.size < profile.num_bins:
         msg = "Quantiles are not unique. Decrease number of bins."
         raise ValueError(msg)
-    sum_y = per_bin.get_column("__sum_y").to_numpy()
+    sum_y = per_bin.get_column(sum_y_alias).to_numpy()
     if profile.regression_features:
         bin_control_sums = np.column_stack(
             [
