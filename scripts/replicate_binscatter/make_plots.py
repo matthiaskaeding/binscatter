@@ -1,11 +1,15 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
+#     "binscatter",
 #     "plotly",
 #     "polars",
 #     "kaleido",
 #     "pyarrow",
 # ]
+#
+# [tool.uv.sources]
+# binscatter = { path = "../..", editable = true }
 # ///
 
 # This roughly replicates figure 2 in
@@ -28,7 +32,7 @@ import logging
 import plotly.express as px
 import polars as pl
 
-from src.binscatter.core import binscatter
+from binscatter import binscatter
 
 proj_dir = ROOT
 log_file = proj_dir / "artifacts" / "binscatter.log"
@@ -50,7 +54,7 @@ for n in ("choreographer", "kaleido", "numba", "matplotlib", "asyncio", "browser
 print("project dir =", proj_dir)
 data_dir = proj_dir / "artifacts"
 data_dir.mkdir(exist_ok=True, parents=True)
-assets_dir = proj_dir / "images" / "readme"
+assets_dir = proj_dir / "artifacts" / "images" / "readme"
 assets_dir.mkdir(exist_ok=True, parents=True)
 # %%
 parquet_path = data_dir / "state_data_processed.parquet"
@@ -135,6 +139,11 @@ for i in range(1, 4):
         num_bins="rule-of-thumb",
         poly_line=i,
     )
+    p_poly.update_layout(
+        title="Taxation and innovation in 20th-century United States",
+        xaxis_title=axis_labels["x"],
+        yaxis_title=axis_labels["y"],
+    )
     p_poly.write_image(
-        assets_dir / f"binscatter_controls_poly{i}.png", width=640, height=480
+        assets_dir / f"taxation_innovation_poly{i}.png", width=640, height=480
     )

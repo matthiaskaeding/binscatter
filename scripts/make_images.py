@@ -7,7 +7,7 @@ from plotly.subplots import make_subplots
 
 from binscatter import binscatter
 
-images_folder = Path(__file__).parents[1] / "images" / "readme"
+images_folder = Path(__file__).parents[1] / "artifacts" / "images" / "readme"
 images_folder.mkdir(exist_ok=True, parents=True)
 assert images_folder.exists(), f"{images_folder} does not exist"
 np.random.seed(0)

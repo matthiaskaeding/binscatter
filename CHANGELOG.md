@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Changed
+- The README now leads with a minimal age–systolic-blood-pressure example from the
+  public NHANES educational data, using default automatic bin selection. Its
+  documented two-column CSV and reproducible preparation script are checked in, so
+  the example runs as written without a network request.
+- Generated image output now lives under `artifacts/images/`; the publishing workflow
+  copies that directory to the orphan `images` branch instead of mixing build output
+  into the source tree.
+
 ### Added
 - `make benchmark-fe-fast` and a structured `--quick` mode for `scripts/benchmark_fixed_effects.py`. The short suite reports median one-way cardinality, row-scaling and two-way observed-cell timings in either aligned terminal output or README-ready Markdown; the original larger `make benchmark-fe` scaling exercise remains available. Every report identifies its Python and pandas versions, OS and architecture, logical CPU count and RAM. The README and demo notebook summarize the performance of high-dimensional categorical controls, identify the reference hardware beside the published timings, and provide reproduction commands.
 - `.github/pull_request_template.md`, so new pull requests open pre-filled with four headings — What, Why, Verify, Risk — and comments asking for a body under 200 words that describes the change rather than the diff. Unused sections are meant to be deleted rather than marked "N/A".

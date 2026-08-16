@@ -48,7 +48,7 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=ROOT / "images" / "lightgbm",
+        default=ROOT / "artifacts" / "images" / "lightgbm",
     )
     parser.add_argument("--num-bins", type=int, default=25)
     args = parser.parse_args()
@@ -65,7 +65,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_dir = ROOT / "images" / "lightgbm"
+    image_dir = ROOT / "artifacts" / "images" / "lightgbm"
     image_dir.mkdir(parents=True, exist_ok=True)
 
     for parameter in [col for col in HYPERPARAM_COLUMNS if col in df.columns]:

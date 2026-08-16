@@ -15,27 +15,25 @@
 # ///
 """Generate binscatter demo figures for README and blog posts.
 
-Uses plotly built-in datasets (gapminder, tips, iris) plus optional local
-artifacts (state_data, optuna trials) when available.
+Uses committed README data and optional local Optuna artifacts.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import plotly.express as px
+import pandas as pd
 import polars as pl
 
 from binscatter import binscatter
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = ROOT / "artifacts"
-IMAGES = ROOT / "images" / "readme"
+IMAGES = ROOT / "artifacts" / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_README_IMAGES = [
-    "gapminder_gdp_lifeexp_dpi.png",
-    "gapminder_gdp_lifeexp_fixed.png",
+    "nhanes_age_bp.png",
 ]
 
 
@@ -71,21 +69,6 @@ def _write_fig(fig, filename: str, **write_kwargs) -> None:
     print(f"Wrote {target}")
 
 
-def _load_state_df() -> pl.DataFrame:
-    return pl.read_parquet(
-        _require_artifact(ARTIFACTS / "state_data_processed.parquet")
-    ).select(
-        "mtr90_lag3",
-        "lnpat",
-        "top_corp_lag3",
-        "real_gdp_pc",
-        "population_density",
-        "rd_credit_lag3",
-        "statenum",
-        "year",
-    )
-
-
 def _load_optuna_df(name: str, columns: list[str]) -> pl.DataFrame:
     return pl.read_parquet(
         _require_artifact(ARTIFACTS / f"optuna_{name}_trials.parquet")
@@ -93,26 +76,9 @@ def _load_optuna_df(name: str, columns: list[str]) -> pl.DataFrame:
 
 
 def build_readme_plot() -> None:
-    df = _load_state_df()
-    controls = [
-        "top_corp_lag3",
-        "real_gdp_pc",
-        "population_density",
-        "rd_credit_lag3",
-        "statenum",
-        "year",
-    ]
-    _write_binscatter_variants(
-        "binscatter_controls.png",
-        add_dpi_variant=True,
-        args=(df,),
-        kwargs={
-            "x": "mtr90_lag3",
-            "y": "lnpat",
-            "controls": controls,
-            "num_bins": "rule-of-thumb",
-        },
-    )
+    df = pd.read_csv(ROOT / "data" / "nhanes_age_bp.csv")
+    fig = binscatter(df, x="age", y="systolic_bp")
+    _write_fig(fig, "nhanes_age_bp.png", width=640, height=440)
 
 
 def build_lightgbm_plot() -> None:
@@ -158,32 +124,10 @@ def build_lightgbm_plot() -> None:
     )
 
 
-def build_gapminder_plots() -> None:
-    df_pl = pl.from_pandas(px.data.gapminder()).with_columns(
-        pl.col("gdpPercap").log().alias("log_gdp"),
-        pl.col("lifeExp").log().alias("log_life"),
-    )
-    # DPI selector (default) - shown first in README
-    fig_dpi = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins="dpi")
-    _write_fig(fig_dpi, "gapminder_gdp_lifeexp_dpi.png")
-
-    # Fixed 120 bins - shown second in README
-    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=120)
-    _write_fig(fig_fixed, "gapminder_gdp_lifeexp_fixed.png")
-
-    _write_binscatter_variants(
-        "gapminder_log_axes.png",
-        add_dpi_variant=False,
-        args=(df_pl, "log_gdp", "log_life"),
-        kwargs={},
-    )
-
-
 def main() -> None:
     builders = [
-        ("gapminder", build_gapminder_plots),
         ("lightgbm", build_lightgbm_plot),
-        ("readme (state data)", build_readme_plot),
+        ("readme (NHANES)", build_readme_plot),
     ]
 
     failed = []
@@ -203,7 +147,7 @@ def main() -> None:
     if missing:
         files = ", ".join(missing)
         raise FileNotFoundError(
-            f"Missing README image(s): {files}. Gapminder plots must render successfully."
+            f"Missing README image(s): {files}. NHANES must render successfully."
         )
 
 
