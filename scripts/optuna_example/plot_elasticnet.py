@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from binscatter.core import binscatter
 
-OUT_DIR = ROOT / "images" / "elasticnet"
+OUT_DIR = ROOT / "artifacts" / "images" / "elasticnet"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 

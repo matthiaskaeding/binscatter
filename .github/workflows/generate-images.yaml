@@ -24,8 +24,8 @@ jobs:
 
       - name: Generate plots
         run: |
-          # Only generates plots for available datasets (gapminder always available)
-          # Skips state_data, optuna trials etc. if artifacts not present
+          # The README data is checked in; optional benchmark plots are skipped
+          # when their local inputs are unavailable.
           uv run scripts/readme/make_plots_readme.py
 
       - name: Deploy to images branch
@@ -35,7 +35,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           TEMP_DIR=$(mktemp -d)
-          cp -r images "$TEMP_DIR"
+          mkdir -p "$TEMP_DIR/images"
+          cp -r artifacts/images/. "$TEMP_DIR/images/"
           PNG_COUNT=$(find "$TEMP_DIR/images" -type f -name '*.png' | wc -l)
           if [ "$PNG_COUNT" -eq 0 ]; then
             echo "No PNG files were generated; aborting deploy." >&2

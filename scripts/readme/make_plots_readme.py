@@ -28,7 +28,7 @@ from binscatter import binscatter
 
 ROOT = Path(__file__).resolve().parents[2]
 ARTIFACTS = ROOT / "artifacts"
-IMAGES = ROOT / "images" / "readme"
+IMAGES = ROOT / "artifacts" / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_README_IMAGES = [
@@ -69,9 +69,7 @@ def _write_fig(fig, filename: str, **write_kwargs) -> None:
 
 
 def _load_state_df() -> pl.DataFrame:
-    return pl.read_parquet(
-        _require_artifact(ARTIFACTS / "state_data_processed.parquet")
-    ).select(
+    return pl.read_parquet(ROOT / "data" / "state_data_processed.parquet").select(
         "mtr90_lag3",
         "lnpat",
         "top_corp_lag3",
@@ -104,7 +102,6 @@ def build_readme_plot() -> None:
         x="mtr90_lag3",
         y="lnpat",
         controls=controls,
-        poly_line=1,
     )
     fig.update_layout(
         xaxis_title="Log net-of-tax rate (3-year lag)",

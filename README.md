@@ -27,7 +27,8 @@ from binscatter import binscatter
 
 # Data: Akcigit et al. (2021), Harvard Dataverse, CC0 1.0:
 # https://doi.org/10.7910/DVN/SR410I
-df = pl.read_parquet("artifacts/state_data_processed.parquet")
+DATA_URL = "https://raw.githubusercontent.com/matthiaskaeding/binscatter/main/data/state_data_processed.parquet"
+df = pl.read_parquet(DATA_URL)
 binscatter(
     df,
     "mtr90_lag3",
@@ -40,7 +41,6 @@ binscatter(
         "statenum",
         "year",
     ],
-    poly_line=1,
 )
 ```
 

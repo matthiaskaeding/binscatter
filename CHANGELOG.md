@@ -4,8 +4,12 @@
 
 ### Changed
 - The README now leads with a taxation-and-innovation binscatter from the CC0
-  replication dataset, using default automatic bin selection, descriptive axes, and
-  a linear overlay.
+  replication dataset, using default automatic bin selection and descriptive axes.
+  Its documented processed Parquet data is checked into the repository, so the
+  example runs as written.
+- Generated image output now lives under `artifacts/images/`; the publishing workflow
+  copies that directory to the orphan `images` branch instead of mixing build output
+  into the source tree.
 
 ### Added
 - `.github/pull_request_template.md`, so new pull requests open pre-filled with four headings — What, Why, Verify, Risk — and comments asking for a body under 200 words that describes the change rather than the diff. Unused sections are meant to be deleted rather than marked "N/A".

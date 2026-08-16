@@ -54,7 +54,7 @@ for n in ("choreographer", "kaleido", "numba", "matplotlib", "asyncio", "browser
 print("project dir =", proj_dir)
 data_dir = proj_dir / "artifacts"
 data_dir.mkdir(exist_ok=True, parents=True)
-assets_dir = proj_dir / "images" / "readme"
+assets_dir = proj_dir / "artifacts" / "images" / "readme"
 assets_dir.mkdir(exist_ok=True, parents=True)
 # %%
 parquet_path = data_dir / "state_data_processed.parquet"
