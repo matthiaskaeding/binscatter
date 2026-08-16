@@ -162,6 +162,6 @@ This applies to more than library features. Anything a user or contributor would
 
 Purely internal churn — a refactor with no observable effect, a test-only rename — does not need an entry.
 
-Write entries so they still make sense months later, without the PR open next to them: say what changed and why it matters, not just which symbol moved. Match the level of detail in the existing sections.
+Keep every entry very short. Use one plain sentence that says what changed and why users need to know. Leave implementation details, test coverage, and background out of the changelog.
 
 Do not defer this to release time. An empty `## Unreleased` section under a series of merged behaviour changes means the history was lost, and reconstructing it from the commit log afterwards is guesswork.
