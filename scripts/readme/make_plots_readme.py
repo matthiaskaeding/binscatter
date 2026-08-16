@@ -108,7 +108,6 @@ def build_readme_plot() -> None:
         x="mtr90_lag3",
         y="lnpat",
         controls=controls,
-        num_bins="rule-of-thumb",
     )
     fig.update_layout(
         title="Taxation and innovation in 20th-century United States",

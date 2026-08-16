@@ -38,7 +38,6 @@ binscatter(
         "statenum",
         "year",
     ],
-    num_bins="rule-of-thumb",
 )
 ```
 
