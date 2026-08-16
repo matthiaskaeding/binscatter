@@ -15,8 +15,10 @@ import pytest
 import binscatter.fixed_effects as fe_mod
 from binscatter import binscatter, core
 from binscatter.fixed_effects import (
+    FEProjector,
     demean_centered,
     demean_within,
+    factor_codes,
     group_codes,
     within_correct,
 )
@@ -86,20 +88,12 @@ def _to_pandas(obj):
 
 
 def without_absorption(monkeypatch):
-    """Force the legacy one-hot path so the two can be compared."""
-    monkeypatch.setattr(core, "select_absorbed", lambda *a, **k: None)
+    """Force the one-hot path so the two can be compared.
 
-
-@pytest.fixture
-def force_absorption(monkeypatch):
-    """Absorb even tiny categoricals.
-
-    Production only absorbs at ``ABSORB_MIN_LEVELS`` or more, but the one-hot path
-    it is compared against costs O(G^2) aggregations, so the equivalence tests would
-    be unusably slow at a realistic threshold. Lowering it here exercises exactly the
-    same code on small data.
+    Every categorical control is absorbed in production, so the one-hot route
+    survives only as the oracle these equivalence tests measure against.
     """
-    monkeypatch.setattr(fe_mod, "ABSORB_MIN_LEVELS", 2)
+    monkeypatch.setattr(core, "select_absorbed", lambda *a, **k: ())
 
 
 # --------------------------------------------------------------------------
@@ -114,7 +108,7 @@ def force_absorption(monkeypatch):
     [["grp"], ["age", "grp"], ["age", "grp", "region"]],
     ids=["cat_only", "cat_plus_numeric", "two_cats_plus_numeric"],
 )
-def test_absorbed_matches_one_hot(df_type, controls, monkeypatch, force_absorption):
+def test_absorbed_matches_one_hot(df_type, controls, monkeypatch):
     df = convert_to_backend(make_panel(), df_type)
     absorbed = run_native(df, controls=controls, num_bins=6)
     without_absorption(monkeypatch)
@@ -125,7 +119,7 @@ def test_absorbed_matches_one_hot(df_type, controls, monkeypatch, force_absorpti
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_x_means_unchanged_by_absorption(df_type, monkeypatch, force_absorption):
+def test_x_means_unchanged_by_absorption(df_type, monkeypatch):
     """Absorption touches y only; the per-bin x means must not move at all."""
     df = convert_to_backend(make_panel(), df_type)
     absorbed = binscatter(
@@ -142,7 +136,7 @@ def test_x_means_unchanged_by_absorption(df_type, monkeypatch, force_absorption)
 
 
 @pytest.mark.quick
-def test_absorbed_matches_statsmodels_oracle(force_absorption):
+def test_absorbed_matches_statsmodels_oracle():
     """Independent check against explicit bin + fixed-effect dummies."""
     sm = pytest.importorskip("statsmodels.api")
     df = make_panel(n=1500, n_groups=12, seed=3)
@@ -176,7 +170,7 @@ def test_absorbed_matches_statsmodels_oracle(force_absorption):
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_row_order_does_not_change_result(df_type, force_absorption):
+def test_row_order_does_not_change_result(df_type):
     """group_by output order is not stable across backends; labels must be mapped."""
     df = make_panel(n=1200, n_groups=15, seed=7)
     shuffled = df.sample(frac=1.0, random_state=11).reset_index(drop=True)
@@ -198,7 +192,7 @@ def test_row_order_does_not_change_result(df_type, force_absorption):
         pytest.param(lambda i: "L" * 200 + str(i), id="very_long"),
     ],
 )
-def test_group_label_types(labels, force_absorption):
+def test_group_label_types(labels):
     """Group labels are dict keys, so exotic values must round-trip."""
     df = make_panel(n=800, n_groups=6, seed=5)
     codes = df["grp"].str.replace("g", "").astype(int)
@@ -215,7 +209,7 @@ def test_group_label_types(labels, force_absorption):
 # --------------------------------------------------------------------------
 
 
-def test_singleton_groups(force_absorption):
+def test_singleton_groups():
     """Levels with a single observation demean to exactly zero."""
     df = make_panel(n=400, n_groups=5, seed=9)
     # Give 20 rows their own private group.
@@ -224,7 +218,7 @@ def test_singleton_groups(force_absorption):
     assert np.all(np.isfinite(out))
 
 
-def test_level_confined_to_single_bin(force_absorption):
+def test_level_confined_to_single_bin():
     """A level appearing in only one bin is collinear with that bin."""
     df = make_panel(n=600, n_groups=6, seed=13)
     lowest = df["x"] < df["x"].quantile(0.15)
@@ -234,7 +228,7 @@ def test_level_confined_to_single_bin(force_absorption):
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_constant_categorical_is_not_absorbed(df_type, force_absorption):
+def test_constant_categorical_is_not_absorbed(df_type):
     """A one-level categorical carries no information and must be a no-op."""
     df = make_panel(n=600, seed=17)
     df["const"] = "same"
@@ -245,7 +239,7 @@ def test_constant_categorical_is_not_absorbed(df_type, force_absorption):
     np.testing.assert_allclose(with_const, without, rtol=1e-9, atol=1e-9)
 
 
-def test_disconnected_bin_group_structure(force_absorption):
+def test_disconnected_bin_group_structure():
     """Bins and groups forming disconnected blocks stay finite and identified."""
     rng = np.random.default_rng(21)
     n = 800
@@ -266,7 +260,7 @@ def test_disconnected_bin_group_structure(force_absorption):
 # --------------------------------------------------------------------------
 
 
-def test_fitted_values_stay_on_y_scale(force_absorption):
+def test_fitted_values_stay_on_y_scale():
     """Without the mean fixed effect added back, fitted values lose their level."""
     df = make_panel(n=1500, n_groups=20, seed=23)
     df["y"] = df["y"] + 500.0  # large offset carried entirely by the fixed effects
@@ -274,7 +268,7 @@ def test_fitted_values_stay_on_y_scale(force_absorption):
     assert 400.0 < out.mean() < 600.0
 
 
-def test_group_shift_moves_level_not_bin_effects(force_absorption):
+def test_group_shift_moves_level_not_bin_effects():
     """The defining fixed-effect property: a within-group shift is absorbed."""
     df = make_panel(n=1500, n_groups=20, seed=29)
     base = run_native(df, controls=["age", "grp"], num_bins=5)
@@ -295,7 +289,7 @@ def test_group_shift_moves_level_not_bin_effects(force_absorption):
 # --------------------------------------------------------------------------
 
 
-def test_rot_selector_matches_one_hot(monkeypatch, force_absorption):
+def test_rot_selector_matches_one_hot(monkeypatch):
     """The rule-of-thumb selector is moment-based, so absorption is exact for it."""
     df = make_panel(n=2000, n_groups=15, seed=31)
     absorbed = binscatter(
@@ -314,7 +308,7 @@ def test_rot_selector_matches_one_hot(monkeypatch, force_absorption):
     )
 
 
-def test_dpi_selector_matches_one_hot(monkeypatch, force_absorption):
+def test_dpi_selector_matches_one_hot(monkeypatch):
     """DPI is invariant to representing the same categorical by dummies or absorption."""
     df = make_panel(n=2000, n_groups=15, seed=31)
     absorbed = binscatter(
@@ -352,17 +346,18 @@ def test_dpi_variance_matches_centered_dummy_oracle():
         y, explicit_controls, bin_idx, bin_counts
     )
 
-    codes, counts = group_codes(df["grp"].to_numpy())
-    absorbed_y = demean_centered(y, codes, counts)
+    row_codes = factor_codes([df["grp"].to_numpy()])
+    projector = FEProjector.from_row_codes(row_codes, ("grp",))
+    absorbed_y = demean_centered(y, projector, row_codes)
     centered_age = age - age.mean()
-    absorbed_controls = demean_centered(centered_age, codes, counts)[:, None]
+    absorbed_controls = demean_centered(centered_age, projector, row_codes)[:, None]
     actual = core._compute_dpi_variance_constant(
         absorbed_y,
         absorbed_controls,
         bin_idx,
         bin_counts,
-        codes,
-        counts,
+        projector,
+        row_codes,
     )
 
     np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
@@ -383,21 +378,20 @@ def test_dpi_one_hot_is_invariant_to_reference_label(monkeypatch):
     np.testing.assert_allclose(original, changed_reference, rtol=1e-10, atol=1e-10)
 
 
-def test_absorption_threshold_preserves_existing_behaviour(monkeypatch):
-    """Below the threshold nothing is absorbed, so results cannot move."""
+def test_absorption_matches_one_hot_at_low_cardinality(monkeypatch):
+    """Absorbing a small categorical must not move results off the one-hot path."""
     df = make_panel(n=1500, n_groups=20, seed=59)
-    assert (
-        fe_mod.select_absorbed(core.clean_df(df, ("grp",), "x", "y")[0], ("grp",))
-        is None
-    )
+    assert fe_mod.select_absorbed(
+        core.clean_df(df, ("grp",), "x", "y")[0], ("grp",)
+    ) == ("grp",)
 
     default = run_native(df, controls=["age", "grp"], num_bins="dpi")
     without_absorption(monkeypatch)
-    legacy = run_native(df, controls=["age", "grp"], num_bins="dpi")
-    np.testing.assert_allclose(default, legacy, rtol=1e-12, atol=1e-12)
+    one_hot = run_native(df, controls=["age", "grp"], num_bins="dpi")
+    np.testing.assert_allclose(default, one_hot, rtol=1e-9, atol=1e-9)
 
 
-def test_poly_line_with_absorbed_fixed_effect(monkeypatch, force_absorption):
+def test_poly_line_with_absorbed_fixed_effect(monkeypatch):
     df = make_panel(n=1500, n_groups=12, seed=37)
     fig = binscatter(df, "x", "y", controls=["age", "grp"], num_bins=5, poly_line=2)
     absorbed_line = fig.data[1].y
@@ -413,7 +407,7 @@ def test_poly_line_with_absorbed_fixed_effect(monkeypatch, force_absorption):
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
-def test_nulls_in_fixed_effect_column_are_dropped(df_type, force_absorption):
+def test_nulls_in_fixed_effect_column_are_dropped(df_type):
     df = make_panel(n=900, n_groups=8, seed=41)
     df.loc[:49, "grp"] = None
     clean = df.dropna(subset=["grp"])
@@ -450,7 +444,7 @@ def test_high_cardinality_completes():
     # Assert the routing decision directly rather than by timing it: if this ever
     # falls back to one-hot the test would still pass, just take minutes.
     lazy, _, _, categorical = core.clean_df(df, ("firm_id",), "x", "y", ("firm_id",))
-    assert fe_mod.select_absorbed(lazy, categorical) == "firm_id"
+    assert fe_mod.select_absorbed(lazy, categorical) == ("firm_id",)
 
     out = run_native(df, controls=["firm_id"], categorical=["firm_id"], num_bins=10)
     assert out.shape == (10,)
@@ -477,7 +471,8 @@ def test_within_correct_matches_explicit_demeaning():
     for j in range(2):
         np.add.at(S_B[:, j], codes, B[:, j])
 
-    got = within_correct(A.T @ B, S_A, S_B, 1.0 / counts)
+    projector = FEProjector.from_row_codes(codes[:, None], ("grp",))
+    got = within_correct(A.T @ B, S_A, projector.solve(S_B))
 
     A_d = np.column_stack([demean_within(A[:, j], codes, counts) for j in range(3)])
     B_d = np.column_stack([demean_within(B[:, j], codes, counts) for j in range(2)])
@@ -497,24 +492,621 @@ def test_demean_within_zeroes_group_means():
 def test_demean_centered_preserves_mean_and_equalizes_group_means():
     values = np.array([1.0, 3.0, 7.0, 9.0, 11.0])
     codes = np.array([0, 0, 1, 1, 1])
-    counts = np.bincount(codes)
+    row_codes = codes[:, None]
+    projector = FEProjector.from_row_codes(row_codes, ("grp",))
 
-    result = demean_centered(values, codes, counts)
+    result = demean_centered(values, projector, row_codes)
 
     expected_mean = values.mean()
     assert result.mean() == pytest.approx(expected_mean)
-    for group in range(counts.size):
+    for group in range(2):
         assert result[codes == group].mean() == pytest.approx(expected_mean)
 
 
 @pytest.mark.quick
 @pytest.mark.parametrize("control_name", ["__fe_resp_0", "__fe_count"])
-def test_temporary_aliases_do_not_shadow_control_columns(
-    control_name, force_absorption
-):
+def test_temporary_aliases_do_not_shadow_control_columns(control_name):
     """Valid user column names must not collide with aggregation temporaries."""
     df = make_panel(n=1500, n_groups=12, seed=3)
     expected = run_native(df, controls=["age", "grp"], num_bins=6)
     renamed = df.rename(columns={"grp": control_name})
     actual = run_native(renamed, controls=["age", control_name], num_bins=6)
     np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-8)
+
+
+# --------------------------------------------------------------------------
+# 9. Several fixed effects at once
+# --------------------------------------------------------------------------
+
+
+def make_multiway_panel(n=3000, n_firms=30, n_years=8, n_regions=4, seed=0):
+    """A panel with three crossed factors of quite different cardinality."""
+    rng = np.random.default_rng(seed)
+    firm = rng.integers(0, n_firms, n)
+    year = rng.integers(0, n_years, n)
+    region = rng.integers(0, n_regions, n)
+    x = rng.normal(size=n)
+    age = rng.normal(size=n)
+    y = (
+        0.8 * x
+        + 1.5 * age
+        + rng.normal(scale=2.0, size=n_firms)[firm]
+        + rng.normal(scale=1.0, size=n_years)[year]
+        + rng.normal(scale=0.7, size=n_regions)[region]
+        + rng.normal(scale=0.5, size=n)
+    )
+    return pd.DataFrame(
+        {
+            "x": x,
+            "y": y,
+            "age": age,
+            "firm": [f"f{i:03d}" for i in firm],
+            "year": [f"y{i}" for i in year],
+            "region": [f"r{i}" for i in region],
+        }
+    )
+
+
+def dense_projector(row_codes, names=("a", "b")):
+    """Build a projector plus the dense dummy matrix ``D`` it stands in for."""
+    projector = FEProjector.from_row_codes(row_codes, names)
+    blocks = [
+        np.eye(int(projector.counts[f].size))[row_codes[:, f]]
+        for f in range(projector.num_factors)
+    ]
+    return projector, np.column_stack(blocks)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+@pytest.mark.parametrize(
+    "controls",
+    [
+        ["firm", "year"],
+        ["age", "firm", "year"],
+        ["age", "firm", "year", "region"],
+    ],
+    ids=["two_way", "two_way_plus_numeric", "three_way_plus_numeric"],
+)
+def test_multiway_matches_one_hot(df_type, controls, monkeypatch):
+    """The gate: absorbing several factors must equal encoding them all."""
+    df = convert_to_backend(make_multiway_panel(), df_type)
+    absorbed = run_native(df, controls=controls, num_bins=6)
+    without_absorption(monkeypatch)
+    one_hot = run_native(df, controls=controls, num_bins=6)
+
+    rtol, atol = tolerances(df_type)
+    np.testing.assert_allclose(absorbed, one_hot, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+@pytest.mark.parametrize(
+    ("controls", "transformation"),
+    [
+        (["age", "firm"], "rescale"),
+        (["age", "firm", "year"], "rescale"),
+        (["age", "firm", "year"], "shift_response"),
+    ],
+    ids=["one_factor_scale", "two_factor_scale", "two_factor_response_location"],
+)
+def test_fe_projection_is_invariant_to_numeric_units_and_location(
+    df_type, controls, transformation
+):
+    """Backend aggregation cannot make FE estimates depend on units or location."""
+    frame = make_multiway_panel(n=2000, seed=91)
+    baseline = run_native(
+        convert_to_backend(frame, df_type), controls=controls, num_bins=10
+    )
+
+    if transformation == "rescale":
+        changed = frame.assign(age=frame["age"] * 10_000_000.0)
+        offset = 0.0
+    else:
+        changed = frame.assign(y=frame["y"] + 1_000_000_000.0)
+        offset = 1_000_000_000.0
+
+    actual = run_native(
+        convert_to_backend(changed, df_type), controls=controls, num_bins=10
+    )
+    np.testing.assert_allclose(actual - offset, baseline, rtol=1e-7, atol=1e-6)
+
+
+@pytest.mark.parametrize(
+    "factors", [("firm", "year"), ("firm", "year", "region")], ids=["two", "three"]
+)
+def test_multiway_matches_statsmodels_oracle(factors):
+    """Independent check against explicit bin + fixed-effect dummies."""
+    sm = pytest.importorskip("statsmodels.api")
+    df = make_multiway_panel(n=2500, seed=3)
+    num_bins = 6
+
+    fitted = run_native(df, controls=["age", *factors], num_bins=num_bins)
+
+    edges = np.quantile(df["x"], np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(
+        np.searchsorted(edges, df["x"], side="right") - 1, 0, num_bins - 1
+    )
+    bin_dummies = pd.get_dummies(pd.Series(bin_idx), prefix="bin", drop_first=False)
+    fe_dummies = [
+        pd.get_dummies(df[name], prefix=name, drop_first=True) for name in factors
+    ]
+    age = df["age"].to_numpy()[:, None]
+    design = np.column_stack(
+        [bin_dummies.to_numpy(), age, *(d.to_numpy() for d in fe_dummies)]
+    ).astype(float)
+    theta = sm.OLS(df["y"].to_numpy(), design).fit().params
+    beta = theta[:num_bins]
+    gamma = theta[num_bins:]
+    means = np.concatenate([[age.mean()], *(d.mean().to_numpy() for d in fe_dummies)])
+    expected = beta + means @ gamma
+
+    np.testing.assert_allclose(fitted, expected, rtol=1e-8, atol=1e-8)
+
+
+def _adversarial_panel(case: str, seed: int) -> tuple[pd.DataFrame, list[str]]:
+    """Small FE designs whose full dummy matrices are cheap enough to materialize."""
+    rng = np.random.default_rng(seed)
+    n = 900
+    if case == "crossed_two_way":
+        codes = [rng.integers(0, 17, n), rng.integers(0, 7, n)]
+    elif case == "disconnected_two_way":
+        island = rng.integers(0, 3, n)
+        codes = [
+            island * 7 + rng.integers(0, 7, n),
+            island * 4 + rng.integers(0, 4, n),
+        ]
+    elif case == "nested_two_way":
+        fine = rng.integers(0, 18, n)
+        codes = [fine, fine // 3]
+    elif case == "crossed_three_way":
+        codes = [
+            rng.integers(0, 13, n),
+            rng.integers(0, 6, n),
+            rng.integers(0, 4, n),
+        ]
+    elif case == "nested_three_way":
+        fine = rng.integers(0, 18, n)
+        codes = [fine, fine // 3, fine % 3]
+    elif case == "duplicate_three_way":
+        repeated = rng.integers(0, 12, n)
+        codes = [repeated, repeated.copy(), rng.integers(0, 5, n)]
+    elif case == "singleton_heavy":
+        mostly_singletons = np.r_[np.arange(100), rng.integers(0, 8, n - 100)]
+        rng.shuffle(mostly_singletons)
+        codes = [mostly_singletons, rng.integers(0, 5, n)]
+    else:  # pragma: no cover - guards the parametrization below
+        raise AssertionError(f"unknown adversarial design {case}")
+
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = 0.7 * x + 1.2 * z + rng.normal(scale=0.7, size=n)
+    data: dict[str, object] = {"x": x, "z": z}
+    factor_names = []
+    for index, code in enumerate(codes):
+        name = f"factor_{index}"
+        factor_names.append(name)
+        y += rng.normal(size=int(code.max()) + 1)[code]
+        data[name] = [f"{name}_{value}" for value in code]
+    data["y"] = y
+    return pd.DataFrame(data), factor_names
+
+
+def _full_dummy_dot_oracle(
+    df: pd.DataFrame, factor_names: list[str], num_bins: int
+) -> np.ndarray:
+    """Dense OLS dots using every indicator, with no reference-level convention."""
+    x = df["x"].to_numpy()
+    edges = np.quantile(x, np.linspace(0.0, 1.0, num_bins + 1))
+    bin_index = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.eye(num_bins)[bin_index]
+    fixed_effects = [pd.get_dummies(df[name]).to_numpy(float) for name in factor_names]
+    design = np.column_stack([basis, df[["z"]].to_numpy(float), *fixed_effects])
+    theta = np.linalg.lstsq(design, df["y"].to_numpy(), rcond=None)[0]
+
+    evaluation = np.tile(design.mean(axis=0), (num_bins, 1))
+    evaluation[:, :num_bins] = np.eye(num_bins)
+    return evaluation @ theta
+
+
+@pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize(
+    "case",
+    [
+        "crossed_two_way",
+        "disconnected_two_way",
+        "nested_two_way",
+        "crossed_three_way",
+        "nested_three_way",
+        "duplicate_three_way",
+        "singleton_heavy",
+    ],
+)
+def test_adversarial_multiway_dots_match_full_dummy_ols(case, seed):
+    """End-to-end dots equal dense OLS across rank-deficient FE topologies."""
+    df, factor_names = _adversarial_panel(case, seed)
+    actual = run_native(df, controls=["z", *factor_names], num_bins=7)
+    expected = _full_dummy_dot_oracle(df, factor_names, num_bins=7)
+    np.testing.assert_allclose(actual, expected, rtol=2e-8, atol=2e-8)
+
+
+def test_projector_solves_the_stacked_normal_equations():
+    """``G alpha = rhs`` to machine precision, for several right-hand sides."""
+    rng = np.random.default_rng(17)
+    n = 4000
+    row_codes = np.column_stack(
+        [rng.integers(0, 40, n), rng.integers(0, 12, n), rng.integers(0, 5, n)]
+    )
+    projector = FEProjector.from_row_codes(row_codes, ("a", "b", "c"))
+    values = rng.normal(size=(n, 4))
+    rhs = np.concatenate(
+        [
+            np.column_stack(
+                [
+                    np.bincount(
+                        row_codes[:, f],
+                        weights=values[:, j],
+                        minlength=projector.counts[f].size,
+                    )
+                    for j in range(values.shape[1])
+                ]
+            )
+            for f in range(3)
+        ]
+    )
+
+    alpha = projector.solve(rhs)
+    residual = np.linalg.norm(projector.matvec(alpha) - rhs) / np.linalg.norm(rhs)
+    assert residual < fe_mod.FE_TOL
+
+
+def test_projector_cross_product_matches_explicit_projection():
+    """``A'B - (D'A)' alpha_B`` equals ``A' M_D B`` with ``D`` materialized."""
+    rng = np.random.default_rng(19)
+    n = 1200
+    row_codes = np.column_stack([rng.integers(0, 15, n), rng.integers(0, 6, n)])
+    projector, D = dense_projector(row_codes)
+
+    A = rng.normal(size=(n, 3))
+    B = rng.normal(size=(n, 2))
+    S_A = D.T @ A
+    S_B = D.T @ B
+
+    got = within_correct(A.T @ B, S_A, projector.solve(S_B))
+
+    residual_maker = np.eye(n) - D @ np.linalg.pinv(D.T @ D) @ D.T
+    expected = A.T @ residual_maker @ B
+    np.testing.assert_allclose(got, expected, rtol=1e-9, atol=1e-9)
+
+
+def test_projector_one_way_is_the_closed_form():
+    """A single factor must not iterate at all -- ``G`` is already diagonal."""
+    rng = np.random.default_rng(23)
+    n = 800
+    row_codes = rng.integers(0, 12, n)[:, None]
+    projector = FEProjector.from_row_codes(row_codes, ("grp",))
+    rhs = rng.normal(size=(projector.total_levels, 3))
+
+    np.testing.assert_array_equal(
+        projector.solve(rhs), rhs / projector.counts[0][:, None]
+    )
+
+
+def test_conjugate_gradient_fallback_reaches_the_same_solution():
+    """The CG rescue path solves the same system the sweeps do."""
+    rng = np.random.default_rng(29)
+    n = 2000
+    row_codes = np.column_stack([rng.integers(0, 25, n), rng.integers(0, 9, n)])
+    projector = FEProjector.from_row_codes(row_codes, ("a", "b"))
+    rhs = projector.matvec(rng.normal(size=(projector.total_levels, 2)))
+
+    gauss_seidel = projector.solve(rhs)
+    conjugate = projector._solve_cg(rhs, np.zeros_like(rhs))
+
+    # alpha itself is not unique -- G is singular -- but D alpha is, so compare the
+    # projection rather than the coefficients.
+    np.testing.assert_allclose(
+        projector.row_effects(gauss_seidel, row_codes),
+        projector.row_effects(conjugate, row_codes),
+        rtol=1e-7,
+        atol=1e-7,
+    )
+
+
+def test_non_convergence_raises_naming_the_columns(monkeypatch):
+    """A starved iteration budget must fail loudly rather than return a guess."""
+    monkeypatch.setattr(fe_mod, "FE_MAXITER", 1)
+    rng = np.random.default_rng(31)
+    n = 3000
+    row_codes = np.column_stack([rng.integers(0, 60, n), rng.integers(0, 40, n)])
+    projector = FEProjector.from_row_codes(row_codes, ("firm", "worker"))
+    rhs = projector.matvec(rng.normal(size=(projector.total_levels, 1)))
+
+    with pytest.raises(ValueError, match="firm"):
+        projector.solve(rhs)
+
+
+def test_disconnected_components_still_give_unique_fitted_values():
+    """Separable factors leave alpha unidentified but the projection well defined."""
+    rng = np.random.default_rng(37)
+    n = 1600
+    # Two islands: the first half of the firms only ever appears in the early years.
+    island = rng.integers(0, 2, n)
+    firm = island * 8 + rng.integers(0, 8, n)
+    year = island * 5 + rng.integers(0, 5, n)
+    row_codes = np.column_stack([firm, year])
+    projector, D = dense_projector(row_codes, ("firm", "year"))
+
+    values = rng.normal(size=(n, 2))
+    rhs = D.T @ values
+    alpha = projector.solve(rhs)
+
+    expected = D @ np.linalg.lstsq(D.T @ D, rhs, rcond=None)[0]
+    np.testing.assert_allclose(
+        projector.row_effects(alpha, row_codes), expected, rtol=1e-8, atol=1e-8
+    )
+
+
+def test_projector_solves_a_sparse_long_chain():
+    """The production solver handles the weakest connected design, not just its rank."""
+    links = 180
+    row_codes = np.column_stack(
+        [np.arange(2 * links - 2) // 2 + 1, np.arange(2 * links - 2) // 2]
+    )
+    row_codes[::2, 0] -= 1
+    projector, dense = dense_projector(row_codes)
+    rng = np.random.default_rng(109)
+    values = rng.normal(size=(row_codes.shape[0], 3))
+
+    alpha = projector.solve(dense.T @ values)
+    expected = dense @ np.linalg.lstsq(dense, values, rcond=None)[0]
+    np.testing.assert_allclose(
+        projector.row_effects(alpha, row_codes), expected, rtol=1e-8, atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
+def test_multiway_row_order_does_not_change_result(df_type, monkeypatch):
+    """Level labels are dict keys across two aggregations; both must map by label."""
+    df = make_multiway_panel(n=2000, seed=41)
+    shuffled = df.sample(frac=1.0, random_state=13).reset_index(drop=True)
+
+    base = run_native(
+        convert_to_backend(df, df_type), controls=["age", "firm", "year"], num_bins=6
+    )
+    moved = run_native(
+        convert_to_backend(shuffled, df_type),
+        controls=["age", "firm", "year"],
+        num_bins=6,
+    )
+
+    rtol, atol = tolerances(df_type, reshaped_input=True)
+    np.testing.assert_allclose(base, moved, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("selector", ["rot", "dpi"])
+def test_multiway_selectors_match_one_hot(selector, monkeypatch):
+    """Bin selection must not depend on whether the factors were absorbed."""
+    df = make_multiway_panel(n=2500, seed=43)
+    absorbed = run_native(df, controls=["age", "firm", "year"], num_bins=selector)
+    without_absorption(monkeypatch)
+    one_hot = run_native(df, controls=["age", "firm", "year"], num_bins=selector)
+
+    assert len(absorbed) == len(one_hot), f"{selector} chose a different bin count"
+    np.testing.assert_allclose(absorbed, one_hot, rtol=1e-8, atol=1e-8)
+
+
+def test_dpi_variance_two_way_matches_centered_dummy_oracle():
+    """The dense multi-way sandwich equals explicit centered dummies for both factors."""
+    df = make_multiway_panel(n=2000, n_firms=12, n_years=5, seed=67)
+    num_bins = 8
+    edges = np.quantile(df["x"], np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(
+        np.searchsorted(edges, df["x"], side="right") - 1, 0, num_bins - 1
+    )
+    bin_counts = np.bincount(bin_idx, minlength=num_bins)
+    y = df["y"].to_numpy()
+    age = df["age"].to_numpy()
+
+    dummies = [
+        pd.get_dummies(df[name], drop_first=True).to_numpy(dtype=float)
+        for name in ("firm", "year")
+    ]
+    explicit_controls = np.column_stack([age, *dummies])
+    explicit_controls -= explicit_controls.mean(axis=0)
+    expected = core._compute_dpi_variance_constant(
+        y, explicit_controls, bin_idx, bin_counts
+    )
+
+    row_codes = factor_codes([df["firm"].to_numpy(), df["year"].to_numpy()])
+    projector = FEProjector.from_row_codes(row_codes, ("firm", "year"))
+    absorbed_y = demean_centered(y, projector, row_codes)
+    absorbed_controls = demean_centered(age - age.mean(), projector, row_codes)[:, None]
+    actual = core._compute_dpi_variance_constant(
+        absorbed_y, absorbed_controls, bin_idx, bin_counts, projector, row_codes
+    )
+
+    np.testing.assert_allclose(actual, expected, rtol=1e-8, atol=1e-10)
+
+
+def test_poly_line_with_several_absorbed_fixed_effects(monkeypatch):
+    """The overlay restores its level from the mean of all absorbed factors."""
+    df = make_multiway_panel(n=2000, seed=47)
+    absorbed = binscatter(
+        df, "x", "y", controls=["age", "firm", "year"], num_bins=6, poly_line=2
+    )
+    without_absorption(monkeypatch)
+    one_hot = binscatter(
+        df, "x", "y", controls=["age", "firm", "year"], num_bins=6, poly_line=2
+    )
+    np.testing.assert_allclose(
+        absorbed.data[1].y, one_hot.data[1].y, rtol=1e-8, atol=1e-8
+    )
+
+
+def test_joint_cell_compression_shrinks_the_driver_side():
+    """A panel with repeated FE tuples must collapse well below the row count."""
+    rng = np.random.default_rng(53)
+    n, n_firms, n_years = 40_000, 200, 10
+    firm = rng.integers(0, n_firms, n)
+    year = rng.integers(0, n_years, n)
+    row_codes = np.column_stack([firm, year])
+    projector = FEProjector.from_row_codes(row_codes, ("firm", "year"))
+
+    # Every firm-year pair is observed many times over, so the driver holds a few
+    # thousand combinations rather than 40k rows.
+    assert projector.num_cells <= n_firms * n_years
+    assert projector.num_cells < n / 10
+
+
+def test_high_cardinality_two_way_completes():
+    """5k firms crossed with 200 years is hopeless for the one-hot path."""
+    rng = np.random.default_rng(59)
+    n, n_firms, n_years = 60_000, 5_000, 200
+    firm = rng.integers(0, n_firms, n)
+    year = rng.integers(0, n_years, n)
+    x = rng.normal(size=n)
+    df = pd.DataFrame(
+        {
+            "x": x,
+            "y": (
+                0.7 * x
+                + rng.normal(scale=2.0, size=n_firms)[firm]
+                + rng.normal(scale=1.0, size=n_years)[year]
+                + rng.normal(size=n)
+            ),
+            "firm_id": firm,
+            "year": year,
+        }
+    )
+    lazy, _, _, categorical = core.clean_df(
+        df, ("firm_id", "year"), "x", "y", ("firm_id", "year")
+    )
+    assert fe_mod.select_absorbed(lazy, categorical) == ("firm_id", "year")
+
+    out = run_native(
+        df,
+        controls=["firm_id", "year"],
+        categorical=["firm_id", "year"],
+        num_bins=10,
+    )
+    assert out.shape == (10,)
+    assert np.all(np.isfinite(out))
+
+
+def test_joint_cell_limit_raises_a_readable_error(monkeypatch):
+    """The driver-side cell guard fails before a large aggregate is consumed."""
+    monkeypatch.setattr(fe_mod, "MAX_FE_CELLS", 3)
+    df = pd.DataFrame(
+        {
+            "x": np.arange(8, dtype=float),
+            "y": np.arange(8, dtype=float),
+            "firm": ["a", "a", "b", "b", "c", "c", "d", "d"],
+            "year": ["1", "2", "1", "2", "1", "2", "1", "2"],
+        }
+    )
+
+    with pytest.raises(ValueError, match=r"firm.*year.*above the 3 limit"):
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["firm", "year"],
+            num_bins=2,
+            return_type="native",
+        )
+
+
+# --------------------------------------------------------------------------
+# 10. Rank of the stacked dummy matrix
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda rng, n: rng.integers(0, 30, (n, 1)),
+        lambda rng, n: np.column_stack([rng.integers(0, 25, n), rng.integers(0, 9, n)]),
+        lambda rng, n: np.column_stack([g := rng.integers(0, 20, n), g]),
+        lambda rng, n: np.column_stack(
+            [
+                (isl := rng.integers(0, 3, n)) * 10 + rng.integers(0, 10, n),
+                isl * 6 + rng.integers(0, 6, n),
+            ]
+        ),
+        lambda rng, n: np.column_stack(
+            [rng.integers(0, 20, n), rng.integers(0, 8, n), rng.integers(0, 5, n)]
+        ),
+        lambda rng, n: np.column_stack(
+            [
+                (isl := rng.integers(0, 2, n)) * 12 + rng.integers(0, 12, n),
+                isl * 6 + rng.integers(0, 6, n),
+                isl * 4 + rng.integers(0, 4, n),
+            ]
+        ),
+    ],
+    ids=[
+        "one_factor",
+        "two_way_connected",
+        "two_way_nested",
+        "two_way_three_islands",
+        "three_way_connected",
+        "three_way_two_islands",
+    ],
+)
+def test_rank_matches_dense_matrix_rank(build):
+    """The component count must reproduce the rank of the materialized dummies.
+
+    This is what the degrees-of-freedom charge rests on, and assuming a connected
+    design silently overcharges every separable one.
+    """
+    rng = np.random.default_rng(97)
+    row_codes = np.asarray(build(rng, 4000))
+    projector, dense = dense_projector(row_codes, tuple("abcdef"[: row_codes.shape[1]]))
+    assert projector.rank == np.linalg.matrix_rank(dense)
+
+
+def test_rank_is_an_upper_bound_when_three_factors_are_nested():
+    """The documented limit: nesting is invisible to the incidence graph.
+
+    With two of three factors identical the design loses far more rank than the
+    component count can see. Charging the upper bound is conservative -- standard
+    errors come out slightly wide -- which is the safe direction, and matches what
+    fixest and pyfixest do.
+    """
+    rng = np.random.default_rng(101)
+    nested = rng.integers(0, 12, 4000)
+    row_codes = np.column_stack([nested, nested, rng.integers(0, 5, 4000)])
+    projector, dense = dense_projector(row_codes, ("a", "b", "c"))
+    assert projector.num_components == 1
+    assert projector.rank > np.linalg.matrix_rank(dense)
+
+
+def test_components_found_on_a_long_chain():
+    """Label propagation must still terminate when the graph is a path.
+
+    A chain is the worst case for propagating labels one hop at a time; the pointer
+    jumping is what keeps it from taking a sweep per link.
+    """
+    m = 5_000
+    row_codes = np.column_stack(
+        [np.arange(2 * m - 2) // 2 + 1, np.arange(2 * m - 2) // 2]
+    )
+    row_codes[::2, 0] -= 1
+    projector = FEProjector.from_row_codes(row_codes, ("a", "b"))
+    assert projector.num_components == 1
+
+
+def test_disconnected_design_is_charged_fewer_parameters():
+    """Splitting a design in two must lower the parameter count by exactly one."""
+    rng = np.random.default_rng(103)
+    n = 4000
+    connected = np.column_stack([rng.integers(0, 20, n), rng.integers(0, 8, n)])
+    island = rng.integers(0, 2, n)
+    split = np.column_stack(
+        [island * 10 + rng.integers(0, 10, n), island * 4 + rng.integers(0, 4, n)]
+    )
+    joined = FEProjector.from_row_codes(connected, ("a", "b"))
+    separate = FEProjector.from_row_codes(split, ("a", "b"))
+    assert joined.num_components == 1
+    assert separate.num_components == 2
+    assert joined.rank == joined.total_levels - 1
+    assert separate.rank == separate.total_levels - 2

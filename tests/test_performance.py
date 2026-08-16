@@ -20,6 +20,7 @@ from binscatter.core import (
     binscatter,
     clean_df,
 )
+from binscatter.dummy_builders import configure_build_dummies
 from tests.conftest import convert_to_backend
 
 # Skip PySpark tests by default
@@ -239,13 +240,11 @@ def test_dummy_variable_naming_consistency(backend: str) -> None:
         y="y",
     )
 
-    df_with_dummies, _regression_features, absorbed = add_regression_features(
-        df_clean,
-        numeric_controls=(),
-        categorical_controls=categorical_controls,
-    )
-    # Both are far below ABSORB_MIN_LEVELS, so both are one-hot encoded.
-    assert absorbed is None
+    # Go at the dummy builder directly: add_regression_features now absorbs every
+    # categorical control, so the one-hot path it used to route through is reached
+    # only by the confidence-interval code that re-encodes absorbed fixed effects.
+    build_dummies = configure_build_dummies(df_clean.implementation)
+    df_with_dummies, _dummy_cols = build_dummies(df_clean, categorical_controls)
 
     # Collect dummy names
     result = df_with_dummies.collect()
