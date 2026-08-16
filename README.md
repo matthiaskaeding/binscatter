@@ -1,6 +1,6 @@
 # Dataframe agnostic binscatter plots
 
-**TL;DR:** Fast binscatter with automatic bin selection plots for all kinds of dataframes.
+**TL;DR:** Fast binscatter plots with automatic bin selection for all kinds of dataframes
 
 - Supports pandas, Polars, DuckDB, Dask, and PySpark via `narwhals`
 - Uses `plotly` as graphics backend
