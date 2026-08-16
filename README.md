@@ -2,10 +2,10 @@
 
 **TL;DR:** Fast binscatter plots with automatic bin selection for all kinds of dataframes
 
-- Supports pandas, Polars, DuckDB, Dask, and PySpark via `narwhals`
-- Uses `plotly` as graphics backend
-- Lightweight - little dependencies
-- Picks number of bins automatically via the DPI (Direct Plug-In) selector from Cattaneo et al. (2024)
+- Handles pandas, Polars, DuckDB, Dask, and PySpark via `narwhals`
+- Supports covariate adjustment (including high-dimensional categorical controls) and confidence intervals
+- Interactive plots via `plotly`
+- Implementation follows [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
 ## What are binscatter plots?
 
@@ -35,7 +35,6 @@ covariate adjustment, confidence intervals, alternative bin selectors, polynomia
 overlays, and dataframe-backend examples, see the
 [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb).
 
-This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
 ## Tests
 
