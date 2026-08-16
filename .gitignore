@@ -21,7 +21,6 @@ binscatter_ref.pdf
 .vscode
 artifacts/*.csv
 artifacts/*.parquet
-!artifacts/state_data_processed.parquet
 artifacts/**/*.dta
 artifacts/**/*.do
 artifacts/**/*.pdf

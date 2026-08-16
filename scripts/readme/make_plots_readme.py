@@ -15,13 +15,14 @@
 # ///
 """Generate binscatter demo figures for README and blog posts.
 
-Uses optional local artifacts (state_data, optuna trials) when available.
+Uses committed README data and optional local Optuna artifacts.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import pandas as pd
 import polars as pl
 
 from binscatter import binscatter
@@ -32,7 +33,7 @@ IMAGES = ROOT / "artifacts" / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_README_IMAGES = [
-    "binscatter_controls.png",
+    "nhanes_age_bp.png",
 ]
 
 
@@ -68,19 +69,6 @@ def _write_fig(fig, filename: str, **write_kwargs) -> None:
     print(f"Wrote {target}")
 
 
-def _load_state_df() -> pl.DataFrame:
-    return pl.read_parquet(ARTIFACTS / "state_data_processed.parquet").select(
-        "mtr90_lag3",
-        "lnpat",
-        "top_corp_lag3",
-        "real_gdp_pc",
-        "population_density",
-        "rd_credit_lag3",
-        "statenum",
-        "year",
-    )
-
-
 def _load_optuna_df(name: str, columns: list[str]) -> pl.DataFrame:
     return pl.read_parquet(
         _require_artifact(ARTIFACTS / f"optuna_{name}_trials.parquet")
@@ -88,26 +76,14 @@ def _load_optuna_df(name: str, columns: list[str]) -> pl.DataFrame:
 
 
 def build_readme_plot() -> None:
-    df = _load_state_df()
-    controls = [
-        "top_corp_lag3",
-        "real_gdp_pc",
-        "population_density",
-        "rd_credit_lag3",
-        "statenum",
-        "year",
-    ]
-    fig = binscatter(
-        df,
-        x="mtr90_lag3",
-        y="lnpat",
-        controls=controls,
-    )
+    df = pd.read_csv(ROOT / "data" / "nhanes_age_bp.csv")
+    fig = binscatter(df, x="age", y="systolic_bp")
     fig.update_layout(
-        xaxis_title="Log net-of-tax rate (3-year lag)",
-        yaxis_title="Log number of patents",
+        xaxis_title="Age (years)",
+        yaxis_title="Systolic blood pressure (mm Hg)",
+        showlegend=False,
     )
-    _write_fig(fig, "binscatter_controls.png")
+    _write_fig(fig, "nhanes_age_bp.png", width=640, height=440)
 
 
 def build_lightgbm_plot() -> None:
@@ -156,7 +132,7 @@ def build_lightgbm_plot() -> None:
 def main() -> None:
     builders = [
         ("lightgbm", build_lightgbm_plot),
-        ("readme (state data)", build_readme_plot),
+        ("readme (NHANES)", build_readme_plot),
     ]
 
     failed = []
@@ -176,7 +152,7 @@ def main() -> None:
     if missing:
         files = ", ".join(missing)
         raise FileNotFoundError(
-            f"Missing README image(s): {files}. Gapminder plots must render successfully."
+            f"Missing README image(s): {files}. NHANES must render successfully."
         )
 
 

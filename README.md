@@ -22,28 +22,26 @@ pip install binscatter
 ## Example
 
 ```python
-import polars as pl
+import pandas as pd
 from binscatter import binscatter
 
-df = pl.read_parquet("artifacts/state_data_processed.parquet")
-binscatter(
-    df,
-    "mtr90_lag3",
-    "lnpat",
-    controls=[
-        "top_corp_lag3",
-        "real_gdp_pc",
-        "population_density",
-        "rd_credit_lag3",
-        "statenum",
-        "year",
-    ],
-)
+df = pd.read_csv("data/nhanes_age_bp.csv")
+binscatter(df, "age", "systolic_bp")
 ```
 
-<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png" alt="Binscatter: taxation and innovation in 20th-century United States" width="640" />
+<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/nhanes_age_bp.png" alt="Binscatter of age and average systolic blood pressure in the NHANES example data" width="640" />
 
-See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
+`binscatter` automatically chooses the number of bins with the DPI selector. The
+[rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb)
+also shows:
+
+- Covariate adjustment, including categorical and high-cardinality controls
+- Pointwise and robust bias-corrected confidence intervals
+- Alternative automatic and manual bin selection
+- Polynomial overlays and Plotly customization
+- Native dataframe output and multiple dataframe backends
+
+This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
 ## Tests
 

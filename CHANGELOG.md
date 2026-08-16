@@ -3,10 +3,10 @@
 ## Unreleased
 
 ### Changed
-- The README now leads with a taxation-and-innovation binscatter from the CC0
-  replication dataset, using default automatic bin selection and descriptive axes.
-  Its documented processed Parquet data is checked into `artifacts/`, so the example
-  runs as written from a repository checkout.
+- The README now leads with a minimal age–systolic-blood-pressure example from the
+  public NHANES educational data, using default automatic bin selection. Its
+  documented two-column CSV and reproducible preparation script are checked in, so
+  the example runs as written without a network request.
 - Generated image output now lives under `artifacts/images/`; the publishing workflow
   copies that directory to the orphan `images` branch instead of mixing build output
   into the source tree.
