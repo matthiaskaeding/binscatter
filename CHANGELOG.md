@@ -3,9 +3,9 @@
 ## Unreleased
 
 ### Changed
-- The README now leads with the minimal Gapminder example, followed by a
-  taxation-and-innovation binscatter from the CC0 replication dataset. The latter
-  uses default automatic bin selection, descriptive axes, and a linear overlay.
+- The README now leads with a taxation-and-innovation binscatter from the CC0
+  replication dataset, using default automatic bin selection, descriptive axes, and
+  a linear overlay.
 
 ### Added
 - `.github/pull_request_template.md`, so new pull requests open pre-filled with four headings — What, Why, Verify, Risk — and comments asking for a body under 200 words that describes the change rather than the diff. Unused sections are meant to be deleted rather than marked "N/A".

@@ -22,17 +22,9 @@ pip install binscatter
 ## Example
 
 ```python
-import plotly.express as px
 import polars as pl
 from binscatter import binscatter
 
-df_gapminder = px.data.gapminder()
-binscatter(df_gapminder, "gdpPercap", "lifeExp")
-```
-
-<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_dpi.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI selector)" width="640" />
-
-```python
 # Data: Akcigit et al. (2021), Harvard Dataverse, CC0 1.0:
 # https://doi.org/10.7910/DVN/SR410I
 df = pl.read_parquet("artifacts/state_data_processed.parquet")

@@ -15,15 +15,13 @@
 # ///
 """Generate binscatter demo figures for README and blog posts.
 
-Uses plotly built-in datasets (gapminder, tips, iris) plus optional local
-artifacts (state_data, optuna trials) when available.
+Uses optional local artifacts (state_data, optuna trials) when available.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-import plotly.express as px
 import polars as pl
 
 from binscatter import binscatter
@@ -35,8 +33,6 @@ IMAGES.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_README_IMAGES = [
     "binscatter_controls.png",
-    "gapminder_gdp_lifeexp_dpi.png",
-    "gapminder_gdp_lifeexp_fixed.png",
 ]
 
 
@@ -160,29 +156,8 @@ def build_lightgbm_plot() -> None:
     )
 
 
-def build_gapminder_plots() -> None:
-    df_pl = pl.from_pandas(px.data.gapminder()).with_columns(
-        pl.col("gdpPercap").log().alias("log_gdp"),
-        pl.col("lifeExp").log().alias("log_life"),
-    )
-    # DPI selector (default) - shown second in README.
-    fig_dpi = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins="dpi")
-    _write_fig(fig_dpi, "gapminder_gdp_lifeexp_dpi.png")
-
-    fig_fixed = binscatter(df_pl, "gdpPercap", "lifeExp", num_bins=120)
-    _write_fig(fig_fixed, "gapminder_gdp_lifeexp_fixed.png")
-
-    _write_binscatter_variants(
-        "gapminder_log_axes.png",
-        add_dpi_variant=False,
-        args=(df_pl, "log_gdp", "log_life"),
-        kwargs={},
-    )
-
-
 def main() -> None:
     builders = [
-        ("gapminder", build_gapminder_plots),
         ("lightgbm", build_lightgbm_plot),
         ("readme (state data)", build_readme_plot),
     ]
