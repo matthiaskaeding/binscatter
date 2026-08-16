@@ -17,8 +17,6 @@ Binscatter plots group the x-axis into bins and plot average outcomes for each b
 pip install binscatter
 ```
 
----
-
 ## Example
 
 ```python
@@ -31,15 +29,10 @@ binscatter(df, "age", "systolic_bp")
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/nhanes_age_bp.png" alt="Binscatter of age and average systolic blood pressure in the NHANES example data" width="640" />
 
-`binscatter` automatically chooses the number of bins with the DPI selector. The
-[rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb)
-also shows:
-
-- Covariate adjustment, including categorical and high-cardinality controls
-- Pointwise and robust bias-corrected confidence intervals
-- Alternative automatic and manual bin selection
-- Polynomial overlays and Plotly customization
-- Native dataframe output and multiple dataframe backends
+`binscatter` automatically chooses the number of bins with the DPI selector. For
+covariate adjustment, confidence intervals, alternative bin selectors, polynomial
+overlays, and dataframe-backend examples, see the
+[rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb).
 
 This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 

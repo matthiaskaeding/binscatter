@@ -78,11 +78,6 @@ def _load_optuna_df(name: str, columns: list[str]) -> pl.DataFrame:
 def build_readme_plot() -> None:
     df = pd.read_csv(ROOT / "data" / "nhanes_age_bp.csv")
     fig = binscatter(df, x="age", y="systolic_bp")
-    fig.update_layout(
-        xaxis_title="Age (years)",
-        yaxis_title="Systolic blood pressure (mm Hg)",
-        showlegend=False,
-    )
     _write_fig(fig, "nhanes_age_bp.png", width=640, height=440)
 
 
