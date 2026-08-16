@@ -69,7 +69,7 @@ def _write_fig(fig, filename: str, **write_kwargs) -> None:
 
 
 def _load_state_df() -> pl.DataFrame:
-    return pl.read_parquet(ROOT / "data" / "state_data_processed.parquet").select(
+    return pl.read_parquet(ARTIFACTS / "state_data_processed.parquet").select(
         "mtr90_lag3",
         "lnpat",
         "top_corp_lag3",

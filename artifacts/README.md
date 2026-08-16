@@ -1,4 +1,4 @@
-# Example data
+# Example data and generated artifacts
 
 `state_data_processed.parquet` is derived from:
 
@@ -18,4 +18,6 @@ Starting from `REPLICATION_PACKET/Data/state_data.dta`, its preparation:
    `log(1 - rate / 100)`.
 
 The reproducible preparation is implemented in
-`scripts/replicate_binscatter/prep_data.py`.
+`scripts/replicate_binscatter/prep_data.py`. Other contents of `artifacts/`, including
+generated images, downloaded replication files, logs, and notebook renders, remain
+ignored build output.

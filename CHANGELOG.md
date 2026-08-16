@@ -5,8 +5,8 @@
 ### Changed
 - The README now leads with a taxation-and-innovation binscatter from the CC0
   replication dataset, using default automatic bin selection and descriptive axes.
-  Its documented processed Parquet data is checked into the repository, so the
-  example runs as written from a repository checkout.
+  Its documented processed Parquet data is checked into `artifacts/`, so the example
+  runs as written from a repository checkout.
 - Generated image output now lives under `artifacts/images/`; the publishing workflow
   copies that directory to the orphan `images` branch instead of mixing build output
   into the source tree.

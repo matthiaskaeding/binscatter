@@ -25,7 +25,7 @@ pip install binscatter
 import polars as pl
 from binscatter import binscatter
 
-df = pl.read_parquet("data/state_data_processed.parquet")
+df = pl.read_parquet("artifacts/state_data_processed.parquet")
 binscatter(
     df,
     "mtr90_lag3",
