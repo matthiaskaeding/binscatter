@@ -22,9 +22,19 @@ pip install binscatter
 ## Example
 
 ```python
+import plotly.express as px
 import polars as pl
 from binscatter import binscatter
 
+df_gapminder = px.data.gapminder()
+binscatter(df_gapminder, "gdpPercap", "lifeExp")
+```
+
+<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_dpi.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI selector)" width="640" />
+
+```python
+# Data: Akcigit et al. (2021), Harvard Dataverse, CC0 1.0:
+# https://doi.org/10.7910/DVN/SR410I
 df = pl.read_parquet("artifacts/state_data_processed.parquet")
 binscatter(
     df,
@@ -38,21 +48,11 @@ binscatter(
         "statenum",
         "year",
     ],
+    poly_line=1,
 )
 ```
 
 <img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png" alt="Binscatter: taxation and innovation in 20th-century United States" width="640" />
-
-Data: Akcigit, Grigsby, Nicholas, and Stantcheva (2021), [*Replication Data for: Taxation and Innovation in the 20th Century*](https://doi.org/10.7910/DVN/SR410I), Harvard Dataverse, V1 (CC0 1.0).
-
-```python
-import plotly.express as px
-
-df = px.data.gapminder()
-binscatter(df, "gdpPercap", "lifeExp")
-```
-
-<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/gapminder_gdp_lifeexp_dpi.png" alt="Binscatter: GDP per capita vs Life Expectancy (DPI selector)" width="640" />
 
 See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 

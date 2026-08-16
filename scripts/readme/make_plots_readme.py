@@ -108,9 +108,9 @@ def build_readme_plot() -> None:
         x="mtr90_lag3",
         y="lnpat",
         controls=controls,
+        poly_line=1,
     )
     fig.update_layout(
-        title="Taxation and innovation in 20th-century United States",
         xaxis_title="Log net-of-tax rate (3-year lag)",
         yaxis_title="Log number of patents",
     )
