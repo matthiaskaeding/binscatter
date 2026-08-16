@@ -23,7 +23,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pandas as pd
 import plotly.express as px
 import polars as pl
 
@@ -35,12 +34,10 @@ IMAGES = ROOT / "images" / "readme"
 IMAGES.mkdir(parents=True, exist_ok=True)
 
 REQUIRED_README_IMAGES = [
-    "mroz_earnings_experience.png",
+    "binscatter_controls.png",
     "gapminder_gdp_lifeexp_dpi.png",
     "gapminder_gdp_lifeexp_fixed.png",
 ]
-
-MROZ_DATA_URL = "https://vincentarelbundock.github.io/Rdatasets/csv/wooldridge/mroz.csv"
 
 
 def _write_binscatter_variants(
@@ -106,17 +103,19 @@ def build_readme_plot() -> None:
         "statenum",
         "year",
     ]
-    _write_binscatter_variants(
-        "binscatter_controls.png",
-        add_dpi_variant=True,
-        args=(df,),
-        kwargs={
-            "x": "mtr90_lag3",
-            "y": "lnpat",
-            "controls": controls,
-            "num_bins": "rule-of-thumb",
-        },
+    fig = binscatter(
+        df,
+        x="mtr90_lag3",
+        y="lnpat",
+        controls=controls,
+        num_bins="rule-of-thumb",
     )
+    fig.update_layout(
+        title="Taxation and innovation in 20th-century United States",
+        xaxis_title="Log net-of-tax rate (3-year lag)",
+        yaxis_title="Log number of patents",
+    )
+    _write_fig(fig, "binscatter_controls.png")
 
 
 def build_lightgbm_plot() -> None:
@@ -182,23 +181,8 @@ def build_gapminder_plots() -> None:
     )
 
 
-def build_mroz_plot() -> None:
-    df = pd.read_csv(MROZ_DATA_URL).dropna(subset=["exper", "lwage"])
-    fig = binscatter(
-        df,
-        "exper",
-        "lwage",
-        num_bins=15,
-        poly_line=2,
-        title="Earnings and experience",
-    )
-    fig.update_layout(xaxis_title="Experience (years)", yaxis_title="Log hourly wage")
-    _write_fig(fig, "mroz_earnings_experience.png")
-
-
 def main() -> None:
     builders = [
-        ("Mroz earnings", build_mroz_plot),
         ("gapminder", build_gapminder_plots),
         ("lightgbm", build_lightgbm_plot),
         ("readme (state data)", build_readme_plot),

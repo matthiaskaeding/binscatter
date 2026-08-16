@@ -22,16 +22,29 @@ pip install binscatter
 ## Example
 
 ```python
-import pandas as pd
+import polars as pl
 from binscatter import binscatter
 
-df = pd.read_csv(
-    "https://vincentarelbundock.github.io/Rdatasets/csv/wooldridge/mroz.csv"
+df = pl.read_parquet("artifacts/state_data_processed.parquet")
+binscatter(
+    df,
+    "mtr90_lag3",
+    "lnpat",
+    controls=[
+        "top_corp_lag3",
+        "real_gdp_pc",
+        "population_density",
+        "rd_credit_lag3",
+        "statenum",
+        "year",
+    ],
+    num_bins="rule-of-thumb",
 )
-binscatter(df, "exper", "lwage", num_bins=15, poly_line=2)
 ```
 
-<img src="images/readme/mroz_earnings_experience.png" alt="Binscatter: earnings and experience" width="640" />
+<img src="https://raw.githubusercontent.com/matthiaskaeding/binscatter/images/images/readme/binscatter_controls.png" alt="Binscatter: taxation and innovation in 20th-century United States" width="640" />
+
+Data: Akcigit, Grigsby, Nicholas, and Stantcheva (2021), [*Replication Data for: Taxation and Innovation in the 20th Century*](https://doi.org/10.7910/DVN/SR410I), Harvard Dataverse, V1 (CC0 1.0).
 
 ```python
 import plotly.express as px
