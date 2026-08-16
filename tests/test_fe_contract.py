@@ -6,9 +6,8 @@ is. Fixed effects reach it as dummy columns in ``w``: it has no notion of absorb
 anything, which is exactly what makes it a good judge of an implementation that
 does. Whatever route binscatter takes, the dots have to land on binsreg's.
 
-``test_fixed_effects.py`` tests *this* implementation: it lowers
-``ABSORB_MIN_LEVELS`` to force the absorbed route, stubs ``select_absorbed`` to
-force the one-hot route, and compares the two against each other. That catches
+``test_fixed_effects.py`` tests *this* implementation: it stubs ``select_absorbed``
+to force the one-hot route and compares it against the absorbed one. That catches
 regressions in the current design and specifies nothing -- an implementation that
 always absorbs, or that has no one-hot fallback, fails all of it without being wrong.
 

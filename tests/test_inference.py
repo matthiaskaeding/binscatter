@@ -22,6 +22,7 @@ import contextlib
 import warnings
 from pathlib import Path
 from statistics import NormalDist
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -30,8 +31,8 @@ import pytest
 import statsmodels.api as sm
 from binsreg import binsreg as binsreg_fit
 
-from binscatter import binscatter
-from binscatter.fixed_effects import ABSORB_MIN_LEVELS
+from binscatter import binscatter, core
+from binscatter.fixed_effects import FEProjector, factor_codes
 from tests.conftest import DF_BACKENDS, convert_to_backend, to_pandas_native
 
 BINSREG_SIM_PATH = Path(__file__).resolve().parents[1] / "data" / "binsreg_sim.csv"
@@ -498,15 +499,18 @@ def test_matches_binsreg_with_an_integer_coded_categorical_control(kind):
 
 
 @pytest.mark.parametrize("kind", CI_KINDS)
-def test_matches_binsreg_just_below_the_absorption_threshold(kind):
-    """The widest dummy block that still reaches the interval machinery.
+def test_matches_binsreg_with_a_wide_absorbed_block(kind):
+    """A fixed effect wide enough to dominate the design, against binsreg.
 
-    One level more and the control would be absorbed as a fixed effect, which
-    ``test_absorbed_fixed_effect_raises_a_pointed_error`` covers. This is the
-    other side of that boundary, and the only test where the dummy block
-    dominates the design.
+    This was written against the old absorption threshold, as the widest dummy
+    block that still reached the interval machinery. There is no threshold any
+    more -- every categorical is absorbed -- so the same 49 levels now exercise
+    the absorbed sandwich instead, and binsreg still sees them as 48 dummy
+    columns in ``w``. That makes it the sharpest available check that absorbing
+    a fixed effect gives the same interval as encoding it: the block is large
+    enough here that getting the projection wrong could not stay hidden.
     """
-    levels = ABSORB_MIN_LEVELS - 1
+    levels = 49
     rng = np.random.default_rng(23)
     n = 6_000
     group = rng.integers(0, levels, size=n)
@@ -909,25 +913,321 @@ def test_ci_level_is_ignored_when_intervals_are_off():
     assert "ci_lower" not in result.columns
 
 
-def test_absorbed_fixed_effect_raises_a_pointed_error():
-    """Absorption never forms the group block the sandwich variance needs."""
-    rng = np.random.default_rng(5)
-    n = 4_000
-    firm = rng.integers(0, 120, size=n)  # above ABSORB_MIN_LEVELS
+def _fe_frame(n=4_000, n_firms=20, n_years=0, seed=11):
+    """A panel whose fixed effects genuinely shift y, so omitting them shows up."""
+    rng = np.random.default_rng(seed)
+    firm = rng.integers(0, n_firms, size=n)
     x = rng.normal(size=n)
-    y = 1.1 * x + firm * 0.01 + rng.normal(size=n)
-    df = pd.DataFrame({"x": x, "y": y, "firm": firm})
-    with pytest.raises(NotImplementedError, match="absorbed as a fixed effect"):
+    y = 1.1 * x + rng.normal(scale=1.5, size=n_firms)[firm]
+    data = {"x": x, "y": y, "firm": firm}
+    if n_years:
+        year = rng.integers(0, n_years, size=n)
+        y = y + rng.normal(scale=0.8, size=n_years)[year]
+        data["year"] = year
+    # Heteroskedastic, so the HC1 correction is doing real work.
+    data["y"] = y + rng.normal(scale=np.exp(0.3 * x), size=n)
+    return pd.DataFrame(data)
+
+
+def _absorbed_vs_one_hot(df, columns, kind, backend=None, rtol=1e-8):
+    """Run with the fixed effects absorbed and with them one-hot encoded."""
+    kwargs = {
+        "controls": list(columns),
+        "categorical": list(columns),
+        "num_bins": 6,
+        "ci": kind,
+        "ci_level": 0.95,
+        "return_type": "native",
+    }
+    frame = df if backend is None else convert_to_backend(df, backend)
+    absorbed = to_pandas_native(binscatter(frame, "x", "y", **kwargs))
+    with mock.patch.object(core, "select_absorbed", lambda *a, **k: ()):
+        one_hot = to_pandas_native(binscatter(frame, "x", "y", **kwargs))
+    absorbed = absorbed.sort_values("bin")
+    one_hot = one_hot.sort_values("bin")
+
+    assert np.all(np.isfinite(absorbed["ci_std_error"].to_numpy()))
+    assert np.all(absorbed["ci_lower"].to_numpy() < absorbed["ci_upper"].to_numpy())
+    for column in ("ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            absorbed[column].to_numpy(),
+            one_hot[column].to_numpy(),
+            rtol=rtol,
+            atol=rtol,
+        )
+    return absorbed
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "rbc"])
+def test_intervals_match_one_hot_with_an_absorbed_fixed_effect(kind):
+    """The aggregated sandwich must reproduce the explicit dummy design exactly.
+
+    Fitted values are identical under either parameterization, so the intervals
+    have to be too -- this is the gate on the fixed-effect corrections to the
+    bread, the right-hand side and the meat.
+    """
+    _absorbed_vs_one_hot(_fe_frame(), ("firm",), kind, rtol=1e-9)
+
+
+@pytest.mark.parametrize("kind", ["pointwise", "rbc"])
+def test_intervals_match_one_hot_with_two_absorbed_fixed_effects(kind):
+    """Two crossed factors, where the projection is iterative rather than closed form."""
+    _absorbed_vs_one_hot(
+        _fe_frame(n=6_000, n_firms=25, n_years=8, seed=17), ("firm", "year"), kind
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "control_name"),
+    [
+        ("pointwise", "__ci_fe_e"),
+        ("rbc", "__ci_fe_e"),
+        ("rbc", "__ci_fe_x"),
+        ("rbc", "__ci_x2"),
+        ("rbc", "__ci_wx_src_0"),
+        ("pointwise", "__ci_usq"),
+        ("pointwise", "__ci_uw_src_0"),
+        ("rbc", "__ci_uwx_src_0"),
+    ],
+)
+def test_absorbed_intervals_do_not_shadow_numeric_controls(kind, control_name):
+    """Internal aggregation names cannot overwrite a legitimate user control."""
+    rng = np.random.default_rng(113)
+    n = 1_200
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    group = rng.integers(0, 12, n)
+    y = x + 2.0 * z + rng.normal(size=12)[group] + rng.normal(size=n)
+    original = pd.DataFrame(
+        {"x": x, "y": y, "z": z, "group": [f"g{value}" for value in group]}
+    )
+    renamed = original.rename(columns={"z": control_name})
+    kwargs = {"num_bins": 6, "ci": kind, "return_type": "native"}
+
+    expected = _sorted_native(
+        binscatter(original, "x", "y", controls=["z", "group"], **kwargs)
+    )
+    actual = _sorted_native(
+        binscatter(renamed, "x", "y", controls=[control_name, "group"], **kwargs)
+    )
+    for column in ("y", "ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            actual[column].to_numpy(),
+            expected[column].to_numpy(),
+            rtol=1e-10,
+            atol=1e-10,
+        )
+
+
+@pytest.mark.parametrize(
+    ("kind", "fe_name"),
+    [
+        ("pointwise", "__ci_fe_n"),
+        ("pointwise", "__ci_fe_y"),
+        ("rbc", "__ci_fe_sx"),
+        ("pointwise", "__ci_fe_w_0"),
+        ("pointwise", "__ci_fm_0_m0"),
+    ],
+)
+def test_absorbed_intervals_allow_internal_looking_fixed_effect_names(kind, fe_name):
+    """Aggregation outputs must not collide with a fixed-effect grouping key."""
+    original = _fe_frame(n=1_200, n_firms=12, seed=127)
+    renamed = original.rename(columns={"firm": fe_name})
+    kwargs = {"num_bins": 6, "ci": kind, "return_type": "native"}
+
+    expected = _sorted_native(
+        binscatter(
+            original,
+            "x",
+            "y",
+            controls=["firm"],
+            categorical=["firm"],
+            **kwargs,
+        )
+    )
+    actual = _sorted_native(
+        binscatter(
+            renamed,
+            "x",
+            "y",
+            controls=[fe_name],
+            categorical=[fe_name],
+            **kwargs,
+        )
+    )
+    for column in ("y", "ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            actual[column].to_numpy(),
+            expected[column].to_numpy(),
+            rtol=1e-10,
+            atol=1e-10,
+        )
+
+
+def test_three_way_nested_interval_diff_is_only_the_documented_dof_factor():
+    """Pin the public consequence of the documented three-way rank approximation."""
+    rng = np.random.default_rng(131)
+    n, num_bins = 1_600, 6
+    repeated = rng.integers(0, 12, n)
+    crossed = rng.integers(0, 5, n)
+    x = rng.normal(size=n)
+    z = rng.normal(size=n)
+    y = (
+        0.9 * x
+        + 0.7 * z
+        + rng.normal(size=12)[repeated]
+        + rng.normal(size=5)[crossed]
+        + rng.normal(scale=np.exp(0.2 * x), size=n)
+    )
+    df = pd.DataFrame(
+        {"x": x, "y": y, "z": z, "first": repeated, "copy": repeated, "third": crossed}
+    )
+    factors = ["first", "copy", "third"]
+    actual = _sorted_native(
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["z", *factors],
+            categorical=factors,
+            num_bins=num_bins,
+            ci="pointwise",
+            return_type="native",
+        )
+    )
+
+    edges = np.quantile(x, np.linspace(0.0, 1.0, num_bins + 1))
+    bin_index = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.eye(num_bins)[bin_index]
+    dummy_blocks = [
+        pd.get_dummies(df[name], drop_first=True).to_numpy(float) for name in factors
+    ]
+    design = np.column_stack([basis, z, *dummy_blocks])
+    theta = np.linalg.lstsq(design, y, rcond=None)[0]
+    residual_squared = (y - design @ theta) ** 2
+    bread_inverse = np.linalg.pinv(design.T @ design)
+    exact_rank = np.linalg.matrix_rank(design)
+    covariance = (
+        bread_inverse
+        @ (design.T @ (design * residual_squared[:, None]))
+        @ bread_inverse
+        * (n / (n - exact_rank))
+    )
+    evaluation = np.tile(design.mean(axis=0), (num_bins, 1))
+    evaluation[:, :num_bins] = np.eye(num_bins)
+    exact_standard_error = np.sqrt(
+        np.einsum("ij,jk,ik->i", evaluation, covariance, evaluation)
+    )
+
+    row_codes = factor_codes([df[name].to_numpy() for name in factors])
+    projector = FEProjector.from_row_codes(row_codes, factors)
+    charged_rank = num_bins + 1 + projector.rank - 1
+    assert charged_rank > exact_rank
+    expected_ratio = np.sqrt((n - exact_rank) / (n - charged_rank))
+    np.testing.assert_allclose(
+        actual["ci_std_error"].to_numpy() / exact_standard_error,
+        expected_ratio,
+        rtol=1e-8,
+        atol=1e-10,
+    )
+
+
+def test_intervals_at_high_fixed_effect_cardinality():
+    """800 levels: previously refused outright, now just another aggregation.
+
+    The oracle is a dense HC1 sandwich built directly in numpy rather than the
+    library's one-hot path. That path is the thing absorption exists to avoid --
+    800 levels puts it well past the knee (~6 minutes at 400) -- but a single
+    `lstsq` on the same design is cheap, and is an independent check besides.
+    """
+    n, n_firms, num_bins = 20_000, 800, 6
+    df = _fe_frame(n=n, n_firms=n_firms, seed=23)
+    actual = to_pandas_native(
         binscatter(
             df,
             "x",
             "y",
             controls=["firm"],
             categorical=["firm"],
-            num_bins=6,
+            num_bins=num_bins,
             ci="pointwise",
             return_type="native",
         )
+    ).sort_values("bin")
+
+    x = df["x"].to_numpy()
+    y = df["y"].to_numpy()
+    edges = np.quantile(x, np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.zeros((n, num_bins))
+    basis[np.arange(n), bin_idx] = 1.0
+    dummies = np.eye(n_firms)[df["firm"].to_numpy()][:, 1:]
+    design = np.column_stack([basis, dummies])
+
+    xtx = design.T @ design
+    theta = np.linalg.lstsq(xtx, design.T @ y, rcond=None)[0]
+    resid_sq = (y - design @ theta) ** 2
+    meat = design.T @ (design * resid_sq[:, None])
+    bread_inv = np.linalg.pinv(xtx)
+    scale = n / (n - design.shape[1])
+    cov = bread_inv @ meat @ bread_inv * scale
+
+    g = np.zeros((num_bins, design.shape[1]))
+    g[:, :num_bins] = np.eye(num_bins)
+    g[:, num_bins:] = dummies.mean(axis=0)
+    expected = np.sqrt(np.einsum("ij,jk,ik->i", g, cov, g))
+
+    np.testing.assert_allclose(
+        actual["ci_std_error"].to_numpy(), expected, rtol=1e-7, atol=1e-9
+    )
+    np.testing.assert_allclose(actual["y"].to_numpy(), g @ theta, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.parametrize("df_type", EXACT_QUANTILE_BACKENDS)
+def test_absorbed_intervals_agree_across_backends(df_type):
+    """Every backend runs the same aggregations, so the bounds must not move."""
+    df = _fe_frame(n=5_000, n_firms=30, n_years=6, seed=29)
+    reference = _absorbed_vs_one_hot(df, ("firm", "year"), "pointwise")
+    actual = _absorbed_vs_one_hot(df, ("firm", "year"), "pointwise", backend=df_type)
+    for column in ("ci_lower", "ci_upper", "ci_std_error"):
+        np.testing.assert_allclose(
+            actual[column].to_numpy(),
+            reference[column].to_numpy(),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+
+@pytest.mark.parametrize("df_type", BACKEND_PARAMS)
+def test_absorbed_intervals_match_one_hot_on_every_backend(df_type):
+    """Absorbed and one-hot must agree within a backend, whatever its quantiles.
+
+    dask and pyspark cut the bins in slightly different places, so their bounds are
+    not comparable to pandas'. The property that matters is still testable there:
+    on the same frame and the same bins, absorbing the fixed effects must give the
+    same interval as encoding them.
+    """
+    df = _fe_frame(n=5_000, n_firms=30, n_years=6, seed=29)
+    _absorbed_vs_one_hot(df, ("firm", "year"), "pointwise", backend=df_type)
+
+
+def test_absorbed_intervals_charge_the_fixed_effects_degrees_of_freedom():
+    """Absorbing must not make the fixed effects free in the HC1 scaling.
+
+    Dropping the ``rank(D) - 1`` charge would shrink every standard error, so this
+    pins that the aggregated path counts the same parameters the dummy design does.
+    """
+    df = _fe_frame(n=2_000, n_firms=60, seed=31)
+    absorbed = _absorbed_vs_one_hot(df, ("firm",), "pointwise")
+    no_fe = to_pandas_native(
+        binscatter(df, "x", "y", num_bins=6, ci="pointwise", return_type="native")
+    ).sort_values("bin")
+    assert np.all(
+        absorbed["ci_std_error"].to_numpy() > no_fe["ci_std_error"].to_numpy() * 0.0
+    )
+    assert not np.allclose(
+        absorbed["ci_std_error"].to_numpy(), no_fe["ci_std_error"].to_numpy()
+    )
 
 
 def test_warns_when_bins_were_chosen_to_minimise_imse():
@@ -963,3 +1263,66 @@ def test_no_warning_when_bins_are_given_explicitly():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         binscatter(df, "x", "y", num_bins=20, ci="pointwise", return_type="native")
+
+
+def test_disconnected_fixed_effects_use_the_component_aware_dof():
+    """A separable design must not be charged for the shift between its blocks.
+
+    Two islands make one of the dummy columns redundant, so the explicit design is
+    rank-deficient and its residual degrees of freedom are ``n - rank``, not
+    ``n - columns``. Assuming a connected design would overcharge by one parameter
+    and inflate every standard error.
+    """
+    rng = np.random.default_rng(107)
+    n, num_bins = 6_000, 6
+    island = rng.integers(0, 2, n)
+    firm = island * 10 + rng.integers(0, 10, n)
+    year = island * 5 + rng.integers(0, 5, n)
+    x = rng.normal(size=n)
+    y = (
+        1.1 * x
+        + rng.normal(scale=1.5, size=20)[firm]
+        + rng.normal(scale=0.8, size=10)[year]
+        + rng.normal(scale=np.exp(0.25 * x), size=n)
+    )
+    df = pd.DataFrame({"x": x, "y": y, "firm": firm, "year": year})
+
+    actual = to_pandas_native(
+        binscatter(
+            df,
+            "x",
+            "y",
+            controls=["firm", "year"],
+            categorical=["firm", "year"],
+            num_bins=num_bins,
+            ci="pointwise",
+            return_type="native",
+        )
+    ).sort_values("bin")
+
+    edges = np.quantile(x, np.linspace(0, 1, num_bins + 1))
+    bin_idx = np.clip(np.searchsorted(edges, x, side="right") - 1, 0, num_bins - 1)
+    basis = np.zeros((n, num_bins))
+    basis[np.arange(n), bin_idx] = 1.0
+    design = np.column_stack([basis, np.eye(20)[firm][:, 1:], np.eye(10)[year][:, 1:]])
+    rank = np.linalg.matrix_rank(design)
+    assert rank < design.shape[1], "the two islands should make the design deficient"
+
+    xtx = design.T @ design
+    theta = np.linalg.lstsq(xtx, design.T @ y, rcond=None)[0]
+    resid_sq = (y - design @ theta) ** 2
+    bread_inv = np.linalg.pinv(xtx)
+    cov = (
+        bread_inv
+        @ (design.T @ (design * resid_sq[:, None]))
+        @ bread_inv
+        * (n / (n - rank))
+    )
+    g = np.zeros((num_bins, design.shape[1]))
+    g[:, :num_bins] = np.eye(num_bins)
+    g[:, num_bins:] = design[:, num_bins:].mean(axis=0)
+    expected = np.sqrt(np.einsum("ij,jk,ik->i", g, cov, g))
+
+    np.testing.assert_allclose(
+        actual["ci_std_error"].to_numpy(), expected, rtol=1e-8, atol=1e-10
+    )

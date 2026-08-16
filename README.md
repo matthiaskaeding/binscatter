@@ -40,6 +40,29 @@ binscatter(df, "gdpPercap", "lifeExp", num_bins=120)
 
 See the [rendered demo notebook](https://github.com/matthiaskaeding/binscatter/blob/notebooks/demo.ipynb) for more examples. This package implements binscatter following [Cattaneo et al. (2024)](https://doi.org/10.1257/aer.20221576).
 
+## High-dimensional categorical controls
+
+`binscatter` handles high-dimensional categorical controls efficiently with the
+method of alternating projections (MAP), without building a large one-hot matrix.
+
+Example timings for 5,000 pandas rows and 10 bins:
+
+| categories | `binscatter` | explicit one-hot | speedup |
+|---:|---:|---:|---:|
+| 10 | ~0.009s | ~0.017s | ~2× |
+| 25 | ~0.008s | ~0.064s | ~8× |
+| 50 | ~0.008s | ~0.28s | ~36× |
+
+Reference environment: MacBook Air (Apple M1, 8 CPU cores, 16 GB RAM), macOS
+15.6.1 arm64, Python 3.11.9, and pandas 3.0.5. The values are medians of three
+calls from `make benchmark-fe-fast`, run locally on 10 August 2026; they are
+comparative measurements, not performance guarantees for other machines.
+
+```bash
+make benchmark-fe-fast  # short suite
+make benchmark-fe       # up to 1M rows and 50K levels
+```
+
 ## Tests
 
 - Check a representative sample while working: `make test-fast` (~18s)

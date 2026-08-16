@@ -59,7 +59,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
     df_clean, is_lazy, numeric_controls, categorical_controls = clean_df(
         df, controls_tuple, x, y
     )
-    df_with_features, regression_features, absorbed_fe = add_regression_features(
+    df_with_features, regression_features, absorbed_fes = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
@@ -88,7 +88,7 @@ def _prepare_dataframe(df, x, y, controls, num_bins, poly_degree: int | None = N
         regression_features=regression_features,
         polynomial_features=polynomial_features,
         x_bounds=(quantiles[0], quantiles[-1]),
-        fe_name=absorbed_fe,
+        fe_names=absorbed_fes,
     )
     df_with_bins = configure_add_bins(profile)(df_with_features, quantiles)
     return df_with_bins, profile
@@ -246,13 +246,13 @@ def _get_rot_bins(
         x,
         y,
     )
-    df_with_features, regression_features, absorbed_fe = add_regression_features(
+    df_with_features, regression_features, absorbed_fes = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
     return _select_rule_of_thumb_bins(
-        df_with_features, x, y, regression_features, absorbed_fe
+        df_with_features, x, y, regression_features, absorbed_fes
     )
 
 
@@ -269,12 +269,12 @@ def _get_dpi_bins(
         x,
         y,
     )
-    df_with_features, regression_features, absorbed_fe = add_regression_features(
+    df_with_features, regression_features, absorbed_fes = add_regression_features(
         df_clean,
         numeric_controls=numeric_controls,
         categorical_controls=categorical_controls,
     )
-    return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fe)
+    return _select_dpi_bins(df_with_features, x, y, regression_features, absorbed_fes)
 
 
 @pytest.mark.parametrize(
@@ -1128,16 +1128,40 @@ def test_partial_out_controls_matches_statsmodels(df_type):
     # dots. `fitted` above pins only the scalar `mean_controls @ gamma`, so a
     # gamma wrong in a direction orthogonal to the control means -- one control's
     # coefficient traded against another's -- would leave every assertion above
-    # intact. The reference blocks are stacked in `regression_features` order,
-    # which is what makes the two vectors comparable element by element.
-    np.testing.assert_allclose(coeffs["gamma"], gamma, rtol=rtol, atol=atol)
+    # intact.
+    #
+    # Categorical controls are absorbed as fixed effects, so they never enter the
+    # coefficient vector: `gamma` covers the numeric controls alone, and the
+    # reference is sliced to match. By Frisch-Waugh-Lovell the numeric coefficient
+    # is the same either way, which is what makes the comparison meaningful --
+    # absorbing changes what is reported, not what is estimated.
+    assert profile.regression_features == ("z_num",)
+    np.testing.assert_allclose(coeffs["gamma"], gamma[:1], rtol=rtol, atol=atol)
 
     # Exact-quantile backends cut the same bins as the reference, so the bin
     # coefficients are comparable at their level and not merely up to a common
     # shift. The distributed backends bin slightly differently and are left with
     # the shift-invariant check above.
+    #
+    # `beta` carries no level of its own once a categorical is absorbed: the within
+    # system is rank-deficient by one, so the minimum-norm solve returns an
+    # arbitrary point in the solution set and only `beta + level` is identified.
+    # Recovering the level from the dots, checking it is a single constant across
+    # bins, and only then comparing at level keeps what this assertion was for --
+    # catching a level error the shift-invariant check cannot see.
     if df_type not in ("dask", "pyspark"):
-        np.testing.assert_allclose(coeffs["beta"], beta, rtol=rtol, atol=atol)
+        level = (
+            result[profile.y_name].to_numpy()
+            - coeffs["beta"]
+            - mean_controls[:1] @ coeffs["gamma"]
+        )
+        np.testing.assert_allclose(level, level[0], rtol=rtol, atol=atol)
+        np.testing.assert_allclose(
+            coeffs["beta"] + level[0],
+            beta + mean_controls[1:] @ gamma[1:],
+            rtol=rtol,
+            atol=atol,
+        )
 
 
 @pytest.mark.parametrize("df_type", DF_TYPE_PARAMS)
@@ -1275,11 +1299,16 @@ def test_fit_polynomial_line_matches_statsmodels(df_type, degree):
 def test_fit_polynomial_line_matches_statsmodels_with_categorical_controls(
     df_type, degree
 ):
-    """The overlay's controls go through the same dummy encoding as the dots.
+    """The overlay handles a categorical control the same way the dots do.
 
-    The other overlay test uses a single numeric control, so the encoded block
-    never reached this fit under test. The reference stacks the dummies in
-    ``regression_features`` order, ``drop_first=True``, as binscatter does.
+    The other overlay test uses a single numeric control, so the categorical path
+    never reached this fit under test. The categorical is absorbed rather than
+    encoded, which splits the comparison in two: the slopes and the numeric
+    coefficient are unchanged by absorbing -- Frisch-Waugh-Lovell -- while the
+    intercept is not, because absorption replaces the omitted category's baseline
+    with the count-weighted mean fixed effect. Checking that second part is what
+    pins the level restoration, and a curve drawn at the wrong baseline would sit
+    visibly off the dots while every slope stayed right.
     """
     rng = np.random.default_rng(99)
     n = 900
@@ -1313,7 +1342,17 @@ def test_fit_polynomial_line_matches_statsmodels_with_categorical_controls(
     design = np.column_stack([np.ones(n), *powers, z, dummies])
     theta, *_ = np.linalg.lstsq(design, y, rcond=None)
     rtol = 1e-3 if df_type in ("dask", "pyspark") else 1e-6
-    np.testing.assert_allclose(poly_fit.coefficients[: theta.size], theta, rtol=rtol)
+
+    # The polynomial terms and the numeric control, which absorbing leaves alone.
+    num_slopes = degree + 1
+    assert poly_fit.coefficients.size == num_slopes + 1
+    np.testing.assert_allclose(
+        poly_fit.coefficients[1 : num_slopes + 1], theta[1 : num_slopes + 1], rtol=rtol
+    )
+    # The intercept, evaluated at the sample-average fixed effect rather than at
+    # the omitted category.
+    expected_level = theta[0] + dummies.mean(axis=0) @ theta[num_slopes + 1 :]
+    np.testing.assert_allclose(poly_fit.coefficients[0], expected_level, rtol=rtol)
 
 
 @pytest.mark.parametrize("degree", [1, 2, 3])
@@ -1521,6 +1560,7 @@ def test_non_unique_quantiles_produce_unique_bins_ternary(df_type):
     assert result_pd["x0"].nunique() >= 2
 
 
+@pytest.mark.pyspark
 def test_non_unique_quantiles_pyspark():
     """PySpark-specific test for non-unique quantiles."""
     pytest.importorskip("pyspark")
@@ -1642,6 +1682,7 @@ def testbuild_dummies_pandas_polars(backend):
         ]
 
 
+@pytest.mark.pyspark
 def testbuild_dummies_pyspark():
     """Test that PySpark dummy builder works correctly."""
     pytest.importorskip("pyspark")
@@ -1675,6 +1716,7 @@ def testbuild_dummies_pyspark():
         assert set(result[col].unique()) <= {0.0, 1.0}
 
 
+@pytest.mark.pyspark
 def test_dummy_builder_pyspark_handles_nulls():
     """Test that PySpark dummy builder correctly handles null values."""
     pytest.importorskip("pyspark")
@@ -1931,6 +1973,7 @@ def test_configure_build_dummies_dispatch():
     assert builder == build_dummies_fallback
 
 
+@pytest.mark.pyspark
 def test_configure_build_dummies_pyspark():
     """Test that PySpark gets the right dummy builder."""
     pytest.importorskip("pyspark")
@@ -1943,7 +1986,7 @@ def test_configure_build_dummies_pyspark():
 
 
 def test_maybe_add_regression_features_with_categorical():
-    """Test that maybe_add_regression_features integrates dummy builders correctly."""
+    """Categorical controls are absorbed rather than encoded into the feature block."""
     df_pd = pd.DataFrame(
         {
             "x": [1, 2, 3, 4, 5, 6],
@@ -1961,10 +2004,9 @@ def test_maybe_add_regression_features_with_categorical():
         categorical_controls=("cat_ctrl",),
     )
 
-    # cat_ctrl has 2 levels, well under ABSORB_MIN_LEVELS, so it is one-hot encoded.
-    assert absorbed is None
-    assert "num_ctrl" in features
-    assert len(features) == 2  # num_ctrl + 1 dummy
+    # cat_ctrl is absorbed as a fixed effect, so it never reaches the dummy builder.
+    assert absorbed == ("cat_ctrl",)
+    assert features == ("num_ctrl",)
 
     # Verify the dataframe has the features
     result = df_with_features.collect()
@@ -2010,6 +2052,7 @@ def test_dummy_names_consistent_across_backends(backend):
         )
 
 
+@pytest.mark.pyspark
 def test_pyspark_dummy_names_match_pandas():
     """Test that PySpark dummy names exactly match pandas dummy names."""
     pytest.importorskip("pyspark")
@@ -2057,6 +2100,7 @@ def test_pyspark_dummy_names_match_pandas():
     )
 
 
+@pytest.mark.pyspark
 def test_binscatter_with_pyspark_caching():
     """Integration test: full binscatter with PySpark should use caching."""
     pytest.importorskip("pyspark")
